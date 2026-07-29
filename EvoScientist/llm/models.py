@@ -1,9 +1,9 @@
 """LLM model configuration based on LangChain init_chat_model.
 
 This module provides a unified interface for creating chat model instances
-with support for multiple providers (Anthropic, OpenAI, Google GenAI, MiniMax
-(Anthropic-compatible), NVIDIA, SiliconFlow, OpenRouter, Requesty, ZhipuAI,
-Volcengine, DashScope, DashScope-Code, DeepSeek, Ollama, and custom
+with support for multiple providers (Anthropic, OpenAI, Google GenAI, Atlas
+Cloud, MiniMax (Anthropic-compatible), NVIDIA, SiliconFlow, OpenRouter, Requesty,
+ZhipuAI, Volcengine, DashScope, DashScope-Code, DeepSeek, Ollama, and custom
 OpenAI/Anthropic-compatible endpoints) and convenient short names for common
 models.
 """
@@ -46,6 +46,7 @@ _VOLCENGINE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 _DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_CODE_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1"
 
+_ATLASCLOUD_BASE_URL = "https://api.atlascloud.ai/v1"
 _MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 _KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/"
 _REQUESTY_BASE_URL = "https://router.requesty.ai/v1"
@@ -107,6 +108,7 @@ def _is_deepseek_endpoint(base_url: str | None) -> bool:
 # Providers routed through the OpenAI provider with a custom base_url.
 # Maps provider name → (base_url or None, env var for API key).
 _OPENAI_ROUTED_PROVIDERS: dict[str, tuple[str | None, str]] = {
+    "atlascloud": (_ATLASCLOUD_BASE_URL, "ATLASCLOUD_API_KEY"),
     "moonshot": (_MOONSHOT_BASE_URL, "MOONSHOT_API_KEY"),
     "siliconflow": (_SILICONFLOW_BASE_URL, "SILICONFLOW_API_KEY"),
     "zhipu": (_ZHIPU_BASE_URL, "ZHIPU_API_KEY"),
@@ -171,6 +173,8 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("gpt-5.4", "gpt-5.4", "custom-openai"),
     ("gpt-5.3-codex", "gpt-5.3-codex", "custom-openai"),
     ("gpt-5-mini", "gpt-5-mini", "custom-openai"),
+    # Atlas Cloud (OpenAI-compatible)
+    ("qwen3.5-27b", "qwen/qwen3.5-27b", "atlascloud"),
     # Anthropic (current generation)
     ("claude-fable-5", "claude-fable-5", "anthropic"),
     ("claude-opus-5", "claude-opus-5", "anthropic"),
