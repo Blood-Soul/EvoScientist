@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING
 
 from langchain.agents.middleware import (
     AgentMiddleware,
-    HumanInTheLoopMiddleware,
     TodoListMiddleware,
 )
 
@@ -643,8 +642,19 @@ def load_mcp_and_build_kwargs(
 # =============================================================================
 
 
-def _get_default_backend():
-    """Build the default composite backend from current paths."""
+def _get_default_backend(
+    *, guard_dangerous: bool | None = None, refuse_delete: bool = False
+):
+    """Build the default composite backend from current paths.
+
+    ``guard_dangerous`` — when ``None`` (default) follows ``cfg.auto_approve``;
+    the two research async sub-agent graphs (``writing-agent`` /
+    ``data-analysis-agent``) pass ``True`` because their remote thread has no
+    approval path at all (see ``subagents/_factory._GUARDED_ASYNC_SUBAGENTS``).
+    ``refuse_delete`` — the same two async graphs pass ``True`` so the recursive
+    ``delete`` FS tool is refused and relayed to the orchestrator for approval,
+    rather than deleting unattended.
+    """
     from deepagents.backends import CompositeBackend
 
     from .backends import (
@@ -654,6 +664,8 @@ def _get_default_backend():
     )
 
     cfg = _ensure_config()
+    if guard_dangerous is None:
+        guard_dangerous = cfg.auto_approve
     workspace_dir = str(_paths_mod.WORKSPACE_ROOT)
     set_active_workspace(workspace_dir)
     memory_dir = str(_paths_mod.MEMORIES_DIR)
@@ -667,6 +679,8 @@ def _get_default_backend():
         virtual_mode=True,
         timeout=cfg.sandbox_execute_timeout,
         dangerous=cfg.dangerous_mode,
+        guard_dangerous=guard_dangerous,
+        refuse_delete=refuse_delete,
     )
     sk_backend = MergedSkillsBackend(
         primary_dir=user_skills_dir,
@@ -851,10 +865,27 @@ def _get_default_middleware(
         # (agents rebuild on config change, so the captured flag never staler
         # than the agent it lives on).
         mw.append(
-            BackgroundExecutionMiddleware(async_notifier, dangerous=cfg.dangerous_mode)
+            BackgroundExecutionMiddleware(
+                async_notifier,
+                dangerous=cfg.dangerous_mode,
+                guard_dangerous=cfg.auto_approve,
+            )
         )
 
     return mw
+
+
+def _build_hitl_interrupt_on(*, auto_approve: bool) -> dict[str, bool] | None:
+    """Return :data:`HITL_INTERRUPT_ON` for ``create_deep_agent``, or ``None``
+    when the user opted out (``auto_approve`` / ``auto_mode`` /
+    ``dangerous_mode``) so nothing is armed and unattended runs never pause.
+    Passing it to ``create_deep_agent`` (not ``HumanInTheLoopMiddleware``) lets
+    declarative sub-agents inherit it while ``AsyncSubAgent`` specs do not — so
+    async agents can't hang on an approval nobody can deliver.
+    """
+    if auto_approve:
+        return None
+    return dict(HITL_INTERRUPT_ON)
 
 
 def _get_default_agent():
@@ -888,13 +919,6 @@ def _get_default_agent():
         be = _get_default_backend()
         mw = _get_default_middleware()
 
-        # HITL on main agent only (mirrors create_cli_agent). Use middleware,
-        # not interrupt_on= kwarg — the kwarg propagates to every subagent and
-        # breaks parallel execute calls (multi-pending-interrupt LangGraph
-        # error). See PR #202.
-        if not cfg.auto_approve:
-            mw.append(HumanInTheLoopMiddleware(interrupt_on=dict(HITL_INTERRUPT_ON)))
-
         if os.environ.get("EVOSCIENTIST_DEPLOY_MODE", "").lower() == "stripped":
             kwargs = _build_base_kwargs(
                 be,
@@ -910,6 +934,7 @@ def _get_default_agent():
 
         _EvoScientist_agent = create_deep_agent(
             **kwargs,
+            interrupt_on=_build_hitl_interrupt_on(auto_approve=cfg.auto_approve),
         ).with_config({"recursion_limit": cfg.recursion_limit})
     return _EvoScientist_agent
 
@@ -1022,6 +1047,7 @@ def create_cli_agent(
         virtual_mode=True,
         timeout=cfg.sandbox_execute_timeout,
         dangerous=cfg.dangerous_mode,
+        guard_dangerous=cfg.auto_approve,
     )
     sk_backend = MergedSkillsBackend(
         primary_dir=_usr_skills_dir,
@@ -1041,17 +1067,10 @@ def create_cli_agent(
     )
 
     # Delegate middleware construction to the single source of truth so the
-    # CLI agent never drifts from the default chain. Anything CLI-specific
-    # (e.g. ``HumanInTheLoopMiddleware``) is appended below.
+    # CLI agent never drifts from the default chain.
     mw: list[AgentMiddleware] = _get_default_middleware(
         workspace_dir=workspace_dir, cfg=cfg, chat_model=chat_model, events=events
     )
-
-    # HITL on main agent only — passing `interrupt_on=` to create_deep_agent
-    # would propagate it to every subagent, breaking parallel execute calls
-    # (multi-pending-interrupt LangGraph error).
-    if not cfg.auto_approve:
-        mw.append(HumanInTheLoopMiddleware(interrupt_on=dict(HITL_INTERRUPT_ON)))
 
     # Re-load MCP tools from current config (picks up /mcp add changes)
     kwargs = load_mcp_and_build_kwargs(
@@ -1067,4 +1086,5 @@ def create_cli_agent(
     return create_deep_agent(
         **kwargs,
         checkpointer=checkpointer,
+        interrupt_on=_build_hitl_interrupt_on(auto_approve=cfg.auto_approve),
     ).with_config({"recursion_limit": cfg.recursion_limit})

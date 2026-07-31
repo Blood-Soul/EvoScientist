@@ -10,7 +10,10 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from deepagents.backends import FilesystemBackend, LocalShellBackend
 from deepagents.backends.protocol import (
@@ -28,6 +31,9 @@ from deepagents.backends.protocol import (
 
 from . import paths
 from .cancellation import current_cancel_event
+
+if TYPE_CHECKING:
+    from langgraph.types import Command
 
 # Reproduced here to dodge a circular import from .EvoScientist (the canonical
 # SKILLS_DIR constant).
@@ -174,7 +180,11 @@ def _shell_token_spans(command: str) -> list[dict[str, object]]:
         if ch in "`();|&":
             return ch
         if ch in "<>":
-            if index + 1 < n and command[index + 1] == ch:
+            # `>>`/`<<` and `>|` (force-clobber redirect) are single redirection
+            # operators, NOT a pipe — the trailing `|` must not read as a boundary.
+            if index + 1 < n and (
+                command[index + 1] == ch or (ch == ">" and command[index + 1] == "|")
+            ):
                 return command[index : index + 2]
             return ch
         if ch.isdigit():
@@ -183,7 +193,9 @@ def _shell_token_spans(command: str) -> list[dict[str, object]]:
                 j += 1
             if j < n and command[j] in "<>":
                 end = j + 1
-                if end < n and command[end] in ("&", command[j]):
+                # `2>&1`, `2>>`, and `2>|` (fd force-clobber) are single
+                # redirection operators — the trailing `|` is not a pipe.
+                if end < n and command[end] in ("&", "|", command[j]):
                     end += 1
                 return command[index:end]
         return None
@@ -243,6 +255,175 @@ def _shell_token_spans(command: str) -> list[dict[str, object]]:
             }
         )
     return tokens
+
+
+# Commands that are dangerous as the RIGHT-HAND SIDE of a pipe (they consume
+# piped data as code or ship it off-box). Everything else piping is normal.
+_PIPE_NETWORKING_RHS = frozenset(
+    {
+        "nc",
+        "ncat",
+        "netcat",
+        "ssh",
+        "curl",
+        "wget",
+        "telnet",
+        "socat",
+        "scp",
+        "sftp",
+        "rsync",
+        "ftp",
+    }
+)
+_PIPE_INTERPRETER_RHS = frozenset(
+    {
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "ash",
+        "ksh",
+        "fish",
+        "python",
+        "python2",
+        "python3",
+        "node",
+        "bun",
+        "deno",
+        "ruby",
+        "perl",
+        "php",
+        "lua",
+        "iex",
+        "elixir",
+    }
+)
+_PIPE_DANGEROUS_RHS = _PIPE_INTERPRETER_RHS | _PIPE_NETWORKING_RHS
+
+
+def check_dangerous_command(command: str) -> str | None:
+    """Return a reason if *command* pipes output into an interpreter or a
+    network tool, else ``None``.
+
+    Deliberately narrow: this guards indirect prompt injection (the agent
+    ingests untrusted web content and could be induced to run
+    ``curl … | bash``). Everyday research shell — pipes into ``grep``/``head``,
+    redirects, ``python -c``, ``..``/``~`` paths — is NOT flagged here.
+    Workspace confinement stays in :func:`validate_command`.
+
+    Only the token immediately after the pipe is inspected, so wrapper
+    commands like ``env bash``, ``xargs bash``, or ``timeout 5 bash`` are
+    not detected — this is a known limitation, not a bug to fix here.
+    """
+    after_pipe = False
+    for token in _shell_token_spans(command):
+        if token.get("type") == "op":
+            value = token.get("value")
+            if value == "|":
+                after_pipe = True
+            elif value == "&" and after_pipe:
+                # `|&` (pipe stdout+stderr) tokenizes as `|` then `&`;
+                # keep the pipe context open across the `&`.
+                pass
+            else:
+                after_pipe = False
+            continue
+        if after_pipe:
+            base = str(token.get("value", "")).split("/")[-1]
+            # strip trailing version digits: python3.11 -> python, lua5.4 -> lua
+            normalized = re.sub(r"[0-9.]+$", "", base) or base
+            if base in _PIPE_DANGEROUS_RHS or normalized in _PIPE_DANGEROUS_RHS:
+                kind = (
+                    "networking tool"
+                    if base in _PIPE_NETWORKING_RHS
+                    or normalized in _PIPE_NETWORKING_RHS
+                    else "interpreter"
+                )
+                return f"pipes output into {kind} '{base}'"
+            after_pipe = False
+    return None
+
+
+class ActionDecision(StrEnum):
+    """Outcome of the shell-action policy."""
+
+    APPROVE = "approve"
+    REJECT = "reject"
+    PROMPT = "prompt"
+
+
+@dataclass(frozen=True)
+class ActionVerdict:
+    """A decision plus the reason to show the user or feed back to the agent."""
+
+    decision: ActionDecision
+    reason: str = ""
+
+
+def resolve_action_decision(
+    command: str,
+    *,
+    auto_approve: bool = False,
+    dangerous_mode: bool = False,
+    allow_list: list[str] | None = None,
+) -> ActionVerdict:
+    """Single source of truth for approve / reject / prompt.
+
+    Precedence:
+      1. ``dangerous_mode`` — the user asked for full power; run everything.
+      2. dangerous detection — pipe into interpreter/network.
+      3. ``auto_approve`` — opt-out means *never prompt*: approve, or reject
+         a dangerous command with a reason the agent can act on.
+      4. ``allow_list`` — case-sensitive match on a whole command or a
+         command-plus-space prefix; blank entries are ignored. Every segment of
+         a chain (``a; b``, ``a && b``, ``a | b``) must match, so an allow-listed
+         prefix cannot carry a non-listed command in behind it.
+    """
+    if dangerous_mode:
+        return ActionVerdict(ActionDecision.APPROVE)
+
+    reason = check_dangerous_command(command)
+
+    if auto_approve:
+        if reason:
+            return ActionVerdict(ActionDecision.REJECT, reason)
+        return ActionVerdict(ActionDecision.APPROVE)
+
+    if reason:
+        return ActionVerdict(ActionDecision.PROMPT, reason)
+
+    if allow_list:
+        prefixes = [p.strip() for p in allow_list if p.strip()]
+        # Match on a token boundary so allow-listing `ls` does not also approve
+        # `lsof` (case-sensitive, like the shell). Require EVERY segment of a
+        # chain to match, so `ls; rm -rf x` cannot ride in on an allow-listed
+        # `ls`. ``None`` means an unparseable construct (substitution/newline) —
+        # decline rather than risk approving a hidden command.
+        segments = _split_command_segments(command)
+        if segments is not None:
+            segments = segments or [command.strip()]
+            if prefixes and all(
+                any(seg == p or seg.startswith(p + " ") for p in prefixes)
+                for seg in segments
+            ):
+                return ActionVerdict(ActionDecision.APPROVE)
+
+    return ActionVerdict(ActionDecision.PROMPT)
+
+
+def build_hitl_resume(interrupt_id: str, decisions: list[dict]) -> "Command":
+    """Build a HITL resume Command keyed by interrupt_id.
+
+    Keying by id (not the flat ``{"decisions": …}``) is REQUIRED whenever the
+    graph has more than one pending interrupt — parallel sub-agents that each
+    call ``execute`` do exactly that, and a flat resume raises
+    ``RuntimeError: When there are multiple pending interrupts …``. Resuming a
+    single id resolves that interrupt and re-parks the rest (they re-emit on the
+    next stream), so callers drain them one at a time. Safe for N=1 too.
+    """
+    from langgraph.types import Command
+
+    return Command(resume={interrupt_id: {"decisions": decisions}})
 
 
 _SSH_OPTIONS_WITH_VALUE = {
@@ -485,6 +666,40 @@ def _split_shell_commands(command: str) -> list[str]:
             segment.append(str(token.get("value", "")))
     flush_segment()
     return base_commands
+
+
+def _split_command_segments(command: str) -> list[str] | None:
+    """Split a compound command into raw segment strings on command boundaries.
+
+    Quote-aware (via ``_shell_token_spans``). Boundaries are ``;`` ``&&`` ``||``
+    ``|`` ``&`` and grouping; redirections are not boundaries. Lets the allow-list
+    clear a chain only when *every* segment is allow-listed, not just the leading
+    one (``ls; rm -rf x`` must not ride in on an allow-listed ``ls``).
+
+    Returns ``None`` when the command contains a construct this small tokenizer
+    cannot safely reason about — command substitution (``$(...)`` or backticks,
+    which run a hidden command even inside double quotes) or a newline separator —
+    so the caller declines to allow-list it rather than approve a hidden command.
+    Deliberately a substring over-approximation: a literal/quoted ``$(``, backtick,
+    or newline also declines (a safe extra prompt, never a bypass). Quote/escape
+    awareness is intentionally not attempted — that fragility caused the original
+    chaining gap.
+    """
+    if "$(" in command or "`" in command or "\n" in command or "\r" in command:
+        return None
+    boundaries = {"&&", "||", ";", "|", "&", "(", ")"}
+    segments: list[str] = []
+    seg_start = 0
+    for token in _shell_token_spans(command):
+        if token.get("type") == "op" and token.get("value") in boundaries:
+            seg = command[seg_start : int(token["start"])].strip()
+            if seg:
+                segments.append(seg)
+            seg_start = int(token["end"])
+    tail = command[seg_start:].strip()
+    if tail:
+        segments.append(tail)
+    return segments
 
 
 def _has_traversal_component(command: str) -> bool:
@@ -1170,7 +1385,12 @@ class MergedSkillsBackend(BackendProtocol):
 
 
 def prepare_sandbox_command(
-    command: str, cwd: str | Path, *, virtual_mode: bool = True, dangerous: bool = False
+    command: str,
+    cwd: str | Path,
+    *,
+    virtual_mode: bool = True,
+    dangerous: bool = False,
+    guard_dangerous: bool = False,
 ) -> tuple[str, str | None]:
     """Normalize workspace paths in ``command`` and validate it for the sandbox.
 
@@ -1180,7 +1400,16 @@ def prepare_sandbox_command(
 
     Returns ``(prepared_command, error)``: ``error`` is a message string when the command
     is rejected (the caller must NOT run it), otherwise ``None``.
+
+    ``guard_dangerous`` (see :func:`check_dangerous_command`) does not see inside an SSH
+    remote payload: a dangerous pipe *inside* a quoted ``ssh host '...'`` argument is not
+    detected, because the quoted payload is a single opaque token. Piping *into* ``ssh``
+    itself (e.g. ``cat secret | ssh host x``) is detected — the check runs on the original,
+    unmasked command so the SSH-masking done below (which also replaces the literal ``ssh``
+    token) does not blind it.
     """
+    original_command = command
+
     ssh_error = _validate_ssh_remote_command_format(command)
     if ssh_error:
         return command, ssh_error
@@ -1216,6 +1445,19 @@ def prepare_sandbox_command(
     )
     if error:
         return command, error
+
+    # No interactive approval is reachable here (unattended main agent, or an
+    # async sub-agent on a remote thread), so refuse the narrow dangerous set
+    # with a reason the agent can act on rather than running it blind.
+    if guard_dangerous and not dangerous:
+        dangerous_reason = check_dangerous_command(original_command)
+        if dangerous_reason:
+            return _restore_spans(command, ssh_replacements), (
+                f"Command blocked: {dangerous_reason}. "
+                f"Rewrite it to avoid that, or request approval from the user "
+                f"(the orchestrator can re-issue it after approval)."
+            )
+
     return _restore_spans(command, ssh_replacements), None
 
 
@@ -1241,6 +1483,8 @@ class CustomSandboxBackend(LocalShellBackend):
         env: dict[str, str] | None = None,
         inherit_env: bool = True,
         dangerous: bool = False,
+        guard_dangerous: bool = False,
+        refuse_delete: bool = False,
     ):
         """
         Initialize custom sandbox backend.
@@ -1256,8 +1500,20 @@ class CustomSandboxBackend(LocalShellBackend):
                 paths anywhere on disk (no workspace confinement). Forces
                 ``virtual_mode=False`` and relaxes path validation while keeping
                 the privileged-command blocklist. Defaults to False.
+            guard_dangerous: Refuse the narrow dangerous-command set (see
+                :func:`check_dangerous_command`) outright, for contexts where
+                no interactive approval is reachable (unattended auto-approve
+                runs, async sub-agents). Bypassed when ``dangerous=True``.
+                Defaults to False.
+            refuse_delete: Refuse the recursive ``delete`` FS tool outright,
+                relaying an approval request to the orchestrator. Used for async
+                research sub-agents (writing / data-analysis) that have no
+                interactive approval path. Bypassed when ``dangerous=True``.
+                Defaults to False.
         """
         self._dangerous = dangerous
+        self._guard_dangerous = guard_dangerous
+        self._refuse_delete = refuse_delete
         if dangerous:
             # Real paths require the legacy (non-virtual) resolution path so the
             # parent backend returns absolute paths as-is.
@@ -1327,6 +1583,22 @@ class CustomSandboxBackend(LocalShellBackend):
 
         return super()._resolve_path(key)
 
+    _DELETE_APPROVAL_ERROR = (
+        "Delete blocked: needs approval. Report it to the orchestrator, which "
+        "can re-issue it after approval."
+    )
+
+    def delete(self, file_path: str) -> DeleteResult:
+        """Refuse ``delete`` for guarded async sub-agents (no approval path).
+
+        No ``adelete`` override is needed: the inherited ``BackendProtocol.adelete``
+        runs ``asyncio.to_thread(self.delete, ...)``, so async sub-agents reach
+        this refusal too.
+        """
+        if self._refuse_delete and not self._dangerous:
+            return DeleteResult(error=self._DELETE_APPROVAL_ERROR)
+        return super().delete(file_path)
+
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         """
         Execute shell command in sandbox environment.
@@ -1351,7 +1623,11 @@ class CustomSandboxBackend(LocalShellBackend):
             )
 
         command, error = prepare_sandbox_command(
-            command, self.cwd, virtual_mode=self.virtual_mode, dangerous=self._dangerous
+            command,
+            self.cwd,
+            virtual_mode=self.virtual_mode,
+            dangerous=self._dangerous,
+            guard_dangerous=self._guard_dangerous,
         )
         if error:
             return ExecuteResponse(output=error, exit_code=1, truncated=False)
