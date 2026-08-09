@@ -1,10 +1,11 @@
 """LLM model configuration based on LangChain init_chat_model.
 
 This module provides a unified interface for creating chat model instances
-with support for multiple providers (Anthropic, OpenAI, Google GenAI, MiniMax
-(Anthropic-compatible), NVIDIA, SiliconFlow, OpenRouter, ZhipuAI, Volcengine,
-DashScope, DashScope-Code, DeepSeek, Ollama, and custom OpenAI/Anthropic-compatible
-endpoints) and convenient short names for common models.
+with support for multiple providers (Anthropic, OpenAI, Google GenAI, Atlas
+Cloud, MiniMax (Anthropic-compatible), NVIDIA, SiliconFlow, OpenRouter, Requesty,
+ZhipuAI, Volcengine, DashScope, DashScope-Code, DeepSeek, Ollama, and custom
+OpenAI/Anthropic-compatible endpoints) and convenient short names for common
+models.
 """
 
 from __future__ import annotations
@@ -42,11 +43,14 @@ _SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 _ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 _ZHIPU_CODE_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4"
 _VOLCENGINE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+_VOLCENGINE_CODE_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
 _DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_CODE_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1"
 
+_ATLASCLOUD_BASE_URL = "https://api.atlascloud.ai/v1"
 _MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 _KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/"
+_REQUESTY_BASE_URL = "https://router.requesty.ai/v1"
 
 # Minimum Codex CLI version advertised when no explicit override is set. Newer
 # installed versions are advertised automatically.
@@ -105,13 +109,16 @@ def _is_deepseek_endpoint(base_url: str | None) -> bool:
 # Providers routed through the OpenAI provider with a custom base_url.
 # Maps provider name → (base_url or None, env var for API key).
 _OPENAI_ROUTED_PROVIDERS: dict[str, tuple[str | None, str]] = {
+    "atlascloud": (_ATLASCLOUD_BASE_URL, "ATLASCLOUD_API_KEY"),
     "moonshot": (_MOONSHOT_BASE_URL, "MOONSHOT_API_KEY"),
     "siliconflow": (_SILICONFLOW_BASE_URL, "SILICONFLOW_API_KEY"),
     "zhipu": (_ZHIPU_BASE_URL, "ZHIPU_API_KEY"),
     "zhipu-code": (_ZHIPU_CODE_BASE_URL, "ZHIPU_API_KEY"),
     "volcengine": (_VOLCENGINE_BASE_URL, "VOLCENGINE_API_KEY"),
+    "volcengine-code": (_VOLCENGINE_CODE_BASE_URL, "VOLCENGINE_API_KEY"),
     "dashscope": (_DASHSCOPE_BASE_URL, "DASHSCOPE_API_KEY"),
     "dashscope-code": (_DASHSCOPE_CODE_BASE_URL, "DASHSCOPE_API_KEY"),
+    "requesty": (_REQUESTY_BASE_URL, "REQUESTY_API_KEY"),
     "custom-openai": (
         None,
         "CUSTOM_OPENAI_API_KEY",
@@ -168,6 +175,8 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("gpt-5.4", "gpt-5.4", "custom-openai"),
     ("gpt-5.3-codex", "gpt-5.3-codex", "custom-openai"),
     ("gpt-5-mini", "gpt-5-mini", "custom-openai"),
+    # Atlas Cloud (OpenAI-compatible)
+    ("qwen3.5-27b", "qwen/qwen3.5-27b", "atlascloud"),
     # Anthropic (current generation)
     ("claude-fable-5", "claude-fable-5", "anthropic"),
     ("claude-opus-5", "claude-opus-5", "anthropic"),
@@ -231,6 +240,15 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("glm-5", "Pro/zai-org/GLM-5", "siliconflow"),
     ("kimi-k2.5", "Pro/moonshotai/Kimi-K2.5", "siliconflow"),
     ("glm-4.7", "Pro/zai-org/GLM-4.7", "siliconflow"),
+    # Requesty (aggregator — OpenAI-compatible router, provider/model IDs).
+    # Listed before OpenRouter so that for model names shared with OpenRouter
+    # or a native provider, Requesty does not override them (the dict below is
+    # last-entry-wins); Requesty is selected explicitly via get_models_for_provider.
+    ("claude-sonnet-4.6", "anthropic/claude-sonnet-4-6", "requesty"),
+    ("claude-opus-4.8", "anthropic/claude-opus-4-8", "requesty"),
+    ("gemini-3.5-flash", "google/gemini-3.5-flash", "requesty"),
+    ("grok-4.3", "xai/grok-4.3", "requesty"),
+    ("grok-build-0.1", "xai/grok-build-0.1", "requesty"),
     # OpenRouter
     ("claude-fable-5", "anthropic/claude-fable-5", "openrouter"),
     ("claude-opus-5", "anthropic/claude-opus-5", "openrouter"),
@@ -261,12 +279,17 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("grok-build-0.1", "x-ai/grok-build-0.1", "openrouter"),
     ("grok-4.5", "x-ai/grok-4.5", "openrouter"),
     ("hy3", "tencent/hy3", "openrouter"),
+    ("qwen3.8-max", "qwen/qwen3.8-max", "openrouter"),
     ("qwen3.7-max", "qwen/qwen3.7-max", "openrouter"),
     ("qwen3.7-plus", "qwen/qwen3.7-plus", "openrouter"),
     ("qwen3.6-flash", "qwen/qwen3.6-flash", "openrouter"),
     ("qwen3.5-122b", "qwen/qwen3.5-122b-a10b", "openrouter"),
     ("deepseek-v4-pro", "deepseek/deepseek-v4-pro", "openrouter"),
     ("deepseek-v4-flash", "deepseek/deepseek-v4-flash", "openrouter"),
+    # Volcengine Coding Plan (火山引擎代码计划 — coding-only endpoint)
+    # Listed before Zhipu so simple GLM lookups keep their existing default.
+    ("glm-5.2", "glm-5-2", "volcengine-code"),
+    ("kimi-k2.5", "kimi-k2-5", "volcengine-code"),
     # Zhipu CodePlan (智谱代码计划 — coding-only endpoint)
     ("glm-5.2", "glm-5.2", "zhipu-code"),
     ("glm-5.1", "glm-5.1", "zhipu-code"),
@@ -290,6 +313,7 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("doubao-1.5-pro", "doubao-1.5-pro-256k", "volcengine"),
     ("doubao-1.5-thinking-pro", "doubao-1.5-thinking-pro", "volcengine"),
     # DashScope Coding Plan (阿里云代码计划 — subscription sk-sp-* endpoint)
+    ("qwen3.8-max", "qwen3.8-max", "dashscope-code"),
     ("qwen3.7-max", "qwen3.7-max", "dashscope-code"),
     ("qwen3.7-plus", "qwen3.7-plus", "dashscope-code"),
     ("qwen3.6-max", "qwen3.6-max-preview", "dashscope-code"),
@@ -300,6 +324,7 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("qwen3-max", "qwen3-max", "dashscope-code"),
     ("qwen3.5-plus", "qwen3.5-plus", "dashscope-code"),
     # DashScope (阿里云 — Qwen models, default for simple lookups)
+    ("qwen3.8-max", "qwen3.8-max", "dashscope"),
     ("qwen3.7-max", "qwen3.7-max", "dashscope"),
     ("qwen3.7-plus", "qwen3.7-plus", "dashscope"),
     ("qwen3.6-max", "qwen3.6-max-preview", "dashscope"),
@@ -359,9 +384,17 @@ def _env_flag_disabled(name: str) -> bool:
     return value is not None and value.strip().lower() in _FALSEY_ENV_VALUES
 
 
-def _supports_openrouter_anthropic_prompt_cache(provider: str, model_id: str) -> bool:
-    """Return whether EvoScientist should declare OpenRouter Claude caching."""
-    return provider == "openrouter" and model_id.startswith(
+def _supports_openrouter_anthropic_prompt_cache(
+    provider: str | None, model_id: str
+) -> bool:
+    """Return whether EvoScientist should declare Claude caching for a router.
+
+    Both OpenRouter and Requesty are OpenAI-compatible routers that forward an
+    Anthropic-style ``cache_control`` declaration through to Claude models
+    addressed as ``anthropic/...``. Implicit caching is handled upstream for
+    most providers, but Claude prompt caching needs the explicit declaration.
+    """
+    return provider in ("openrouter", "requesty") and model_id.startswith(
         ("anthropic/", "~anthropic/")
     )
 
@@ -386,16 +419,25 @@ def _has_cache_control_override(kwargs: dict[str, Any]) -> bool:
 
 
 def _apply_openrouter_anthropic_prompt_cache(
-    provider: str,
+    provider: str | None,
     model_id: str,
     kwargs: dict[str, Any],
 ) -> None:
-    """Declare OpenRouter Claude prompt caching unless explicitly disabled.
+    """Declare router Claude prompt caching unless explicitly disabled.
 
-    OpenRouter already handles implicit caching for most providers, but Claude
-    prompt caching needs Anthropic-style cache-control declaration.
+    OpenRouter and Requesty both handle implicit caching for most providers,
+    but Claude prompt caching needs an Anthropic-style cache-control
+    declaration. Each router honours its own opt-out env flag
+    (``EVOSCIENTIST_OPENROUTER_ANTHROPIC_PROMPT_CACHE`` /
+    ``EVOSCIENTIST_REQUESTY_ANTHROPIC_PROMPT_CACHE``).
     """
-    if _env_flag_disabled("EVOSCIENTIST_OPENROUTER_ANTHROPIC_PROMPT_CACHE"):
+    if provider is None:
+        return
+    disable_flag = {
+        "openrouter": "EVOSCIENTIST_OPENROUTER_ANTHROPIC_PROMPT_CACHE",
+        "requesty": "EVOSCIENTIST_REQUESTY_ANTHROPIC_PROMPT_CACHE",
+    }.get(provider)
+    if disable_flag is not None and _env_flag_disabled(disable_flag):
         return
     if not _supports_openrouter_anthropic_prompt_cache(provider, model_id):
         return
@@ -723,7 +765,10 @@ def get_chat_model(
             kwargs["base_url"] = base_url
 
     _apply_auto_config(provider, model_id, _is_third_party, kwargs, _original_provider)
-    _apply_openrouter_anthropic_prompt_cache(provider, model_id, kwargs)
+    # OpenAI-routed routers (e.g. Requesty) reassign ``provider`` to "openai"
+    # above, so use the original provider name to detect router-level caching.
+    _cache_provider = _original_provider or provider
+    _apply_openrouter_anthropic_prompt_cache(_cache_provider, model_id, kwargs)
 
     _uses_native_deepseek = provider == "deepseek" or (
         provider == "openai"

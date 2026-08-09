@@ -1151,12 +1151,6 @@ _MAX_HITL_ITERATIONS = 50
 _session_auto_approve = False
 
 
-def _matches_shell_allow_list(command: str, allow_list: list[str]) -> bool:
-    """Check if a shell command matches any prefix in the allow list."""
-    cmd = command.strip()
-    return any(cmd.startswith(prefix) for prefix in allow_list)
-
-
 def _resolve_hitl_approval(
     interrupt_data: dict,
     prompt_fn: Callable[[list], list[dict] | None] | None = None,
@@ -1176,52 +1170,70 @@ def _resolve_hitl_approval(
     """
     global _session_auto_approve
 
+    from ..backends import ActionDecision, resolve_action_decision
+    from ..config.settings import (
+        HITL_ALWAYS_PROMPT_TOOLS,
+        HITL_SHELL_TOOLS,
+        load_config,
+    )
+
     action_requests = interrupt_data.get("action_requests", [])
     if not action_requests:
         return [{"type": "approve"}]
 
-    # Session-level auto-approve (user chose "Approve all" earlier)
+    # Session "approve all" is an explicit human opt-in → blanket-approve
+    # everything (dangerous set included), unlike unattended auto_approve below.
     if _session_auto_approve:
         return [{"type": "approve"} for _ in action_requests]
 
-    # Config-level auto-approve
-    from ..config.settings import HITL_SHELL_TOOLS, load_config
-
     cfg = load_config()
-    if cfg.auto_approve:
-        return [{"type": "approve"} for _ in action_requests]
-
-    # Per-tool auto-approval: only execute needs manual approval
-    shell_allow_list = (
+    auto_approve = cfg.auto_approve
+    allow_list = (
         [s.strip() for s in cfg.shell_allow_list.split(",") if s.strip()]
         if cfg.shell_allow_list
         else []
     )
 
+    decisions: list[dict] = []
     needs_prompt = False
     for req in action_requests:
+        if not isinstance(req, dict):
+            # Malformed request on an approval gate — never silently approve;
+            # surface it for a human decision (or fail loud in the prompt path).
+            needs_prompt = True
+            break
         name = req.get("name", "")
         args = req.get("args", {})
 
-        if name not in HITL_SHELL_TOOLS:
-            continue  # Only shell-running tools need manual approval
-
-        command = args.get("command", "") if isinstance(args, dict) else ""
-        if not _matches_shell_allow_list(command, shell_allow_list):
+        if name in HITL_ALWAYS_PROMPT_TOOLS:
             needs_prompt = True
             break
 
-    if not needs_prompt:
-        return [{"type": "approve"} for _ in action_requests]
+        if name not in HITL_SHELL_TOOLS:
+            decisions.append({"type": "approve"})
+            continue
 
-    # Use custom prompt function if provided (e.g. channel-based approval)
-    if prompt_fn is not None:
-        return prompt_fn(action_requests)
+        command = args.get("command", "") if isinstance(args, dict) else ""
+        verdict = resolve_action_decision(
+            command,
+            auto_approve=auto_approve,
+            dangerous_mode=cfg.dangerous_mode,
+            allow_list=allow_list,
+        )
+        if verdict.decision is ActionDecision.APPROVE:
+            decisions.append({"type": "approve"})
+        elif verdict.decision is ActionDecision.REJECT:
+            decisions.append({"type": "reject", "message": verdict.reason})
+        else:
+            needs_prompt = True
+            break
 
-    return _prompt_hitl_approval(
-        action_requests,
-        question_runner=question_runner,
-    )
+    if needs_prompt:
+        if prompt_fn is not None:
+            return prompt_fn(action_requests)
+        return _prompt_hitl_approval(action_requests, question_runner=question_runner)
+
+    return decisions
 
 
 def _prompt_hitl_approval(
@@ -1428,6 +1440,7 @@ def _run_streaming(
     on_stream_event: Callable[[str, Any], Any] | None = None,
     status_footer_builder: Callable[[], Any] | None = None,
     metadata: dict[str, object] | None = None,
+    configurable_extra: dict[str, Any] | None = None,
     hitl_prompt_fn: Callable[[list], list[dict] | None] | None = None,
     ask_user_prompt_fn: Callable[[dict], dict] | None = None,
     cancel_scope: str | None = None,
@@ -1479,6 +1492,7 @@ def _run_streaming(
                 on_stream_event=on_stream_event,
                 status_footer_builder=status_footer_builder,
                 metadata=metadata,
+                configurable_extra=configurable_extra,
                 hitl_prompt_fn=hitl_prompt_fn,
                 ask_user_prompt_fn=ask_user_prompt_fn,
                 cancel_scope=cancel_scope,
@@ -1514,6 +1528,7 @@ def _run_streaming(
                 message=message,
                 thread_id=thread_id,
                 metadata=metadata,
+                configurable_extra=configurable_extra,
                 target=_graph_target_for_local_agent(agent, metadata),
             )
         )
@@ -1756,6 +1771,7 @@ def _run_streaming(
                 on_stream_event=on_stream_event,
                 status_footer_builder=status_footer_builder,
                 metadata=metadata,
+                configurable_extra=configurable_extra,
                 hitl_prompt_fn=hitl_prompt_fn,
                 ask_user_prompt_fn=ask_user_prompt_fn,
                 cancel_scope=cancel_scope,
@@ -1790,15 +1806,16 @@ def _run_streaming(
             if is_stream_cancel_requested(cancel_scope):
                 return _stopped_response()
             if decisions is not None:
-                from langgraph.types import Command  # type: ignore[import-untyped]
+                from ..backends import build_hitl_resume
 
+                interrupt_id = state.pending_interrupt.get("interrupt_id")
                 state.pending_interrupt = None
                 state.thinking_text = ""  # reset accumulation for fresh round
                 if is_stream_cancel_requested(cancel_scope):
                     return _stopped_response()
                 return _run_streaming(
                     agent=agent,
-                    message=Command(resume={"decisions": decisions}),
+                    message=build_hitl_resume(interrupt_id, decisions),
                     thread_id=thread_id,
                     show_thinking=show_thinking,
                     interactive=interactive,
@@ -1808,6 +1825,7 @@ def _run_streaming(
                     on_stream_event=on_stream_event,
                     status_footer_builder=status_footer_builder,
                     metadata=metadata,
+                    configurable_extra=configurable_extra,
                     hitl_prompt_fn=hitl_prompt_fn,
                     ask_user_prompt_fn=ask_user_prompt_fn,
                     cancel_scope=cancel_scope,

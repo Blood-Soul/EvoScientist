@@ -41,11 +41,13 @@ class TestModelsRegistry:
         assert "zhipu" in providers
         assert "zhipu-code" in providers
         assert "volcengine" in providers
+        assert "volcengine-code" in providers
         assert "dashscope" in providers
         assert "dashscope-code" in providers
         assert "deepseek" in providers
         assert "moonshot" in providers
         assert "kimi-coding" in providers
+        assert "atlascloud" in providers
 
     def test_entries_are_valid_tuples(self):
         """Test that _MODEL_ENTRIES contains valid (name, model_id, provider) tuples."""
@@ -57,9 +59,11 @@ class TestModelsRegistry:
             "nvidia",
             "siliconflow",
             "openrouter",
+            "requesty",
             "zhipu",
             "zhipu-code",
             "volcengine",
+            "volcengine-code",
             "dashscope",
             "dashscope-code",
             "custom-openai",
@@ -67,6 +71,7 @@ class TestModelsRegistry:
             "deepseek",
             "moonshot",
             "kimi-coding",
+            "atlascloud",
         }
         for entry in _MODEL_ENTRIES:
             assert len(entry) == 3, f"Entry {entry} doesn't have 3 elements"
@@ -90,6 +95,9 @@ class TestModelsRegistry:
         assert len(openrouter_models) > 0
         siliconflow_models = get_models_for_provider("siliconflow")
         assert len(siliconflow_models) > 0
+        atlas_models = get_models_for_provider("atlascloud")
+        assert ("qwen3.5-27b", "qwen/qwen3.5-27b") in atlas_models
+        assert get_models_for_provider("atlas") == []
 
 
 # =============================================================================
@@ -390,6 +398,30 @@ def _sdk_retry_supports_status_codes_override() -> bool:
 
 class TestThirdPartyRouting:
     @patch("EvoScientist.llm.models.init_chat_model")
+    def test_atlascloud_routes_through_openai(self, mock_init, monkeypatch):
+        """Atlas Cloud should use OpenAI-compatible routing with its default URL."""
+        mock_init.return_value = "mock_model"
+        monkeypatch.setenv("ATLASCLOUD_API_KEY", "atlas-key-123")
+
+        get_chat_model("qwen3.5-27b", provider="atlascloud")
+
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs["model"] == "qwen/qwen3.5-27b"
+        assert call_kwargs["model_provider"] == "openai"
+        assert call_kwargs["base_url"] == "https://api.atlascloud.ai/v1"
+        assert call_kwargs["api_key"] == "atlas-key-123"
+        assert "reasoning" not in call_kwargs
+
+    def test_atlascloud_host_maps_to_provider(self):
+        """Provider error envelopes should identify Atlas Cloud by host."""
+        from EvoScientist.llm.errors import _lookup_host_or_compat
+
+        assert (
+            _lookup_host_or_compat("https://api.atlascloud.ai/v1", "openai")
+            == "atlascloud"
+        )
+
+    @patch("EvoScientist.llm.models.init_chat_model")
     def test_siliconflow_routes_through_openai(self, mock_init, monkeypatch):
         """SiliconFlow provider should route through OpenAI with correct base_url."""
         mock_init.return_value = "mock_model"
@@ -403,6 +435,65 @@ class TestThirdPartyRouting:
         assert call_kwargs["api_key"] == "sf-key-123"
         # SiliconFlow should disable thinking
         assert call_kwargs["extra_body"]["enable_thinking"] is False
+
+    @patch("EvoScientist.llm.models.init_chat_model")
+    def test_requesty_routes_through_openai(self, mock_init, monkeypatch):
+        """Requesty provider should route through OpenAI with correct base_url."""
+        mock_init.return_value = "mock_model"
+        monkeypatch.setenv("REQUESTY_API_KEY", "rq-key-123")
+
+        get_chat_model("openai/gpt-4o-mini", provider="requesty")
+
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs["model_provider"] == "openai"
+        assert call_kwargs["base_url"] == "https://router.requesty.ai/v1"
+        assert call_kwargs["api_key"] == "rq-key-123"
+
+    @patch("EvoScientist.llm.models.init_chat_model")
+    def test_requesty_anthropic_prompt_cache_enabled_by_default(
+        self, mock_init, monkeypatch
+    ):
+        """Requesty Anthropic prompt caching should be opt-out."""
+        mock_init.return_value = "mock_model"
+        monkeypatch.setenv("REQUESTY_API_KEY", "rq-key")
+        monkeypatch.delenv(
+            "EVOSCIENTIST_REQUESTY_ANTHROPIC_PROMPT_CACHE", raising=False
+        )
+
+        get_chat_model("anthropic/claude-sonnet-4-6", provider="requesty")
+
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs["model_provider"] == "openai"
+        assert call_kwargs["base_url"] == "https://router.requesty.ai/v1"
+        assert call_kwargs["model_kwargs"]["cache_control"] == {"type": "ephemeral"}
+
+    @patch("EvoScientist.llm.models.init_chat_model")
+    def test_requesty_anthropic_prompt_cache_opt_out(self, mock_init, monkeypatch):
+        """The opt-out flag should skip caching for Requesty Claude models."""
+        mock_init.return_value = "mock_model"
+        monkeypatch.setenv("REQUESTY_API_KEY", "rq-key")
+        monkeypatch.setenv("EVOSCIENTIST_REQUESTY_ANTHROPIC_PROMPT_CACHE", "false")
+
+        get_chat_model("anthropic/claude-sonnet-4-6", provider="requesty")
+
+        call_kwargs = mock_init.call_args[1]
+        assert "cache_control" not in call_kwargs
+        assert "cache_control" not in call_kwargs.get("model_kwargs", {})
+
+    @patch("EvoScientist.llm.models.init_chat_model")
+    def test_requesty_prompt_cache_skips_non_anthropic(self, mock_init, monkeypatch):
+        """Requesty caching should not touch non-Anthropic models."""
+        mock_init.return_value = "mock_model"
+        monkeypatch.setenv("REQUESTY_API_KEY", "rq-key")
+        monkeypatch.delenv(
+            "EVOSCIENTIST_REQUESTY_ANTHROPIC_PROMPT_CACHE", raising=False
+        )
+
+        get_chat_model("openai/gpt-4o-mini", provider="requesty")
+
+        call_kwargs = mock_init.call_args[1]
+        assert "cache_control" not in call_kwargs
+        assert "cache_control" not in call_kwargs.get("model_kwargs", {})
 
     @patch("EvoScientist.llm.models.init_chat_model")
     def test_deepseek_uses_copy_safe_native_model(self, mock_init, monkeypatch):
@@ -1038,6 +1129,28 @@ class TestThirdPartyRouting:
         assert call_kwargs["model_provider"] == "openai"
         assert call_kwargs["base_url"] == "https://ark.cn-beijing.volces.com/api/v3"
         assert call_kwargs["api_key"] == "ve-key-123"
+
+    @pytest.mark.parametrize(
+        ("configured_model", "api_model"),
+        [("glm-5.2", "glm-5-2"), ("kimi-k2.5", "kimi-k2-5")],
+    )
+    @patch("EvoScientist.llm.models.init_chat_model")
+    def test_volcengine_code_routes_through_openai(
+        self, mock_init, configured_model, api_model, monkeypatch
+    ):
+        """Volcengine Coding Plan uses its endpoint, IDs, and vendor API key."""
+        mock_init.return_value = "mock_model"
+        monkeypatch.setenv("VOLCENGINE_API_KEY", "ve-code-key-123")
+
+        get_chat_model(configured_model, provider="volcengine-code")
+
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs["model_provider"] == "openai"
+        assert call_kwargs["model"] == api_model
+        assert (
+            call_kwargs["base_url"] == "https://ark.cn-beijing.volces.com/api/coding/v3"
+        )
+        assert call_kwargs["api_key"] == "ve-code-key-123"
 
     @patch("EvoScientist.llm.models.init_chat_model")
     def test_dashscope_routes_through_openai(self, mock_init, monkeypatch):
@@ -3297,3 +3410,86 @@ class TestAutoConfig:
 
         call_kwargs = mock_init.call_args[1]
         assert call_kwargs["use_responses_api"] is True
+
+
+# =============================================================================
+# Test validate_requesty_key
+# =============================================================================
+
+
+class TestValidateRequestyKey:
+    """The Requesty key validator probes the router's auth layer.
+
+    Validation targets a deliberately nonexistent sentinel model
+    (``requesty/auth-preflight``) so key checks don't depend on any real
+    model staying available: the router resolves auth *before* the model,
+    so a valid key returns 404 (model-not-found) while a bad key returns
+    401/403. All HTTP calls are mocked — no network in unit tests.
+    """
+
+    def test_empty_key_skipped(self):
+        """No key provided is skipped, not an error."""
+        from EvoScientist.config.onboard.validators import validate_requesty_key
+
+        is_valid, msg = validate_requesty_key("")
+        assert is_valid is True
+        assert "Skipped" in msg
+
+    def test_uses_sentinel_model_not_a_real_one(self):
+        """The probe targets a nonexistent sentinel model, not a real model."""
+        from EvoScientist.config.onboard.validators import validate_requesty_key
+
+        with patch("httpx.post") as mock_post:
+            mock_post.return_value.status_code = 404
+            validate_requesty_key("rq-key")
+
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["model"] == "requesty/auth-preflight"
+        assert payload["max_tokens"] == 1
+
+    def test_model_not_found_means_auth_passed(self):
+        """404 (model not found) means auth was accepted → key is valid."""
+        from EvoScientist.config.onboard.validators import validate_requesty_key
+
+        with patch("httpx.post") as mock_post:
+            mock_post.return_value.status_code = 404
+            is_valid, msg = validate_requesty_key("rq-key")
+
+        assert is_valid is True
+        assert msg == "Valid"
+
+    def test_success_means_valid(self):
+        """200 (accepted) also means the key is valid."""
+        from EvoScientist.config.onboard.validators import validate_requesty_key
+
+        with patch("httpx.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            is_valid, msg = validate_requesty_key("rq-key")
+
+        assert is_valid is True
+        assert msg == "Valid"
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_auth_rejected_means_invalid(self, status):
+        """401/403 mean the key was rejected by the auth layer."""
+        from EvoScientist.config.onboard.validators import validate_requesty_key
+
+        with patch("httpx.post") as mock_post:
+            mock_post.return_value.status_code = status
+            is_valid, msg = validate_requesty_key("bad-key")
+
+        assert is_valid is False
+        assert msg == "Invalid API key"
+
+    @pytest.mark.parametrize("status", [429, 500, 502, 503])
+    def test_transient_status_is_inconclusive(self, status):
+        """Rate-limit / 5xx leave key validity unknown, not rejected."""
+        from EvoScientist.config.onboard.validators import validate_requesty_key
+
+        with patch("httpx.post") as mock_post:
+            mock_post.return_value.status_code = status
+            is_valid, msg = validate_requesty_key("rq-key")
+
+        assert is_valid is False
+        assert "inconclusive" in msg.lower()
+        assert str(status) in msg
