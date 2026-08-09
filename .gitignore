@@ -35,7 +35,17 @@ bridge/package-lock.json
 # Project specific
 .langgraph_api/
 workspace/
-skills/
+
+# Local research data and generated agent outputs
+runs/
+experience/
+artifacts/
+
+# Workspace skill overrides: only keep the paper-navigator instructions
+skills/*
+!skills/paper-navigator/
+skills/paper-navigator/*
+!skills/paper-navigator/SKILL.md
 !EvoScientist/skills/
 memory/
 !EvoScientist/memory/

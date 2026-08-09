@@ -120,6 +120,12 @@ EvoScientist = [
     "skills/**/*",
 ]
 
+[tool.setuptools.data-files]
+"share/evoscientist/prompt" = [
+    "prompt/l1_extract.md",
+    "prompt/l2_inductive.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

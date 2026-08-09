@@ -192,6 +192,34 @@ def _ensure_auxiliary_chat_model():
     return _auxiliary_chat_model
 
 
+def _paper_experience_model_getter(cfg, chat_model=None):
+    """Return a lazy auxiliary-model getter for the paper extraction tool.
+
+    The ordinary agent path reuses the process-level auxiliary model cache. The
+    pure ``create_cli_agent(config=..., chat_model=...)`` path instead captures
+    the explicit config/model so a pending ``/model`` switch cannot accidentally
+    run extraction through the previously active global model.
+    """
+    if chat_model is None:
+        return _ensure_auxiliary_chat_model
+
+    aux_model = cfg.auxiliary_model or cfg.model
+    aux_provider = cfg.auxiliary_provider or cfg.provider
+    if (aux_model, aux_provider) == (cfg.model, cfg.provider):
+        return lambda: chat_model
+
+    cached: list[object] = []
+
+    def _get():
+        if not cached:
+            from .llm import get_chat_model
+
+            cached.append(get_chat_model(model=aux_model, provider=aux_provider))
+        return cached[0]
+
+    return _get
+
+
 def set_chat_model(model: str, provider: str | None = None):
     """Replace the cached chat model with a new one.
 
@@ -499,14 +527,33 @@ def _build_base_kwargs(
     base_backend, base_middleware, *, cfg=None, chat_model=None, workspace_dir=None
 ):
     """Build agent kwargs *without* MCP (fast, no subprocess spawning)."""
-    from .tools import skill_manager, tavily_search, think_tool
+    from .tools import (
+        create_paper_experience_batch_tool,
+        create_paper_experience_tool,
+        skill_manager,
+        tavily_search,
+        think_tool,
+    )
     from .utils import load_subagents
 
     cfg = cfg if cfg is not None else _ensure_config()
     tool_registry = {"think_tool": think_tool}
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
-    base_tools = [think_tool, skill_manager]
+    paper_experience_tool = create_paper_experience_tool(
+        memory_dir=_paths_mod.MEMORIES_DIR,
+        model_getter=_paper_experience_model_getter(cfg, chat_model),
+    )
+    paper_experience_batch_tool = create_paper_experience_batch_tool(
+        memory_dir=_paths_mod.MEMORIES_DIR,
+        model_getter=_paper_experience_model_getter(cfg, chat_model),
+    )
+    base_tools = [
+        think_tool,
+        skill_manager,
+        paper_experience_tool,
+        paper_experience_batch_tool,
+    ]
 
     # ``async_swap_pending=True`` because ``_maybe_swap_async_subagents``
     # below re-resolves tools for async subagents against the deployed
@@ -557,7 +604,13 @@ def load_mcp_and_build_kwargs(
         chat_model: Explicit chat model to bind instead of
             ``_ensure_chat_model()`` (which would write module globals).
     """
-    from .tools import skill_manager, tavily_search, think_tool
+    from .tools import (
+        create_paper_experience_batch_tool,
+        create_paper_experience_tool,
+        skill_manager,
+        tavily_search,
+        think_tool,
+    )
     from .utils import load_subagents
 
     cfg = cfg if cfg is not None else _ensure_config()
@@ -577,7 +630,20 @@ def load_mcp_and_build_kwargs(
     tool_registry = {"think_tool": think_tool}
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
-    base_tools = [think_tool, skill_manager]
+    paper_experience_tool = create_paper_experience_tool(
+        memory_dir=_paths_mod.MEMORIES_DIR,
+        model_getter=_paper_experience_model_getter(cfg, chat_model),
+    )
+    paper_experience_batch_tool = create_paper_experience_batch_tool(
+        memory_dir=_paths_mod.MEMORIES_DIR,
+        model_getter=_paper_experience_model_getter(cfg, chat_model),
+    )
+    base_tools = [
+        think_tool,
+        skill_manager,
+        paper_experience_tool,
+        paper_experience_batch_tool,
+    ]
 
     # Fresh tool registry — start from base tools + MCP tools
     registry = dict(tool_registry)
