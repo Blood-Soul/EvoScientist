@@ -26,14 +26,15 @@ from ..gateway import (
     GraphGateway,
     GraphTarget,
     RunRequest,
-    RuntimeGateways,
-    create_runtime_gateways,
 )
 from ..llm.context_window import DEFAULT_CONTEXT_WINDOW_FALLBACK, resolve_context_window
 from ..paths import ensure_dirs, set_active_workspace, set_workspace_root
 from ..runtime import AsyncRuntime
 from ..stream.console import console
-from . import async_notifier
+from . import (
+    async_notifier,
+    server_cmd,  # noqa: F401 — registers `EvoSci server` commands
+)
 from ._app import app, channel_app, config_app, configure_app, mcp_app, sessions_app
 from ._constants import build_metadata
 from .agent import (
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from ..config import EvoScientistConfig
+    from ..gateway import RuntimeGateways
 
 
 _ASYNC_RUNTIME_META_KEY = "evoscientist.async_runtime"
@@ -527,6 +529,16 @@ def _ensure_async_subagent_server(config: Any, *, workspace_dir: str) -> None:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
+    from ..langgraph_dev import manager as _lg_manager
+
+    if _lg_manager.CONFIG_DRIFT_SINCE_LAUNCH:
+        console.print(
+            "[yellow]⚠ Config changed since the background agent server was "
+            "launched — async sub-agents still use the old settings. Apply "
+            "them with [bold]EvoSci server stop[/bold], then restart "
+            "EvoSci.[/yellow]"
+        )
+
     # The backend is shared by every UI mode, so the exposure warning lives
     # here, not just in deploy/WebUI. Gated on the server being up: warning
     # about a bind that never happened would be worse than saying nothing.
@@ -738,9 +750,6 @@ async def compact_conversation(
     Returns a structured ``CompactResult``.
     """
     from langchain_core.messages.utils import count_tokens_approximately
-    from langchain_core.runnables import RunnableConfig
-
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
 
     try:
         state_values = await graph_gateway.get_state_values(target, thread_id)
@@ -844,22 +853,18 @@ async def compact_conversation(
     # Generate summary (LLM call)
     summary = await middleware._acreate_summary(to_summarize)
 
-    # Inject thread_id into LangGraph contextvar so _get_thread_id() finds it
-    # (compact runs outside a runnable context, so get_config() would fail
-    # and the middleware would generate a random "session_xxx" filename instead
-    # of reusing the real thread_id).
-    from langgraph.config import var_child_runnable_config
-
-    _token = var_child_runnable_config.set(config)
+    # Reuse the persisted _summarization_session_id (or generate one) so
+    # history keeps appending to a single file; re-persisted below.
+    session_id = middleware._get_session_id(state_values)
 
     # Offload old messages to backend
     file_path: str | None = None
     try:
-        file_path = await middleware._aoffload_to_backend(backend, to_summarize)
+        file_path = await middleware._aoffload_to_backend(
+            backend, to_summarize, session_id
+        )
     except Exception:
         pass  # non-fatal — proceed without offloaded history
-    finally:
-        var_child_runnable_config.reset(_token)
 
     from langchain_core.messages import HumanMessage
 
@@ -905,7 +910,7 @@ async def compact_conversation(
     await graph_gateway.update_state_values(
         target,
         thread_id,
-        {"_summarization_event": new_event},
+        {"_summarization_event": new_event, "_summarization_session_id": session_id},
     )
 
     return CompactResult(
@@ -940,7 +945,7 @@ class ServeRuntimeState:
     thread_id: str
     workspace_dir: str | None
     config: "EvoScientistConfig | None"
-    runtime_gateways: RuntimeGateways
+    runtime_gateways: "RuntimeGateways"
     async_runtime: AsyncRuntime
     resume_warning_thread_id: str | None = None
 
@@ -1552,6 +1557,8 @@ def serve(
         )
     console.print("[dim]Loading agent...[/dim]")
     agent = _load_agent(workspace_dir=ws, config=config, runtime=async_runtime)
+
+    from ..gateway import create_runtime_gateways
 
     runtime_gateways = create_runtime_gateways()
     tid = async_runtime.run_sync(
@@ -2412,6 +2419,7 @@ def _main_callback(
         # Single-shot mode: wrap in persistent checkpointer
         import asyncio
 
+        from ..gateway import create_runtime_gateways
         from ..sessions import get_checkpointer
         from ..stream.json_sink import stream_json
         from .interactive import _wait_for_memory_workers_before_exit, cmd_run
