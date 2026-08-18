@@ -323,6 +323,10 @@ def _step_provider(
             value="requesty",
         ),
         Choice(
+            title="Novita (aggregator — DeepSeek, Qwen, GLM, etc.)",
+            value="novita",
+        ),
+        Choice(
             title="OpenAI-compatible (third-party OpenAI endpoint)",
             value="custom-openai",
         ),
