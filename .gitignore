@@ -58,3 +58,4 @@ conversation_history/
 *meals/
 botpy.log
 large_tool_results/
+sessions.db

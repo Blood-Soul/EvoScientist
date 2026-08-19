@@ -54,14 +54,19 @@ def strip_tail(text: str) -> tuple[str, int]:
 
 
 def find_experience_file(paper_id: str) -> Path | None:
-    """Newest rendered.md for this paper across all extraction sessions."""
+    """Newest rendered.md for this paper across all extraction sessions.
+    Returns None if the paper doesn't have BOTH l1.json and l2.json, skipping
+    partially-extracted papers.
+    """
     if not MEMORY_SESSIONS.is_dir():
         return None
-    hits = [
-        path
-        for path in MEMORY_SESSIONS.glob(f"*/*{paper_id}*/rendered.md")
-        if path.is_file()
-    ]
+    hits = []
+    for path in MEMORY_SESSIONS.glob(f"*/*{paper_id}*/rendered.md"):
+        if not path.is_file():
+            continue
+        d = path.parent
+        if (d / "l1.json").is_file() and (d / "l2.json").is_file():
+            hits.append(path)
     if not hits:
         return None
     return max(hits, key=lambda p: p.stat().st_mtime)
