@@ -101,37 +101,94 @@ def _provenance(rec: Mapping[str, Any], paper_id: str) -> str:
         parts.append(name)
     if clean(rec.get("_paper_group")):
         parts.append(f"group: {clean(rec.get('_paper_group'))}")
-    if clean(rec.get("source_section")):
-        parts.append(f"section: {clean(rec.get('source_section'))}")
+    if _v3_section(rec):
+        parts.append(f"section: {_v3_section(rec)}")
     return " | ".join(parts)
 
 
+def _first_sentence(text: str, limit: int = 200) -> str:
+    """First sentence (or clause) of a long statement, for use as summary."""
+    text = clean(text)
+    if not text:
+        return ""
+    for sep in ("。", ". ", "! ", "? "):
+        idx = text.find(sep)
+        if 0 < idx < limit:
+            return text[: idx + len(sep)].strip()
+    return text[:limit].strip()
+
+
+def _quote(rec: Mapping[str, Any]) -> str:
+    """Verbatim supporting quote from v3 `evidence[]` or legacy `source_quote`.
+
+    v3 emits ``evidence: [{source_id, section, quote}, ...]``; the old schema used
+    a flat ``source_quote``. Prefer v3, join multiple quotes.
+    """
+    evidence = rec.get("evidence")
+    if isinstance(evidence, list) and evidence:
+        quotes = []
+        for item in evidence:
+            if isinstance(item, Mapping):
+                q = clean(item.get("quote") or item.get("source_quote"))
+                sec = clean(item.get("section"))
+                if q:
+                    quotes.append(f"[{sec}] {q}" if sec else q)
+        if quotes:
+            return "\n\n".join(quotes)
+    return clean(rec.get("source_quote"))
+
+
+def _v3_section(rec: Mapping[str, Any]) -> str:
+    """Best section label for provenance, honoring v3 `evidence[].section`."""
+    evidence = rec.get("evidence")
+    if isinstance(evidence, list) and evidence and isinstance(evidence[0], Mapping):
+        return clean(evidence[0].get("section"))
+    return clean(rec.get("source_section"))
+
+
 def l1_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None:
-    """Map one L1 practical experience. Returns None when unusable."""
-    task = _obj(rec.get("t"))
-    summary = clean(task.get("summary"))
-    narrative = clean(rec.get("narrative"))
+    """Map one L1 practical experience. Returns None when unusable.
+
+    Prefers v3 fields (``statement`` / ``task`` / ``applicable_when`` /
+    ``evidence[]``), falling back to the legacy schema (``narrative`` / ``t`` /
+    ``e`` / ``source_quote``) so the offline bank still imports.
+    """
+    task_obj = _obj(rec.get("t"))
+    # Body: v3 `statement`, legacy `narrative`
+    narrative = clean(rec.get("statement")) or clean(rec.get("narrative"))
+    # Summary: legacy `t.summary`, else v3 `task`, else first sentence of statement
+    summary = (
+        clean(task_obj.get("summary"))
+        or clean(rec.get("task"))
+        or _first_sentence(narrative)
+    )
     if not summary or not narrative:
         return None
 
-    granularity = clean(rec.get("granularity"))
+    granularity = clean(rec.get("granularity"))  # legacy-only; v3 has no grain
+    scope = clean(rec.get("scope"))  # v3 applicability scope, not a grain enum
     body = _sections(
         [
             ("Narrative", narrative),
+            # legacy nested env; v3 puts detail in practice_trace/task
             ("Practice environment", clean(rec.get("e"))),
             ("Practice trace", _trace(rec.get("practice_trace"))),
             (
                 "Task context",
                 "\n".join(
-                    f"{label}: {clean(task.get(key))}"
+                    f"{label}: {clean(task_obj.get(key))}"
                     for label, key in (
                         ("modality", "modality"),
                         ("scale", "scale"),
                         ("constraint", "constraint"),
                     )
-                    if clean(task.get(key))
-                ),
+                    if clean(task_obj.get(key))
+                )
+                or clean(rec.get("task")),
             ),
+            ("Applicable when", clean(rec.get("applicable_when"))),
+            ("Scope", scope),
+            ("Utility", clean(rec.get("utility"))),
             ("Extraction rationale", clean(rec.get("extraction_rationale"))),
         ]
     )
@@ -139,15 +196,18 @@ def l1_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None
     why_parts = []
     if granularity:
         why_parts.append(f"Granularity: {granularity}.")
-    if clean(task.get("scale")):
-        why_parts.append(f"Scale: {clean(task.get('scale'))}")
-    if clean(task.get("constraint")):
-        why_parts.append(f"Applies under: {clean(task.get('constraint'))}")
+    if scope:
+        why_parts.append(f"Scope: {scope}")
+    if clean(task_obj.get("scale")):
+        why_parts.append(f"Scale: {clean(task_obj.get('scale'))}")
+    boundary = clean(task_obj.get("constraint")) or clean(rec.get("applicable_when"))
+    if boundary:
+        why_parts.append(f"Applies under: {boundary}")
 
     evidence = _sections(
         [
             ("Source", _provenance(rec, paper_id)),
-            ("Verbatim quote", clean(rec.get("source_quote"))),
+            ("Verbatim quote", _quote(rec)),
             ("Classification", _taxonomy(rec)),
             ("Keywords", clean(rec.get("keywords"))),
         ]
@@ -163,16 +223,24 @@ def l1_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None
 
 
 def l2_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None:
-    """Map one L2 inductive experience. Returns None when unusable."""
-    declaration = clean(rec.get("declaration"))
-    narrative = clean(rec.get("narrative"))
-    if not declaration or not narrative:
+    """Map one L2 inductive experience. Returns None when unusable.
+
+    Prefers v3 fields (``statement`` / ``confidence`` / ``rationale`` /
+    ``applicable_when``), falling back to legacy (``declaration`` / ``μ`` / ``r`` /
+    ``context``) so the offline bank still imports.
+    """
+    # Declaration: v3 `statement`, legacy `declaration`
+    declaration = clean(rec.get("statement")) or clean(rec.get("declaration"))
+    if not declaration:
         return None
+    summary = declaration if len(declaration) < 220 else _first_sentence(declaration)
 
     context = _obj(rec.get("context"))
     claim_type = clean(rec.get("claim_type"))
-    mu = _mu(rec)
-    reason = clean(rec.get("r"))
+    # Confidence: v3 `confidence`, legacy `μ`/`mu`
+    mu = clean(rec.get("confidence")) or _mu(rec)
+    # Rationale: v3 `rationale`/`rationale_depth`, legacy `r`/`r_depth`/`μ_r`
+    reason = clean(rec.get("rationale")) or clean(rec.get("r"))
 
     causal = ""
     if reason:
@@ -181,7 +249,10 @@ def l2_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None
             f"{label}: {value}"
             for label, value in (
                 ("confidence (μ_r)", _mu(rec, "μ_r")),
-                ("depth", clean(rec.get("r_depth"))),
+                (
+                    "depth",
+                    clean(rec.get("rationale_depth")) or clean(rec.get("r_depth")),
+                ),
                 ("depth rationale", clean(rec.get("r_depth_rationale"))),
             )
             if value
@@ -193,8 +264,9 @@ def l2_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None
     body = _sections(
         [
             ("Declaration", declaration),
-            ("Narrative", narrative),
-            ("Causal explanation (r)", causal),
+            # Only legacy records carry a separate narrative body
+            ("Narrative", clean(rec.get("narrative"))),
+            ("Causal explanation (rationale)", causal),
             (
                 "Applicability context",
                 "\n".join(
@@ -206,6 +278,14 @@ def l2_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None
                         ("constraint", "constraint"),
                     )
                     if clean(context.get(key))
+                )
+                or "\n".join(
+                    f"{label}: {clean(rec.get(key))}"
+                    for label, key in (
+                        ("applicable when", "applicable_when"),
+                        ("not applicable when", "not_applicable_when"),
+                    )
+                    if clean(rec.get(key))
                 ),
             ),
             ("Extraction rationale", clean(rec.get("extraction_rationale"))),
@@ -217,15 +297,17 @@ def l2_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None
         why_parts.append(f"Claim type: {claim_type}.")
     if mu:
         why_parts.append(f"Confidence: {mu}.")
-    if clean(context.get("summary")):
-        why_parts.append(clean(context.get("summary")))
-    if clean(context.get("constraint")):
-        why_parts.append(f"Applies under: {clean(context.get('constraint'))}")
+    boundary = clean(context.get("summary")) or clean(rec.get("applicable_when"))
+    if boundary:
+        why_parts.append(boundary)
+    constraint = clean(context.get("constraint")) or clean(rec.get("not_applicable_when"))
+    if constraint:
+        why_parts.append(f"Boundary: {constraint}")
 
     evidence = _sections(
         [
             ("Source", _provenance(rec, paper_id)),
-            ("Verbatim quote", clean(rec.get("source_quote"))),
+            ("Verbatim quote", _quote(rec)),
             ("Classification", _taxonomy(rec)),
             (
                 "Keywords",
@@ -236,7 +318,7 @@ def l2_to_observation(rec: Mapping[str, Any], paper_id: str = "") -> dict | None
 
     prefix = f"[{claim_type}] " if claim_type else ""
     return {
-        "summary": f"{prefix}{declaration}",
+        "summary": f"{prefix}{summary}",
         "observation": body,
         "why_it_matters": " ".join(why_parts) or declaration,
         "evidence": evidence or None,

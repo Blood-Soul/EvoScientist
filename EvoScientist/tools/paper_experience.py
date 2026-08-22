@@ -317,19 +317,54 @@ def _format_practice_trace(value: Any) -> list[str]:
     return lines
 
 
+def _format_evidence(row: Mapping[str, Any], paper_id: str) -> list[str]:
+    """Render provenance for both v3 (`evidence` array) and legacy (flat fields).
+
+    v3 emits ``evidence: [{source_id, section, quote}, ...]``; the old schema used
+    flat ``source_section`` / ``source_quote``. Prefer v3, fall back to legacy so
+    the 374 already-stored observations still render.
+    """
+    evidence = row.get("evidence")
+    if isinstance(evidence, list) and evidence:
+        lines = ["- Evidence:"]
+        for item in evidence:
+            if isinstance(item, Mapping):
+                sid = _display(item.get("source_id") or item.get("source_section"))
+                section = _display(item.get("section"))
+                quote = _display(item.get("quote") or item.get("source_quote"))
+                tag = " / ".join(p for p in (sid, section) if p and p != "N/A")
+                lines.append(f"  - [{tag or 'source'}] {quote}")
+            else:
+                lines.append(f"  - {_display(item)}")
+        return lines
+    # Legacy flat fields
+    return [
+        f"- Source section: {_display(row.get('source_section'))}",
+        f"- Supporting quote: {_display(row.get('source_quote'))}",
+    ]
+
+
 def format_l1_experiences(payload: Mapping[str, Any], paper_id: str) -> str:
-    """Render parsed L1 JSON as prompt-oriented Markdown rather than raw JSON."""
+    """Render parsed L1 JSON as prompt-oriented Markdown rather than raw JSON.
+
+    Prefers v3 field names (``statement`` / ``task`` / ``applicable_when`` /
+    ``evidence[]``), falling back to the legacy schema (``narrative`` / ``t`` /
+    ``e`` / ``source_quote``) so previously stored experiences still render.
+    """
     sections: list[str] = []
     for index, row in enumerate(payload.get("experiences", []), start=1):
         lines = [
             f"### L1-{index:03d}",
             f"- Source paper: {_source_paper(row, paper_id)}",
-            f"- Granularity: {_display(row.get('granularity'))}",
             f"- Domain: {_display(row.get('domain'))}",
             f"- Keywords: {_keywords(row.get('keywords'))}",
         ]
+        if row.get("granularity"):  # legacy-only field
+            lines.insert(2, f"- Granularity: {_display(row.get('granularity'))}")
+        if row.get("scope"):  # v3 applicability scope
+            lines.append(f"- Scope: {_display(row.get('scope'))}")
         task = row.get("t")
-        if isinstance(task, Mapping):
+        if isinstance(task, Mapping):  # legacy nested task
             lines.extend(
                 [
                     f"- Task summary: {_display(task.get('summary'))}",
@@ -338,23 +373,28 @@ def format_l1_experiences(payload: Mapping[str, Any], paper_id: str) -> str:
                     f"- Constraints/limitations: {_display(task.get('constraint'))}",
                 ]
             )
-        else:
-            lines.append(f"- Task: {_display(task)}")
-        lines.append(f"- Evaluation/evidence: {_display(row.get('e'))}")
+            lines.append(f"- Evaluation/evidence: {_display(row.get('e'))}")
+        else:  # v3 flat fields
+            lines.append(f"- Task: {_display(row.get('task') or task)}")
+            if row.get("applicable_when"):
+                lines.append(f"- Applicable when: {_display(row.get('applicable_when'))}")
+            if row.get("utility"):
+                lines.append(f"- Utility: {_display(row.get('utility'))}")
         lines.extend(_format_practice_trace(row.get("practice_trace")))
-        lines.extend(
-            [
-                f"- Reusable research experience:\n{_display(row.get('narrative'))}",
-                f"- Source section: {_display(row.get('source_section'))}",
-                f"- Supporting quote: {_display(row.get('source_quote'))}",
-            ]
-        )
+        body = row.get("statement") or row.get("narrative")
+        lines.append(f"- Reusable research experience:\n{_display(body)}")
+        lines.extend(_format_evidence(row, paper_id))
         sections.append("\n".join(lines))
     return "\n\n".join(sections) or "No L1 experiences were extracted from this paper."
 
 
 def format_l2_experiences(payload: Mapping[str, Any], paper_id: str) -> str:
-    """Render parsed L2 JSON as readable evidence with scope and mechanism."""
+    """Render parsed L2 JSON as readable evidence with scope and mechanism.
+
+    Prefers v3 fields (``statement`` / ``confidence`` / ``rationale`` /
+    ``applicable_when``), falling back to legacy (``declaration`` / ``μ`` / ``r`` /
+    ``context``) so previously stored experiences still render.
+    """
     sections: list[str] = []
     for index, row in enumerate(payload.get("experiences", []), start=1):
         lines = [
@@ -363,11 +403,13 @@ def format_l2_experiences(payload: Mapping[str, Any], paper_id: str) -> str:
             f"- Claim type: {_display(row.get('claim_type'))}",
             f"- Domain: {_display(row.get('domain'))}",
             f"- Keywords: {_keywords(row.get('keywords'))}",
-            f"- Keyword summary: {_display(row.get('keywords_summary'))}",
-            f"- Core declaration: {_display(row.get('declaration'))}",
         ]
+        # Core declaration: v3 `statement`, legacy `declaration`
+        lines.append(
+            f"- Core declaration: {_display(row.get('statement') or row.get('declaration'))}"
+        )
         context = row.get("context")
-        if isinstance(context, Mapping):
+        if isinstance(context, Mapping):  # legacy nested context
             lines.extend(
                 [
                     f"- Context summary: {_display(context.get('summary'))}",
@@ -376,19 +418,29 @@ def format_l2_experiences(payload: Mapping[str, Any], paper_id: str) -> str:
                     f"- Constraints: {_display(context.get('constraint'))}",
                 ]
             )
-        else:
-            lines.append(f"- Context: {_display(context)}")
-        lines.extend(
-            [
-                f"- Quantified evidence/strength (mu): {_display(row.get('μ', row.get('mu')))}",
-                f"- Applicability condition or mechanism (r): {_display(row.get('r'))}",
-                f"- Evidence for r (mu_r): {_display(row.get('μ_r', row.get('mu_r')))}",
-                f"- Mechanism depth: {_display(row.get('r_depth'))}",
-                f"- Detailed empirical/causal experience:\n{_display(row.get('narrative'))}",
-                f"- Source section: {_display(row.get('source_section'))}",
-                f"- Supporting quote: {_display(row.get('source_quote'))}",
-            ]
+        else:  # v3 applicability fields
+            if row.get("applicable_when"):
+                lines.append(f"- Applicable when: {_display(row.get('applicable_when'))}")
+            if row.get("not_applicable_when"):
+                lines.append(
+                    f"- Not applicable when: {_display(row.get('not_applicable_when'))}"
+                )
+        # Confidence: v3 `confidence`, legacy `μ`/`mu`
+        lines.append(
+            f"- Confidence: {_display(row.get('confidence') or row.get('μ') or row.get('mu'))}"
         )
+        # Rationale/mechanism: v3 `rationale`/`rationale_depth`, legacy `r`/`r_depth`
+        rationale = row.get("rationale") or row.get("r")
+        if rationale:
+            lines.append(f"- Rationale/mechanism: {_display(rationale)}")
+            depth = row.get("rationale_depth") or row.get("r_depth")
+            if depth:
+                lines.append(f"- Mechanism depth: {_display(depth)}")
+        body = row.get("statement") or row.get("narrative")
+        # For v3, statement IS the declaration; only add a separate body block for legacy
+        if row.get("narrative") and not row.get("statement"):
+            lines.append(f"- Detailed empirical/causal experience:\n{_display(body)}")
+        lines.extend(_format_evidence(row, paper_id))
         sections.append("\n".join(lines))
     return "\n\n".join(sections) or "No L2 experiences were extracted from this paper."
 

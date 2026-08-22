@@ -75,6 +75,8 @@ _MODEL_ENTRIES: list[tuple[str, str, str]] = [
     ("claude-haiku-4-5", "claude-haiku-4-5", "custom-anthropic"),
     # Custom OpenAI (third-party OpenAI-compatible endpoints, 3 defaults)
     # Listed BEFORE native openai so MODELS dict defaults to native provider
+    ("gpt-5.6-terra", "gpt-5.6-terra", "custom-openai"),
+    ("gpt-5.6-luna", "gpt-5.6-luna", "custom-openai"),
     ("gpt-5.5-pro", "gpt-5.5-pro", "custom-openai"),
     ("gpt-5.5", "gpt-5.5", "custom-openai"),
     ("gpt-5.4", "gpt-5.4", "custom-openai"),

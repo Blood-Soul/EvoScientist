@@ -1,6 +1,6 @@
 ---
 name: experience-answer
-description: "Answer a question using the accumulated EvoMemory experience bank (L1 practical + L2 inductive experiences distilled from papers), then show the evidence chain behind the answer. Trigger phrases: 用经验库回答, 查经验库, 基于已有经验怎么做, 经验库里有什么相关的, answer from the experience bank, what do we know about X, 根据积累的经验给个方案. Do NOT use for: extracting experiences from a new paper (paper-experience); comparing experience-grounded vs paper-grounded solutions (solution-ab); finding papers (paper-navigator)."
+description: "Answer a question using the accumulated EvoMemory experience bank (L1 practical + L2 inductive experiences distilled from papers), then show the evidence chain behind the answer. Also handles follow-up requests to show the details of the referenced experiences. Trigger phrases: 用经验库回答, 查经验库, 基于已有经验怎么做, 经验库里有什么相关的, answer from the experience bank, what do we know about X, 根据积累的经验给个方案, 展示引用的经验主体, 展开看看第x条经验, Show the referenced experience details. Do NOT use for: extracting experiences from a new paper (paper-experience); comparing experience-grounded vs paper-grounded solutions (solution-ab); finding papers (paper-navigator)."
 metadata:
   author: EvoScientist
   version: '1.0.0'
@@ -24,6 +24,8 @@ knows from what it doesn't.
   read_memory → 精读 3-5 条
      │
   答案 + 依据链
+     │
+  (追问) 展开具体经验主体与思维链
 ```
 
 > **Run these steps yourself.** This is a skill, not a dispatchable sub-agent.
@@ -128,6 +130,34 @@ them one by one. Lead with what to do or what holds, then the qualifications.>
 
 经验库没有覆盖的部分。明确列出 —— 不要用通用知识补齐。
 ```
+
+## Step 5 — Follow-up: Drill down into specific experiences
+
+If the user asks a follow-up question to see the details of the experiences you
+just referenced (e.g., "展开展示你引用的前两条经验的主体内容和推理过程", "Show the
+referenced experience details"), do **not** restart the search process.
+
+1. **Identify the targets**: Determine which specific observation IDs (`O-xxxx`)
+   the user is asking about from your previous evidence chain.
+2. **Read memory**: If their full text isn't still in your immediate context
+   window, use `read_memory` to fetch them again.
+3. **Output Format**: Present the details clearly. For each experience, output:
+   - **ID & Provenance**: e.g., `O-xxxx` (arXiv:1234.56789)
+   - **主体 (Narrative) 原文**: The **FULL, VERBATIM** English narrative text
+     extracted from the observation file. You MUST copy the entire English text
+     exactly as written. Do not change a single word. These narratives are
+     typically 400-600 words long.
+   - **主体 (Narrative) 中文翻译**: (Optional, only if the user requested Chinese).
+     A complete, sentence-by-sentence Chinese translation of the narrative. Do
+     not summarize, compress, or turn it into bullet points. Translate the entire
+     text.
+   - **思维链 (Reasoning)**: A short analytical paragraph explaining *why* this
+     specific experience supports the claim made in your previous answer.
+
+**Full Schema Request**: If the user explicitly asks to see "all structured fields"
+or "全部结构", include the other sections (`Practice trace`,
+`Causal explanation (r)`, `Applicability context`, `Classification`, etc.) between
+the Narrative and the Reasoning. Default to just the Narrative.
 
 ---
 
