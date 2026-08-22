@@ -177,7 +177,7 @@ def test_main_agent_registers_runtime_extraction_tool(monkeypatch):
     monkeypatch.setattr(
         agent_module,
         "_maybe_swap_async_subagents",
-        lambda subs, middleware, cfg=None: subs,
+        lambda subs, middleware=None, *, tool_registry=None, cfg=None: subs,
     )
     monkeypatch.setattr(agent_module, "_configured_system_prompt", lambda cfg: "prompt")
 
