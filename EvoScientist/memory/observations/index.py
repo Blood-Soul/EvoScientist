@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
+from ..experiences.store import list_experience_documents
 from ..types import MemoryScope, MemoryType, ObservationSearchDocument
 from .store import list_observation_documents
 
@@ -18,7 +19,7 @@ def build_observation_index_context(
     max_inline_chars: int = DEFAULT_MAX_INLINE_OBSERVATION_INDEX_CHARS,
 ) -> str:
     """Build a compact observation-memory index for prompts."""
-    return _format_observation_index_context(
+    observation_context = _format_observation_index_context(
         _observation_documents(memory_dir=memory_dir, project_id=project_id),
         include_counts=True,
         include_paths=True,
@@ -27,6 +28,40 @@ def build_observation_index_context(
         intro="Indexed observations:",
         max_inline_chars=max_inline_chars,
     )
+    experiences = sorted(
+        list_experience_documents(memory_dir=memory_dir, project_id=project_id),
+        key=lambda document: document.observation_id,
+    )
+    if not experiences:
+        return observation_context
+    experience_lines = [
+        (
+            f"- {document.observation_id} "
+            f"[{document.experience_level}/project] {document.path}: "
+            f"{document.summary}"
+        )
+        for document in experiences
+    ]
+    remaining = max_inline_chars - len(observation_context) - 2
+    prefix = [
+        "<paper_experience_memory>",
+        f"Indexed project paper experiences: total={len(experiences)}.",
+    ]
+    suffix = [
+        "Use `search_observations` and `read_memory` with E-* IDs.",
+        "</paper_experience_memory>",
+    ]
+    if len("\n".join([*prefix, *suffix])) > remaining:
+        return observation_context
+    selected: list[str] = []
+    for line in experience_lines:
+        candidate = "\n".join([*prefix, *selected, line, *suffix])
+        if len(candidate) <= remaining:
+            selected.append(line)
+    if len(selected) < len(experience_lines):
+        prefix.append("Experience index truncated to entries that fit.")
+    experience_context = "\n".join([*prefix, *selected, *suffix])
+    return f"{observation_context}\n\n{experience_context}"
 
 
 def build_observation_linker_index_context(

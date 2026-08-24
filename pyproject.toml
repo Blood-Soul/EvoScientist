@@ -120,6 +120,9 @@ EvoScientist = [
     "skills/**/*",
 ]
 
+[tool.setuptools.data-files]
+"share/evoscientist/prompt" = ["prompt/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
@@ -156,6 +159,7 @@ exclude = [
     "dist",
     "node_modules",
     "site-packages",
+    "skills/paper-navigator/scripts",
     "venv",
 ]
 

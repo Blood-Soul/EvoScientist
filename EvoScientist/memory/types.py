@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
+
+ExperienceLevel = Literal["l1", "l2"]
 
 
 class MemoryType(StrEnum):
@@ -79,6 +81,8 @@ class ObservationSearchDocument:
     body: str
     text: str
     related_observations: tuple[RelatedObservationResult, ...] = ()
+    record_kind: Literal["observation", "experience"] = "observation"
+    experience_level: ExperienceLevel | None = None
 
 
 class ObservationSearchHit(TypedDict):
@@ -90,6 +94,8 @@ class ObservationSearchHit(TypedDict):
     scope: MemoryScope
     summary: str
     matches: list[str]
+    record_kind: NotRequired[Literal["observation", "experience"]]
+    experience_level: NotRequired[ExperienceLevel]
     related_observations: NotRequired[list[RelatedObservationResult]]
     score: NotRequired[float]
 
@@ -103,4 +109,6 @@ class ObservationReadResult(TypedDict):
     scope: MemoryScope
     summary: str
     text: str
+    record_kind: NotRequired[Literal["observation", "experience"]]
+    experience_level: NotRequired[ExperienceLevel]
     related_observations: NotRequired[list[RelatedObservationResult]]
