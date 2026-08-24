@@ -325,6 +325,133 @@ def test_observation_index_over_budget_keeps_entries_that_fit(tmp_path, monkeypa
     assert "over-budget observation" in context
 
 
+def test_construction_defers_observation_index_read_to_first_request(
+    tmp_path, monkeypatch
+):
+    """Building the middleware must not read the observation store.
+
+    The prompt-facing index is rebuilt fresh on every model call, so the
+    stored construction-time value never reaches a prompt. Reading the whole
+    store to seed it was pure cost, paid once per middleware and 12x per
+    deployed-graph rebuild (main agent + 11 sub-agents). Construction still
+    creates the search dirs, and the first ``modify_request`` still injects a
+    current index built from the store.
+    """
+    memories = tmp_path / "memories"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(paths, "WORKSPACE_ROOT", workspace)
+
+    record_observation_file(
+        memory_dir=memories,
+        project_id=_path_project_id(workspace),
+        memory_type=MemoryType.PROCEDURAL,
+        summary="Continue the diarization bottleneck investigation.",
+        observation="A prior-session observation the agent should surface.",
+        why_it_matters="First-turn 'hello' should list resumable topics.",
+        scope=MemoryScope.GLOBAL,
+        source_type=MemorySourceType.SUBAGENT,
+        source_session_id="thread-1",
+        source_agent="research-agent",
+    )
+
+    calls: list[int] = []
+    real_build = memory_module.build_observation_index_context
+
+    def _counting_build(*args, **kwargs):
+        calls.append(1)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(
+        memory_module, "build_observation_index_context", _counting_build
+    )
+
+    middleware = memory_module.create_memory_middleware(str(memories))
+
+    # Construction must not read the observation store ...
+    assert calls == []
+    assert middleware._observation_index_context == ""
+    # ... but must still create the cross-project search dir it prompts agents
+    # to look in.
+    assert (memories / "observations" / "global").is_dir()
+
+    # The first model call injects a freshly built index containing the
+    # prior-session observation, despite the empty construction seed.
+    modified = middleware.modify_request(_request())
+    content = str(modified.system_message.content)
+    assert "Indexed observations:" in content
+    assert "Continue the diarization bottleneck investigation." in content
+    assert len(calls) == 1
+
+
+def test_two_middlewares_share_the_observation_cache(tmp_path, monkeypatch):
+    """Two ``EvoMemoryMiddleware`` instances over the same ``memory_dir`` must
+    share the underlying ``list_observation_documents`` cache so the observation
+    store is parsed once, not once per middleware.
+
+    This is the 12x-redundant-work scenario the PR exists to fix: a deployed
+    graph builds the main agent + 11 sub-agents, each with its own memory
+    middleware.  Construction no longer reads the store (deferred to first
+    use), and the first ``modify_request`` from any middleware warms the
+    process-scoped cache for the rest.
+    """
+    from EvoScientist.memory.observations import store
+
+    memories = tmp_path / "memories"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(paths, "WORKSPACE_ROOT", workspace)
+
+    record_observation_file(
+        memory_dir=memories,
+        project_id=_path_project_id(workspace),
+        memory_type=MemoryType.PROCEDURAL,
+        summary="Shared observation for both middlewares.",
+        observation="Body text.",
+        why_it_matters="Cache sharing across middleware instances.",
+        scope=MemoryScope.GLOBAL,
+        source_type=MemorySourceType.SUBAGENT,
+        source_session_id="thread-1",
+        source_agent="research-agent",
+    )
+
+    parse_calls: list[int] = []
+    real_parse = store._parse_observation_search_document
+
+    def _counting_parse(*args, **kwargs):
+        parse_calls.append(1)
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_parse_observation_search_document", _counting_parse)
+
+    store._file_parse_cache.clear()
+    store._cached_max_files = None
+
+    middleware_a = memory_module.create_memory_middleware(
+        str(memories), workspace_dir=workspace
+    )
+    middleware_b = memory_module.create_memory_middleware(
+        str(memories), workspace_dir=workspace
+    )
+
+    # First middleware's model call parses the store and warms the cache.
+    modified_a = middleware_a.modify_request(_request())
+    assert "Shared observation for both middlewares." in str(
+        modified_a.system_message.content
+    )
+    assert len(parse_calls) == 1
+
+    # Second middleware's model call must hit the cache, not re-parse.
+    modified_b = middleware_b.modify_request(_request())
+    assert "Shared observation for both middlewares." in str(
+        modified_b.system_message.content
+    )
+    assert len(parse_calls) == 1, (
+        "second middleware must share the cache; re-parsing means the "
+        "process-scoped cache is not working across middleware instances"
+    )
+
+
 def test_profile_memory_uses_path_pointers_when_profiles_exceed_budget(
     tmp_path, monkeypatch
 ):

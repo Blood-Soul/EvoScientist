@@ -307,6 +307,14 @@ class EvoScientistConfig:
         DEFAULT_MEMORY_SKILL_SYNTHESIS_CADENCE
     )
     memory_skill_synthesis_time: str = DEFAULT_MEMORY_SKILL_SYNTHESIS_TIME
+    # Max number of parsed observation files kept in the process-wide parse
+    # cache. Each entry holds one parsed document keyed on the file path; at
+    # the end of a call the LRU trims down to max(cap, entries touched by
+    # the call), so an active store larger than the cap temporarily exceeds
+    # it instead of thrashing. 2048 is generous for the single-workspace
+    # deploy model; raise for a long-running server that cycles through many
+    # large workspaces.
+    memory_observation_cache_max_files: int = 2048
 
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
@@ -502,6 +510,16 @@ class EvoScientistConfig:
                 "Invalid sandbox_execute_timeout %r; falling back to 300.", t
             )
             self.sandbox_execute_timeout = 300
+
+        # A non-positive cache cap would evict every file entry immediately,
+        # defeating the cache entirely.
+        cap = self.memory_observation_cache_max_files
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+            logging.getLogger(__name__).warning(
+                "Invalid memory_observation_cache_max_files %r; falling back to 2048.",
+                cap,
+            )
+            self.memory_observation_cache_max_files = 2048
 
         # auto_mode and dangerous_mode both imply auto_approve regardless of
         # source (CLI, env, config file, direct construction) — done here so the
@@ -857,6 +875,7 @@ _ENV_MAPPINGS = {
     "memory_skill_synthesis_mode": "EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_MODE",
     "memory_skill_synthesis_cadence": "EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_CADENCE",
     "memory_skill_synthesis_time": "EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_TIME",
+    "memory_observation_cache_max_files": "EVOSCIENTIST_MAX_CACHED_FILES",
 }
 
 
