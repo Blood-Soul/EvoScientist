@@ -9,6 +9,7 @@
         "evomemory-subagent-worker": "EvoScientist.langgraph_dev.graphs:evomemory_subagent_worker",
         "evomemory-turn-worker": "EvoScientist.langgraph_dev.graphs:evomemory_turn_worker",
         "evomemory-observation-linker": "EvoScientist.langgraph_dev.graphs:evomemory_observation_linker",
+        "evomemory-paper-experience-worker": "EvoScientist.langgraph_dev.graphs:evomemory_paper_experience_worker",
         "evomemory-autoskills": "EvoScientist.langgraph_dev.graphs:evomemory_autoskills"
     },
     "checkpointer": {

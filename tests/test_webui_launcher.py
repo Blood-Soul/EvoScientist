@@ -107,6 +107,7 @@ def _run_webui_once(monkeypatch, config, *, backend_port_occupied: bool = False)
     captured: dict[str, Any] = {"printed": [], "npx_env": {}, "npx_args": []}
 
     monkeypatch.setattr(config_mod, "apply_config_to_env", lambda _cfg: None)
+    monkeypatch.setattr(webui_mod, "_refresh_paper_experience_catalogs", lambda: None)
     monkeypatch.setattr(webui_mod, "console", _RecordingConsole(captured["printed"]))
     monkeypatch.setattr(os, "makedirs", lambda *a, **k: None)
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/npx")

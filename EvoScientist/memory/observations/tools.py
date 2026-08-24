@@ -13,6 +13,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field
 
+from ..experiences.retrieval import read_memory_file, search_memory_files
 from ..types import (
     MemoryScope,
     MemorySourceType,
@@ -22,11 +23,7 @@ from ..types import (
     ObservationSearchMode,
 )
 from .relations import link_observation_files
-from .store import (
-    read_observation_file,
-    record_observation_file,
-    search_observation_files,
-)
+from .store import record_observation_file
 
 logger = logging.getLogger(__name__)
 ObservationRecordedHook = Callable[[ObservationRecordResult], None]
@@ -256,7 +253,7 @@ def create_search_observations_tool(
         runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
     ) -> str:
         search_mode = ObservationSearchMode(mode)
-        results = search_observation_files(
+        results = search_memory_files(
             memory_dir=memory_dir,
             project_id=_runtime_project_id(runtime, project_id),
             query=query,
@@ -275,7 +272,7 @@ def create_search_observations_tool(
         func=_search_observations,
         name="search_observations",
         description=(
-            "Search EvoMemory observation summaries and bodies with ranked "
+            "Search EvoMemory observations and project paper experiences with ranked "
             "free-text retrieval. Use a few distinctive words or short phrases "
             "that describe the issue, constraint, procedure, or prior result "
             "to find. For exact grep-like matching, pass `mode=regex`. For "
@@ -301,10 +298,10 @@ def create_read_memory_tool(
         runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
     ) -> str:
         requested_id = observation_id.strip()
-        result = read_observation_file(
+        result = read_memory_file(
             memory_dir=memory_dir,
             project_id=_runtime_project_id(runtime, project_id),
-            observation_id=requested_id,
+            record_id=requested_id,
         )
         if result is None:
             return json.dumps(
@@ -315,6 +312,9 @@ def create_read_memory_tool(
                 sort_keys=True,
             )
         payload: dict[str, object] = {"text": result["text"]}
+        if result.get("record_kind") == "experience":
+            payload["record_kind"] = "experience"
+            payload["experience_level"] = result.get("experience_level")
         if "related_observations" in result:
             payload["related_observations"] = result["related_observations"]
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -323,9 +323,9 @@ def create_read_memory_tool(
         func=_read_memory,
         name="read_memory",
         description=(
-            "Read the full markdown for an EvoMemory observation by exact "
-            "observation ID. Use this after `search_observations` or the "
-            "inlined observation index identifies a promising memory."
+            "Read a full EvoMemory observation or paper experience by exact "
+            "O-* or E-* ID. Use this after `search_observations` or the "
+            "inlined memory index identifies a promising record."
         ),
         args_schema=ReadMemoryArgs,
         infer_schema=False,

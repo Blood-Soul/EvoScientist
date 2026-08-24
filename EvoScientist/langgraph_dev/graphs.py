@@ -26,6 +26,7 @@ from EvoScientist.memory.agents import (
     build_autoskills_graph,
     build_memory_worker_graph,
     build_observation_linker_graph,
+    build_paper_experience_worker_graph,
 )
 from EvoScientist.memory.types import MemorySourceType
 from EvoScientist.subagents._factory import build_async_subagent_graph
@@ -45,4 +46,5 @@ expert_container_async = build_expert_container_async_graph()
 evomemory_subagent_worker = build_memory_worker_graph(MemorySourceType.SUBAGENT)
 evomemory_turn_worker = build_memory_worker_graph(MemorySourceType.TURN)
 evomemory_observation_linker = build_observation_linker_graph()
+evomemory_paper_experience_worker = build_paper_experience_worker_graph()
 evomemory_autoskills = build_autoskills_graph()
