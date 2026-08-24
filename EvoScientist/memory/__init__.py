@@ -1,5 +1,19 @@
 """File-backed memory helpers used by EvoScientist middleware."""
 
+from .experiences import (
+    EXPERIENCE_CATALOG_FILENAME,
+    PaperExperienceTask,
+    enqueue_paper,
+    experience_catalog_path,
+    list_experience_documents,
+    list_memory_documents,
+    read_experience_file,
+    read_memory_file,
+    refresh_all_experience_catalogs,
+    refresh_experience_catalog,
+    search_memory_files,
+    store_paper_experiences,
+)
 from .observations import (
     DEFAULT_MAX_INLINE_OBSERVATION_INDEX_CHARS,
     OBSERVATION_DIR,
@@ -21,6 +35,7 @@ from .observations import (
     search_observation_files,
 )
 from .types import (
+    ExperienceLevel,
     MemoryScope,
     MemorySourceType,
     MemoryType,
@@ -33,7 +48,9 @@ from .types import (
 
 __all__ = [
     "DEFAULT_MAX_INLINE_OBSERVATION_INDEX_CHARS",
+    "EXPERIENCE_CATALOG_FILENAME",
     "OBSERVATION_DIR",
+    "ExperienceLevel",
     "LinkObservationsArgs",
     "MemoryScope",
     "MemorySourceType",
@@ -43,6 +60,7 @@ __all__ = [
     "ObservationRelation",
     "ObservationSearchHit",
     "ObservationSearchMode",
+    "PaperExperienceTask",
     "ReadMemoryArgs",
     "RecordObservationArgs",
     "SearchObservationsArgs",
@@ -52,10 +70,20 @@ __all__ = [
     "create_read_memory_tool",
     "create_record_observation_tool",
     "create_search_observations_tool",
+    "enqueue_paper",
+    "experience_catalog_path",
     "link_observation_files",
+    "list_experience_documents",
+    "list_memory_documents",
     "list_observation_documents",
+    "read_experience_file",
+    "read_memory_file",
     "read_observation_file",
     "read_observation_id_from_path",
     "record_observation_file",
+    "refresh_all_experience_catalogs",
+    "refresh_experience_catalog",
+    "search_memory_files",
     "search_observation_files",
+    "store_paper_experiences",
 ]

@@ -73,6 +73,18 @@ def _render_launcher_error(exc: LauncherError) -> None:
     )
 
 
+def _refresh_paper_experience_catalogs() -> None:
+    """Backfill the existing WebUI's project-profile experience views."""
+    try:
+        from ..memory.experiences import refresh_all_experience_catalogs
+        from ..paths import MEMORIES_DIR
+
+        refresh_all_experience_catalogs(memory_dir=MEMORIES_DIR)
+    except Exception:
+        # A derived catalog must never prevent the research UI from starting.
+        return
+
+
 def run_webui(config: Any, workspace_dir: str | None = None) -> None:
     """Start the deploy-style backend + the WebUI front-end, then block.
 
@@ -96,6 +108,7 @@ def run_webui(config: Any, workspace_dir: str | None = None) -> None:
     )
 
     apply_config_to_env(config)
+    _refresh_paper_experience_catalogs()
 
     cfg = build_launcher_config(config, workspace_dir)
 

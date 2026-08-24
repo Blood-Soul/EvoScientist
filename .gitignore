@@ -36,6 +36,10 @@ bridge/package-lock.json
 .langgraph_api/
 workspace/
 skills/
+!skills/
+skills/*
+!skills/paper-navigator/
+!skills/paper-navigator/**
 !EvoScientist/skills/
 memory/
 !EvoScientist/memory/

@@ -650,15 +650,32 @@ def _build_base_kwargs(
     chat_model=None,
 ):
     """Build agent kwargs *without* MCP (fast, no subprocess spawning)."""
-    from .tools import make_skill_manager_tool, tavily_search, think_tool
+    from .memory.project import resolve_project_id
+    from .tools import (
+        create_paper_experience_queue_tool,
+        make_skill_manager_tool,
+        tavily_search,
+        think_tool,
+    )
     from .utils import load_subagents
 
     cfg = cfg if cfg is not None else _ensure_config()
     work_dir = work_dir if work_dir is not None else workspace.root
-    tool_registry = {"think_tool": think_tool}
+    paper_queue_tool = create_paper_experience_queue_tool(
+        memory_dir=str(_paths_mod.MEMORIES_DIR),
+        project_id=resolve_project_id(workspace.root),
+    )
+    tool_registry = {
+        "think_tool": think_tool,
+        paper_queue_tool.name: paper_queue_tool,
+    }
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
-    base_tools = [think_tool, make_skill_manager_tool(workspace, work_dir=work_dir)]
+    base_tools = [
+        think_tool,
+        make_skill_manager_tool(workspace, work_dir=work_dir),
+        paper_queue_tool,
+    ]
 
     subs = load_subagents(
         SUBAGENTS_CONFIG,
@@ -719,7 +736,13 @@ def load_mcp_and_build_kwargs(
         chat_model: Explicit chat model to bind instead of
             ``_ensure_chat_model()`` (which would write module globals).
     """
-    from .tools import make_skill_manager_tool, tavily_search, think_tool
+    from .memory.project import resolve_project_id
+    from .tools import (
+        create_paper_experience_queue_tool,
+        make_skill_manager_tool,
+        tavily_search,
+        think_tool,
+    )
     from .utils import load_subagents
 
     cfg = cfg if cfg is not None else _ensure_config()
@@ -738,10 +761,21 @@ def load_mcp_and_build_kwargs(
             chat_model=chat_model,
         )
 
-    tool_registry = {"think_tool": think_tool}
+    paper_queue_tool = create_paper_experience_queue_tool(
+        memory_dir=str(_paths_mod.MEMORIES_DIR),
+        project_id=resolve_project_id(workspace.root),
+    )
+    tool_registry = {
+        "think_tool": think_tool,
+        paper_queue_tool.name: paper_queue_tool,
+    }
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
-    base_tools = [think_tool, make_skill_manager_tool(workspace, work_dir=work_dir)]
+    base_tools = [
+        think_tool,
+        make_skill_manager_tool(workspace, work_dir=work_dir),
+        paper_queue_tool,
+    ]
 
     # Fresh tool registry — start from base tools + MCP tools
     registry = dict(tool_registry)

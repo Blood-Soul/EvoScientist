@@ -32,6 +32,7 @@ from EvoScientist.memory.agents import (
     build_autoskills_graph,
     build_memory_worker_graph,
     build_observation_linker_graph,
+    build_paper_experience_worker_graph,
 )
 from EvoScientist.memory.types import MemorySourceType
 from EvoScientist.paths import process_session_dirs
@@ -84,6 +85,10 @@ evomemory_turn_worker = folder_checked(
 evomemory_observation_linker = folder_checked(
     build_observation_linker_graph(workspace=_workspace),
     graph_id="evomemory-observation-linker",
+)
+evomemory_paper_experience_worker = folder_checked(
+    build_paper_experience_worker_graph(workspace=_workspace),
+    graph_id="evomemory-paper-experience-worker",
 )
 evomemory_autoskills = folder_checked(
     build_autoskills_graph(workspace=_workspace), graph_id="evomemory-autoskills"
