@@ -88,6 +88,12 @@ def _observation_linker(dirs: SessionDirs) -> Any:
     return build_observation_linker_graph(workspace=dirs.workspace)
 
 
+def _paper_experience_worker(dirs: SessionDirs) -> Any:
+    from ..memory.agents import build_paper_experience_worker_graph
+
+    return build_paper_experience_worker_graph(workspace=dirs.workspace)
+
+
 def _autoskills(dirs: SessionDirs) -> Any:
     from ..memory.agents import build_autoskills_graph
 
@@ -112,6 +118,7 @@ BUILDERS: dict[str, Callable[[SessionDirs], Any]] = {
     "evomemory-subagent-worker": _memory_worker("SUBAGENT"),
     "evomemory-turn-worker": _memory_worker("TURN"),
     "evomemory-observation-linker": _observation_linker,
+    "evomemory-paper-experience-worker": _paper_experience_worker,
     "evomemory-autoskills": _autoskills,
     "proactive": _proactive,
 }

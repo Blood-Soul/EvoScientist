@@ -37,6 +37,7 @@ expert_container_async = served_graph("expert-container-async")
 evomemory_subagent_worker = served_graph("evomemory-subagent-worker")
 evomemory_turn_worker = served_graph("evomemory-turn-worker")
 evomemory_observation_linker = served_graph("evomemory-observation-linker")
+evomemory_paper_experience_worker = served_graph("evomemory-paper-experience-worker")
 evomemory_autoskills = served_graph("evomemory-autoskills")
 # Proactive pushes (#263): one tick of the workspace's proactive cron.
 proactive = served_graph("proactive")

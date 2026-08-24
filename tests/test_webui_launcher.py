@@ -138,6 +138,7 @@ def _run_webui_once(
     captured: dict[str, Any] = {"printed": [], "node_env": {}, "node_args": []}
 
     monkeypatch.setattr(config_mod, "apply_config_to_env", lambda _cfg: None)
+    monkeypatch.setattr(webui_mod, "_refresh_paper_experience_catalogs", lambda: None)
     console = (
         _InterruptingConsole(captured["printed"], interrupt_on)
         if interrupt_on
