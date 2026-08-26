@@ -688,6 +688,81 @@ def validate_tavily_key(api_key: str) -> tuple[bool, str]:
         return False, f"Error: {e}"
 
 
+def validate_s2_key(api_key: str) -> tuple[bool, str]:
+    """Validate a Semantic Scholar API key against the public search endpoint.
+
+    Semantic Scholar serves ``/graph/v1/paper/search`` unauthenticated too
+    (just with lower rate limits), so a bad key doesn't 401 the same way most
+    providers do — S2 instead 403s the request. Anything else (200, or a
+    transient 429/5xx) means the key itself isn't the problem.
+
+    Args:
+        api_key: The API key to validate.
+
+    Returns:
+        Tuple of (is_valid, message).
+    """
+    if not api_key:
+        return True, "Skipped (no key provided)"
+
+    try:
+        import httpx
+
+        resp = httpx.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={"query": "test", "limit": 1},
+            headers={"x-api-key": api_key},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return True, "Valid"
+        if resp.status_code == 403:
+            return False, "Invalid API key"
+        if resp.status_code == 429:
+            return False, "Validation inconclusive — rate-limited, try again later"
+        return False, f"Validation inconclusive (HTTP {resp.status_code})"
+    except Exception as e:
+        classified = _classify_validation_error(e)
+        if classified is not None:
+            return classified
+        return False, f"Error: {e}"
+
+
+def validate_deepxiv_token(api_key: str) -> tuple[bool, str]:
+    """Validate a DeepXiv API token by running a minimal search.
+
+    The ``deepxiv-sdk`` package is an optional dependency of the
+    paper-navigator skill, not of EvoScientist's core install, so it may not
+    be present in the environment running the onboarding wizard. Missing the
+    package just skips the live probe rather than failing the whole step —
+    the token can still be saved and gets exercised later, when the skill
+    actually runs.
+
+    Args:
+        api_key: The token to validate.
+
+    Returns:
+        Tuple of (is_valid, message).
+    """
+    if not api_key:
+        return True, "Skipped (no key provided)"
+
+    try:
+        from deepxiv_sdk import Reader
+    except ImportError:
+        return True, "Skipped (deepxiv-sdk not installed; will be checked on first use)"
+
+    try:
+        reader = Reader(token=api_key, timeout=10)
+        reader.search(query="test", size=1)
+        return True, "Valid"
+    except Exception as e:
+        classified = _classify_validation_error(e)
+        if classified is not None:
+            return classified
+        return False, f"Error: {e}"
+
+
 # =============================================================================
 # Display Helpers
 # =============================================================================

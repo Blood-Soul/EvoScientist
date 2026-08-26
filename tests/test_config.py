@@ -59,6 +59,8 @@ def temp_config_dir(tmp_path, monkeypatch):
         "OPENAI_API_KEY",
         "ATLASCLOUD_API_KEY",
         "TAVILY_API_KEY",
+        "S2_API_KEY",
+        "DEEPXIV_API_TOKEN",
         "EVOSCIENTIST_DEFAULT_MODE",
         "EVOSCIENTIST_WORKSPACE_DIR",
         "EVOSCIENTIST_UI_BACKEND",
@@ -91,6 +93,8 @@ def clean_env(monkeypatch):
         "OPENAI_API_KEY",
         "ATLASCLOUD_API_KEY",
         "TAVILY_API_KEY",
+        "S2_API_KEY",
+        "DEEPXIV_API_TOKEN",
         "EVOSCIENTIST_DEFAULT_MODE",
         "EVOSCIENTIST_WORKSPACE_DIR",
         "EVOSCIENTIST_UI_BACKEND",
@@ -127,6 +131,8 @@ class TestEvoScientistConfig:
         assert config.anthropic_api_key == ""
         assert config.openai_api_key == ""
         assert config.tavily_api_key == ""
+        assert config.s2_api_key == ""
+        assert config.deepxiv_api_token == ""
         assert config.provider == "anthropic"
         assert config.model == "claude-sonnet-4-6"
         assert config.default_mode == "daemon"
@@ -792,6 +798,8 @@ class TestApplyConfigToEnv:
             openai_api_key="config-oai-key",
             atlascloud_api_key="config-atlas-key",
             tavily_api_key="config-tav-key",
+            s2_api_key="config-s2-key",
+            deepxiv_api_token="config-deepxiv-token",
         )
 
         apply_config_to_env(config)
@@ -800,6 +808,8 @@ class TestApplyConfigToEnv:
         assert os.environ.get("OPENAI_API_KEY") == "config-oai-key"
         assert os.environ.get("ATLASCLOUD_API_KEY") == "config-atlas-key"
         assert os.environ.get("TAVILY_API_KEY") == "config-tav-key"
+        assert os.environ.get("S2_API_KEY") == "config-s2-key"
+        assert os.environ.get("DEEPXIV_API_TOKEN") == "config-deepxiv-token"
 
     def test_does_not_override_existing_env(self, monkeypatch):
         """Test that existing env vars are not overridden."""
@@ -818,6 +828,8 @@ class TestApplyConfigToEnv:
         assert os.environ.get("ANTHROPIC_API_KEY") is None
         assert os.environ.get("OPENAI_API_KEY") is None
         assert os.environ.get("ATLASCLOUD_API_KEY") is None
+        assert os.environ.get("S2_API_KEY") is None
+        assert os.environ.get("DEEPXIV_API_TOKEN") is None
         assert os.environ.get("EVOSCIENTIST_OPENROUTER_ANTHROPIC_PROMPT_CACHE") is None
 
     def test_openrouter_anthropic_prompt_cache_opt_out_applied(

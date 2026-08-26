@@ -403,6 +403,10 @@ export NVIDIA_API_KEY="nvapi-..."   # NIM    — build.nvidia.com
 
 # 网络搜索（可选）
 export TAVILY_API_KEY="tvly-..."    # app.tavily.com
+
+# 论文全文获取，供 paper-navigator 技能使用（可选）
+export S2_API_KEY="..."             # Semantic Scholar — semanticscholar.org/product/api
+export DEEPXIV_API_TOKEN="..."      # DeepXiv（arXiv 兜底）— 运行 `deepxiv token` 获取
 ```
 
 也可以使用 `EvoSci config set` 将密钥持久化到 `~/.config/evoscientist/config.yaml`。

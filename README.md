@@ -394,6 +394,10 @@ export NVIDIA_API_KEY="nvapi-..."   # NIM    — build.nvidia.com
 
 # Web search (optional)
 export TAVILY_API_KEY="tvly-..."    # app.tavily.com
+
+# Paper full-text fetch, used by the paper-navigator skill (optional)
+export S2_API_KEY="..."             # Semantic Scholar — semanticscholar.org/product/api
+export DEEPXIV_API_TOKEN="..."      # DeepXiv (arXiv fallback) — `deepxiv token`
 ```
 
 Or use `EvoSci config set` to persist keys in `~/.config/evoscientist/config.yaml`.

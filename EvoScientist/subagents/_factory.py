@@ -41,6 +41,7 @@ def build_async_subagent_graph(name: str) -> Any:
     # at package import.
     from deepagents import create_deep_agent
 
+    from EvoScientist import paths as _paths
     from EvoScientist.config import apply_config_to_env, get_effective_config
     from EvoScientist.EvoScientist import (
         SUBAGENTS_CONFIG,
@@ -51,7 +52,13 @@ def build_async_subagent_graph(name: str) -> Any:
         _get_default_middleware,
         _inject_subagent_middleware,
     )
-    from EvoScientist.tools import skill_manager, tavily_search, think_tool
+    from EvoScientist.memory.project import resolve_project_id
+    from EvoScientist.tools import (
+        create_paper_experience_queue_tool,
+        skill_manager,
+        tavily_search,
+        think_tool,
+    )
     from EvoScientist.utils import load_subagents, resolve_subagent_tools
 
     # Surface API keys as env vars so downstream SDKs (openai, anthropic, …)
@@ -60,7 +67,18 @@ def build_async_subagent_graph(name: str) -> Any:
     apply_config_to_env(cfg)
 
     # Mirror the tool registry constructed in EvoScientist._build_base_kwargs.
-    tool_registry = {"think_tool": think_tool, "skill_manager": skill_manager}
+    # Keep async sub-agent tool resolution feature-parity with the in-process
+    # main-agent factory. In particular, paper-navigator requires this tool to
+    # persist its final paper set; merely mounting the skill does not expose it.
+    paper_queue_tool = create_paper_experience_queue_tool(
+        memory_dir=str(_paths.MEMORIES_DIR),
+        project_id=resolve_project_id(_paths.WORKSPACE_ROOT),
+    )
+    tool_registry = {
+        "think_tool": think_tool,
+        "skill_manager": skill_manager,
+        paper_queue_tool.name: paper_queue_tool,
+    }
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
 

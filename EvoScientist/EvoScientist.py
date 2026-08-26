@@ -667,6 +667,7 @@ def _build_base_kwargs(
     """Build agent kwargs *without* MCP (fast, no subprocess spawning)."""
     from .memory.project import resolve_project_id
     from .tools import (
+        create_extract_paper_experiences_tool,
         create_paper_experience_queue_tool,
         skill_manager,
         tavily_search,
@@ -679,13 +680,18 @@ def _build_base_kwargs(
         memory_dir=str(_paths_mod.MEMORIES_DIR),
         project_id=resolve_project_id(workspace_dir or _paths_mod.WORKSPACE_ROOT),
     )
+    paper_extract_tool = create_extract_paper_experiences_tool(
+        memory_dir=str(_paths_mod.MEMORIES_DIR),
+        project_id=resolve_project_id(workspace_dir or _paths_mod.WORKSPACE_ROOT),
+    )
     tool_registry = {
         "think_tool": think_tool,
         paper_queue_tool.name: paper_queue_tool,
+        paper_extract_tool.name: paper_extract_tool,
     }
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
-    base_tools = [think_tool, skill_manager, paper_queue_tool]
+    base_tools = [think_tool, skill_manager, paper_queue_tool, paper_extract_tool]
 
     subs = load_subagents(
         SUBAGENTS_CONFIG,
@@ -742,6 +748,7 @@ def load_mcp_and_build_kwargs(
     """
     from .memory.project import resolve_project_id
     from .tools import (
+        create_extract_paper_experiences_tool,
         create_paper_experience_queue_tool,
         skill_manager,
         tavily_search,
@@ -767,13 +774,18 @@ def load_mcp_and_build_kwargs(
         memory_dir=str(_paths_mod.MEMORIES_DIR),
         project_id=resolve_project_id(workspace_dir or _paths_mod.WORKSPACE_ROOT),
     )
+    paper_extract_tool = create_extract_paper_experiences_tool(
+        memory_dir=str(_paths_mod.MEMORIES_DIR),
+        project_id=resolve_project_id(workspace_dir or _paths_mod.WORKSPACE_ROOT),
+    )
     tool_registry = {
         "think_tool": think_tool,
         paper_queue_tool.name: paper_queue_tool,
+        paper_extract_tool.name: paper_extract_tool,
     }
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
-    base_tools = [think_tool, skill_manager, paper_queue_tool]
+    base_tools = [think_tool, skill_manager, paper_queue_tool, paper_extract_tool]
 
     # Fresh tool registry — start from base tools + MCP tools
     registry = dict(tool_registry)
