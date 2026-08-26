@@ -22,12 +22,18 @@ from EvoScientist.memory.experiences import (
     search_memory_files,
     store_paper_experiences,
 )
+from EvoScientist.memory.experiences.extraction import (
+    ExperienceOutputError,
+    _strip_references_section,
+    parse_experience_json,
+)
 from EvoScientist.memory.observations import (
     MemoryScope,
     MemorySourceType,
     MemoryType,
     record_observation_file,
 )
+from EvoScientist.tools import paper_experience_active
 from EvoScientist.tools.paper_experience_queue import (
     create_paper_experience_queue_tool,
 )
@@ -35,6 +41,89 @@ from EvoScientist.tools.paper_experience_queue import (
 
 def _payload(paper_id: str, text: str) -> dict[str, object]:
     return {"paper_id": paper_id, "experiences": [{"narrative": text}]}
+
+
+def _new_payload(paper_id: str, text: str, *, level: str) -> dict[str, object]:
+    if level == "l1":
+        item = {
+            "id": f"l1_{paper_id}_01",
+            "layer": "L1",
+            "domain": "agent_learning",
+            "domain_arxiv": "cs.AI",
+            "task": "test task",
+            "statement": text,
+            "applicable_when": ["test setting"],
+            "not_applicable_when": ["different setting"],
+            "scope": "test scope",
+            "action": "test action",
+            "effect": "test effect",
+            "utility": None,
+            "confidence": 0.7,
+            "practice_trace": [{"action": "test action", "feedback": "test feedback"}],
+            "evidence": [
+                {
+                    "source_id": paper_id,
+                    "section": "experiment",
+                    "quote": "test evidence",
+                }
+            ],
+        }
+    else:
+        item = {
+            "id": f"l2_{paper_id}_01",
+            "layer": "L2",
+            "domain": "agent_learning",
+            "domain_arxiv": "cs.AI",
+            "task": "test task",
+            "statement": text,
+            "claim_type": "conditional",
+            "applicable_when": ["test setting"],
+            "not_applicable_when": ["different setting"],
+            "scope": "test scope",
+            "action": "test action",
+            "effect": "test effect",
+            "utility": None,
+            "confidence": 0.7,
+            "rationale": "test rationale",
+            "rationale_depth": "shallow",
+            "evidence": [
+                {
+                    "source_id": paper_id,
+                    "section": "experiment",
+                    "quote": "test evidence",
+                }
+            ],
+        }
+    return {"paper_id": paper_id, "experiences": [item]}
+
+
+def _llm_payload(paper_id: str, text: str, *, level: str) -> dict[str, object]:
+    item = {
+        "domain": "agent_learning",
+        "task": "test task",
+        "statement": text,
+        "applicable_when": ["test setting"],
+        "not_applicable_when": ["different setting"],
+        "scope": "test scope",
+        "action": "test action",
+        "effect": "test effect",
+        "evidence": [{"section": "experiment", "quote": "test evidence"}],
+    }
+    if level == "l1":
+        item["practice_trace"] = [
+            {"action": "step 1", "feedback": "feedback 1"},
+            {"action": "step 2", "feedback": "feedback 2"},
+            {"action": "step 3", "feedback": "feedback 3"},
+        ]
+    else:
+        item.update(
+            {
+                "claim_type": "conditional",
+                "rationale": "test rationale",
+                "rationale_depth": "shallow",
+            }
+        )
+    return {"experiences": [item]}
 
 
 def _store(
@@ -132,6 +221,76 @@ def test_experience_catalog_is_webui_visible_and_derived(tmp_path: Path) -> None
         part.strip("`:") for part in content.split() if part.startswith("`E-")
     }
     assert {document.observation_id for document in documents} <= catalog_ids
+
+
+def test_experience_catalog_uses_new_statement_field(tmp_path: Path) -> None:
+    store_paper_experiences(
+        memory_dir=tmp_path,
+        project_id="P-alpha",
+        paper_id="paper-new",
+        url="https://example.test/paper-new",
+        title="New Schema Paper",
+        paper_text="full paper",
+        prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+        payloads={
+            "l1": _new_payload("paper-new", "L1 statement summary", level="l1"),
+            "l2": _new_payload("paper-new", "L2 statement summary", level="l2"),
+        },
+    )
+    content = experience_catalog_path(
+        memory_dir=tmp_path, project_id="P-alpha"
+    ).read_text(encoding="utf-8")
+    assert "L1 statement summary" in content
+    assert "L2 statement summary" in content
+
+
+def test_parser_rejects_malformed_current_schema() -> None:
+    payload = _llm_payload("paper-new", "statement", level="l1")
+    del payload["experiences"][0]["evidence"]
+    with pytest.raises(ExperienceOutputError, match="keys mismatch"):
+        parse_experience_json(json.dumps(payload), level="l1", paper_id="paper-new")
+
+
+def test_parser_injects_runtime_fields_into_current_schema() -> None:
+    parsed = parse_experience_json(
+        json.dumps(_llm_payload("paper-new", "statement", level="l1")),
+        level="l1",
+        paper_id="paper-new",
+        domain_arxiv="cs.AI",
+    )
+    item = parsed["experiences"][0]
+    assert item["id"] == "l1_paper_new_01"
+    assert item["layer"] == "L1"
+    assert item["domain_arxiv"] == "cs.AI"
+    assert item["utility"] is None
+    assert 0 <= item["confidence"] <= 1
+    assert item["evidence"][0]["source_id"] == "paper-new"
+
+
+def test_strip_references_section_drops_heading_onward() -> None:
+    body = "Intro text. " * 60 + "\n\n## Method\n\nMethod text. " * 20
+    text = body + "\n\n## References\n\n[1] Some Author. Some Title. 2020."
+    stripped = _strip_references_section(text)
+    assert stripped == body.rstrip()
+    assert "References" not in stripped
+    assert "[1] Some Author" not in stripped
+
+
+def test_strip_references_section_matches_numbered_bibliography_heading() -> None:
+    body = "Intro text. " * 60
+    text = body + "\n\n7 Bibliography\n\n[1] Some Author. Some Title. 2020."
+    stripped = _strip_references_section(text)
+    assert stripped == body.rstrip()
+
+
+def test_strip_references_section_ignores_early_false_positive() -> None:
+    text = "# References for X\n\nActual body text follows here without a real section."
+    assert _strip_references_section(text) == text
+
+
+def test_strip_references_section_no_match_returns_original() -> None:
+    text = "Body text with no references section at all. " * 20
+    assert _strip_references_section(text) == text
 
 
 def test_experience_catalog_rebuilds_without_duplicate_papers(tmp_path: Path) -> None:
@@ -258,6 +417,99 @@ def test_enqueue_tool_batches_and_launches_once(
 
 
 @pytest.mark.asyncio
+async def test_active_extraction_returns_and_stores_experiences(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def run_sync(function, /, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    async def download(_url: str) -> str:
+        return "full paper text"
+
+    async def extract(**_kwargs):
+        return {
+            "l1": _payload("paper-1", "active l1 result"),
+            "l2": _payload("paper-1", "active l2 result"),
+        }
+
+    monkeypatch.setattr(paper_experience_active, "download_paper_text", download)
+    monkeypatch.setattr(paper_experience_active.asyncio, "to_thread", run_sync)
+    monkeypatch.setattr(
+        paper_experience_active,
+        "load_experience_prompts",
+        lambda: {"l1": "l1 prompt", "l2": "l2 prompt"},
+    )
+    monkeypatch.setattr(paper_experience_active, "run_experience_extraction", extract)
+    tool = paper_experience_active.create_extract_paper_experiences_tool(
+        memory_dir=tmp_path, project_id="P-alpha"
+    )
+
+    result = json.loads(
+        await tool.arun(
+            {
+                "papers": [
+                    {
+                        "url": "https://example.test/paper",
+                        "paper_id": "paper-1",
+                        "title": "Paper One",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert result["failed"] == []
+    assert result["completed"][0]["cached"] is False
+    documents = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+    assert {document.experience_level for document in documents} == {"l1", "l2"}
+
+
+@pytest.mark.asyncio
+async def test_active_extraction_reuses_project_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _store(tmp_path, project_id="P-alpha", marker="cached experience")
+    downloads = 0
+
+    async def run_sync(function, /, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    async def download(_url: str) -> str:
+        nonlocal downloads
+        downloads += 1
+        return "should not be downloaded"
+
+    monkeypatch.setattr(paper_experience_active, "download_paper_text", download)
+    monkeypatch.setattr(paper_experience_active.asyncio, "to_thread", run_sync)
+    monkeypatch.setattr(
+        paper_experience_active,
+        "load_experience_prompts",
+        lambda: {"l1": "l1 prompt", "l2": "l2 prompt"},
+    )
+    tool = paper_experience_active.create_extract_paper_experiences_tool(
+        memory_dir=tmp_path, project_id="P-alpha"
+    )
+
+    result = json.loads(
+        await tool.arun(
+            {
+                "papers": [
+                    {
+                        "url": "https://arxiv.org/abs/2401.01234",
+                        "paper_id": "2401.01234",
+                        "title": "Catalyst Study",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert downloads == 0
+    assert result["completed"][0]["cached"] is True
+    assert "cached experience" in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
 async def test_worker_graph_drains_empty_project(tmp_path: Path) -> None:
     graph = paper_experience_worker.build_paper_experience_worker_graph(
         memory_dir=tmp_path
@@ -295,6 +547,31 @@ async def test_l1_and_l2_extraction_runs_concurrently() -> None:
     assert started == 2
     assert result["l1"]["experiences"][0]["narrative"] == "l1 result"
     assert result["l2"]["experiences"][0]["narrative"] == "l2 result"
+
+
+@pytest.mark.asyncio
+async def test_current_prompt_outputs_are_normalized_by_runtime() -> None:
+    class Model:
+        async def ainvoke(self, messages):
+            level = "l1" if messages[0].content == "l1 prompt" else "l2"
+            return SimpleNamespace(
+                content=json.dumps(
+                    _llm_payload("paper-1", f"{level} result", level=level)
+                )
+            )
+
+    result = await run_experience_extraction(
+        paper_id="paper-1",
+        paper_text="paper text",
+        prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+        model=Model(),
+        domain_arxiv="cs.AI",
+    )
+
+    assert result["l1"]["experiences"][0]["layer"] == "L1"
+    assert result["l2"]["experiences"][0]["layer"] == "L2"
+    assert result["l2"]["experiences"][0]["claim_type"] == "conditional"
+    assert result["l1"]["experiences"][0]["evidence"][0]["source_id"] == "paper-1"
 
 
 @pytest.mark.asyncio

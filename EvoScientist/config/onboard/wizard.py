@@ -21,6 +21,7 @@ from .steps import (
     _step_anthropic_auth_mode,
     _step_auxiliary_enable,
     _step_base_url,
+    _step_deepxiv_token,
     _step_langgraph_dev_port,
     _step_mcp_servers,
     _step_minimax_region,
@@ -30,6 +31,7 @@ from .steps import (
     _step_provider,
     _step_provider_api_key,
     _step_reasoning_effort,
+    _step_s2_key,
     _step_skills,
     _step_tavily_key,
     _step_thinking,
@@ -356,6 +358,7 @@ _SECTION_LABELS: list[tuple[str, str]] = [
     ("model", "Model + reasoning effort"),
     ("auxiliary_model", "Auxiliary model (optional)"),
     ("tavily", "Tavily search key"),
+    ("paper_apis", "Semantic Scholar / DeepXiv keys (optional)"),
     ("workspace", "Workspace mode"),
     ("thinking", "Thinking panel"),
     ("skills", "Skills"),
@@ -377,6 +380,8 @@ _FLAG_TO_SECTIONS: dict[str, frozenset[str]] = {
     "api_key": frozenset({"provider", "model"}),
     "model": frozenset({"model"}),
     "tavily_key": frozenset({"tavily"}),
+    "s2_key": frozenset({"paper_apis"}),
+    "deepxiv_token": frozenset({"paper_apis"}),
     "workspace_mode": frozenset({"workspace"}),
     "show_thinking": frozenset({"thinking"}),
 }
@@ -854,6 +859,77 @@ def run_onboard(
                         config.tavily_api_key = new_tavily_key
                     elif not config.tavily_api_key:
                         _print_step_skipped("Tavily Key", "not set")
+                _autosave(config)
+
+            if "paper_apis" in sections_to_run:
+                preset_s2 = _preset("s2_key")
+                if preset_s2 is not None:
+                    if not skip_validation:
+                        from .validators import validate_s2_key
+
+                        console.print(
+                            "  [dim]Validating preset Semantic Scholar key...[/dim]",
+                            end="",
+                        )
+                        valid, msg = validate_s2_key(preset_s2)
+                        if valid:
+                            console.print(f"\r  [green]✓ {msg}[/green]      ")
+                        else:
+                            console.print(f"\r  [red]✗ {msg}[/red]      ")
+                            raise RuntimeError(
+                                f"--s2-key rejected by validator: {msg}. "
+                                "Pass --skip-validation to override."
+                            )
+                    config.s2_api_key = preset_s2
+                    console.print(
+                        f"  [green]✓ Semantic Scholar key: ***{preset_s2[-4:]}[/green]"
+                        "   [dim](--s2-key)[/dim]"
+                    )
+                elif strict:
+                    if config.s2_api_key:
+                        _print_step_skipped("Semantic Scholar Key", "kept current")
+                    else:
+                        _print_step_skipped("Semantic Scholar Key", "not set")
+                else:
+                    new_s2_key = _step_s2_key(config, skip_validation)
+                    if new_s2_key is not None:
+                        config.s2_api_key = new_s2_key
+                    elif not config.s2_api_key:
+                        _print_step_skipped("Semantic Scholar Key", "not set")
+
+                preset_deepxiv = _preset("deepxiv_token")
+                if preset_deepxiv is not None:
+                    if not skip_validation:
+                        from .validators import validate_deepxiv_token
+
+                        console.print(
+                            "  [dim]Validating preset DeepXiv token...[/dim]", end=""
+                        )
+                        valid, msg = validate_deepxiv_token(preset_deepxiv)
+                        if valid:
+                            console.print(f"\r  [green]✓ {msg}[/green]      ")
+                        else:
+                            console.print(f"\r  [red]✗ {msg}[/red]      ")
+                            raise RuntimeError(
+                                f"--deepxiv-token rejected by validator: {msg}. "
+                                "Pass --skip-validation to override."
+                            )
+                    config.deepxiv_api_token = preset_deepxiv
+                    console.print(
+                        f"  [green]✓ DeepXiv token: ***{preset_deepxiv[-4:]}[/green]"
+                        "   [dim](--deepxiv-token)[/dim]"
+                    )
+                elif strict:
+                    if config.deepxiv_api_token:
+                        _print_step_skipped("DeepXiv Token", "kept current")
+                    else:
+                        _print_step_skipped("DeepXiv Token", "not set")
+                else:
+                    new_deepxiv_token = _step_deepxiv_token(config, skip_validation)
+                    if new_deepxiv_token is not None:
+                        config.deepxiv_api_token = new_deepxiv_token
+                    elif not config.deepxiv_api_token:
+                        _print_step_skipped("DeepXiv Token", "not set")
                 _autosave(config)
 
             if "workspace" in sections_to_run:

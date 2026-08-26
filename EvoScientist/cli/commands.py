@@ -126,6 +126,12 @@ def onboard(
     tavily_key: str | None = typer.Option(
         None, "--tavily-key", help="Pre-set Tavily API key"
     ),
+    s2_key: str | None = typer.Option(
+        None, "--s2-key", help="Pre-set Semantic Scholar API key (optional)"
+    ),
+    deepxiv_token: str | None = typer.Option(
+        None, "--deepxiv-token", help="Pre-set DeepXiv API token (optional)"
+    ),
     workspace_mode: str | None = typer.Option(
         None,
         "--workspace-mode",
@@ -216,6 +222,10 @@ def onboard(
         answers["api_key"] = api_key
     if tavily_key is not None:
         answers["tavily_key"] = tavily_key
+    if s2_key is not None:
+        answers["s2_key"] = s2_key
+    if deepxiv_token is not None:
+        answers["deepxiv_token"] = deepxiv_token
     if workspace_mode is not None:
         answers["workspace_mode"] = workspace_mode
     if show_thinking is not None:

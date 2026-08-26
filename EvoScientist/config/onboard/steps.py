@@ -39,7 +39,7 @@ from .style import (
     _print_step_skipped,
     console,
 )
-from .validators import validate_tavily_key
+from .validators import validate_deepxiv_token, validate_s2_key, validate_tavily_key
 
 
 def _step_ui_backend(config: EvoScientistConfig) -> str:
@@ -909,6 +909,65 @@ def _step_tavily_key(
         validate_tavily_key,
         skip_validation,
         placeholder=FormattedText([("fg:#858585", " (recommended for web search)")]),
+    )
+
+
+def _step_s2_key(
+    config: EvoScientistConfig,
+    skip_validation: bool = False,
+) -> str | None:
+    """Step: Enter Semantic Scholar API key for paper-navigator's full-text
+    fetch (higher rate limits, extra endpoints — optional).
+
+    Args:
+        config: Current configuration.
+        skip_validation: Skip API key validation.
+
+    Returns:
+        New API key or None if unchanged.
+    """
+    current = config.s2_api_key or os.environ.get("S2_API_KEY", "")
+
+    hint = f"Current: ***{current[-4:]}" if current else "Not set"
+    prompt_text = f"Semantic Scholar API key for paper lookup ({hint}, Enter to keep):"
+
+    return _prompt_and_validate_api_key(
+        prompt_text,
+        current,
+        validate_s2_key,
+        skip_validation,
+        placeholder=FormattedText([("fg:#858585", " (optional, higher rate limits)")]),
+    )
+
+
+def _step_deepxiv_token(
+    config: EvoScientistConfig,
+    skip_validation: bool = False,
+) -> str | None:
+    """Step: Enter DeepXiv API token, used as an arXiv fallback by
+    paper-navigator when Semantic Scholar is unavailable or rate-limited
+    (optional).
+
+    Args:
+        config: Current configuration.
+        skip_validation: Skip API key validation.
+
+    Returns:
+        New token or None if unchanged.
+    """
+    current = config.deepxiv_api_token or os.environ.get("DEEPXIV_API_TOKEN", "")
+
+    hint = f"Current: ***{current[-4:]}" if current else "Not set"
+    prompt_text = f"DeepXiv API token for arXiv fallback ({hint}, Enter to keep):"
+
+    return _prompt_and_validate_api_key(
+        prompt_text,
+        current,
+        validate_deepxiv_token,
+        skip_validation,
+        placeholder=FormattedText(
+            [("fg:#858585", " (optional, arXiv search fallback)")]
+        ),
     )
 
 

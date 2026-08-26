@@ -25,6 +25,7 @@ class PaperExperienceTask(BaseModel):
     paper_id: str = ""
     url: str = Field(min_length=1)
     title: str = ""
+    domain_arxiv: str | None = None
     enqueued_at: str
     status: QueueStatus = "pending"
     attempts: int = 0
@@ -70,6 +71,7 @@ def enqueue_paper(
     url: str,
     paper_id: str = "",
     title: str = "",
+    domain_arxiv: str | None = None,
 ) -> tuple[PaperExperienceTask, bool]:
     """Enqueue once across every queue state."""
     task_id = _task_id(project_id, paper_id, url)
@@ -86,6 +88,7 @@ def enqueue_paper(
         failed.url = url.strip()
         failed.paper_id = paper_id.strip()
         failed.title = title.strip()
+        failed.domain_arxiv = domain_arxiv
         failed.updated_at = _now()
         failed.error = None
         pending_path = _status_dir(memory_dir, project_id, "pending") / failed_path.name
@@ -99,6 +102,7 @@ def enqueue_paper(
         paper_id=paper_id.strip(),
         url=url.strip(),
         title=title.strip(),
+        domain_arxiv=domain_arxiv,
         enqueued_at=_now(),
     )
     _write_task(
