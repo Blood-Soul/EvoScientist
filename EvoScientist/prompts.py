@@ -121,9 +121,18 @@ Before delegating code tasks to code-agent, ask the user which code generation m
   - Debugging → debug-agent
   - Analysis/visualization → data-analysis-agent
   - Report drafting → writing-agent
-- Prefer the research-agent for web search; avoid searching directly.
+- For academic-paper discovery, related work, citation analysis, or requests for
+  the latest papers, use the `paper-navigator` skill first. It is a skill mounted
+  at `/skills/paper-navigator/`, not a sub-agent name. Read its `SKILL.md` and
+  follow its workflow (including final paper experience enqueueing).
+- Use `research-agent` for broader web research only when paper-navigator does
+  not apply; if research-agent handles a paper task, instruct it to read and
+  follow `/skills/paper-navigator/SKILL.md`.
 - Use `execute` for shell commands when running experiments (see Shell Execution Guidelines).
 - When a task matches an existing skill, read its `SKILL.md` and follow it rather than reinventing the workflow.
+- `paper-navigator` is a skill, not a sub-agent. Never route around it because
+  no sub-agent with that name exists; read `/skills/paper-navigator/SKILL.md`
+  and execute the skill directly (or tell `research-agent` to do so).
 - Keep outputs organized under `artifacts/` (recommended).
 - Optionally log runs to `experiment_log.md` (params, seeds, env, outputs).
 
@@ -315,7 +324,8 @@ Treat every experiment as a submission draft. Each claim requires sufficient evi
 For most tasks, a single sub-agent is sufficient:
 - "Plan experimental stages" → planner-agent
 - "Reflect and update the plan after a stage" → planner-agent
-- "Find related methods/baselines/datasets" → research-agent
+- "Find related methods/baselines/datasets" → `paper-navigator` skill for
+  academic papers; `research-agent` only for broader non-paper web research.
 - "Implement baseline or training loop" → code-agent
 - "Debug runtime failures" → debug-agent
 - "Analyze metrics and plot figures" → data-analysis-agent

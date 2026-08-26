@@ -28,9 +28,14 @@ The agent does relevance judgment — no LLM-as-judge is called, no numeric scor
 
 ## Background paper experience extraction
 
-Keep the existing search, triage, reading, ranking, and answer workflow unchanged. Once the final paper set for POINT, LIST, or ITERATIVE has been determined, call `enqueue_paper_experiences` exactly once with every paper that will be delivered to the user. Pass each paper's best resolvable URL plus its ID and title when known.
+Keep the existing search, triage, reading, ranking, and answer workflow unchanged. Once the final paper set for POINT, LIST, or ITERATIVE has been determined, call `enqueue_paper_experiences` exactly once with every paper that will be delivered to the user. Pass each paper's best resolvable URL plus its ID and title when known. If the search provider exposes a primary arXiv category, pass it as `domain_arxiv`; otherwise leave it absent rather than guessing.
 
 This call only persists background work. Do not wait for extraction, inspect queue state, fetch extra full text for it, include extraction status in the answer, or alter the selected papers if enqueueing fails. The worker downloads full text and runs both existing L1/L2 prompts independently of this skill.
+
+When `paper-experience` invokes this skill only to resolve a topic into a final
+paper set, return that set to the caller and skip `enqueue_paper_experiences`.
+The caller immediately runs foreground extraction into the same project store,
+so enqueueing here would duplicate the work.
 
 ## Setup
 
@@ -382,4 +387,3 @@ References are self-contained. Don't chain between them — return here to re-ro
 | Idea generation | `research-ideation` |
 | Related Work section | `paper-writing` |
 | Baseline + experiment | `experiment-pipeline` |
-

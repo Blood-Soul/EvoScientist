@@ -34,12 +34,15 @@ bridge/package-lock.json
 
 # Project specific
 .langgraph_api/
+runs/
 workspace/
 skills/
 !skills/
 skills/*
 !skills/paper-navigator/
 !skills/paper-navigator/**
+!skills/paper-experience/
+!skills/paper-experience/**
 !EvoScientist/skills/
 memory/
 !EvoScientist/memory/
@@ -51,4 +54,5 @@ conversation_history/
 *AGENTS.md
 *meals/
 botpy.log
+botpy.log.*
 large_tool_results/

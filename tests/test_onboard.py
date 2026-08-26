@@ -1622,6 +1622,8 @@ class TestRunOnboard:
             mock_q.password.return_value.ask.side_effect = [
                 "",  # Provider API key (keep current)
                 "",  # Tavily key (keep current)
+                "",  # Semantic Scholar key (keep current)
+                "",  # DeepXiv token (keep current)
             ]
             mock_q.confirm.return_value.ask.side_effect = [
                 True,  # Save config
@@ -1680,6 +1682,8 @@ class TestRunOnboard:
                 "",  # Main provider API key (keep current)
                 "sk-aux-openai",  # Auxiliary provider API key
                 "",  # Tavily key (keep current)
+                "",  # Semantic Scholar key (keep current)
+                "",  # DeepXiv token (keep current)
             ]
             mock_q.confirm.return_value.ask.side_effect = [
                 True,  # Save config
@@ -1964,7 +1968,7 @@ class TestRunOnboard:
                 "daemon",  # Workspace mode
                 True,  # Show thinking
             ]
-            mock_q.password.return_value.ask.side_effect = ["", ""]
+            mock_q.password.return_value.ask.side_effect = ["", "", "", ""]
             mock_q.confirm.return_value.ask.side_effect = [
                 False,  # Save config - NO
             ]
@@ -2035,7 +2039,7 @@ class TestRunOnboard:
                     "daemon",
                     True,
                 ]
-                mock_q.password.return_value.ask.side_effect = ["", ""]
+                mock_q.password.return_value.ask.side_effect = ["", "", "", ""]
                 mock_q.confirm.return_value.ask.side_effect = [
                     False,  # Save? = No
                 ]
@@ -2085,7 +2089,7 @@ class TestRunOnboard:
                 "daemon",
                 True,
             ]
-            mock_q.password.return_value.ask.side_effect = ["", ""]
+            mock_q.password.return_value.ask.side_effect = ["", "", "", ""]
             mock_q.confirm.return_value.ask.side_effect = [
                 False,  # Save? = No
             ]

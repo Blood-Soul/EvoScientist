@@ -652,6 +652,7 @@ def _build_base_kwargs(
     """Build agent kwargs *without* MCP (fast, no subprocess spawning)."""
     from .memory.project import resolve_project_id
     from .tools import (
+        create_extract_paper_experiences_tool,
         create_paper_experience_queue_tool,
         make_skill_manager_tool,
         tavily_search,
@@ -665,9 +666,14 @@ def _build_base_kwargs(
         memory_dir=str(_paths_mod.MEMORIES_DIR),
         project_id=resolve_project_id(workspace.root),
     )
+    paper_extract_tool = create_extract_paper_experiences_tool(
+        memory_dir=str(_paths_mod.MEMORIES_DIR),
+        project_id=resolve_project_id(workspace.root),
+    )
     tool_registry = {
         "think_tool": think_tool,
         paper_queue_tool.name: paper_queue_tool,
+        paper_extract_tool.name: paper_extract_tool,
     }
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
@@ -675,6 +681,7 @@ def _build_base_kwargs(
         think_tool,
         make_skill_manager_tool(workspace, work_dir=work_dir),
         paper_queue_tool,
+        paper_extract_tool,
     ]
 
     subs = load_subagents(
@@ -738,6 +745,7 @@ def load_mcp_and_build_kwargs(
     """
     from .memory.project import resolve_project_id
     from .tools import (
+        create_extract_paper_experiences_tool,
         create_paper_experience_queue_tool,
         make_skill_manager_tool,
         tavily_search,
@@ -765,9 +773,14 @@ def load_mcp_and_build_kwargs(
         memory_dir=str(_paths_mod.MEMORIES_DIR),
         project_id=resolve_project_id(workspace.root),
     )
+    paper_extract_tool = create_extract_paper_experiences_tool(
+        memory_dir=str(_paths_mod.MEMORIES_DIR),
+        project_id=resolve_project_id(workspace.root),
+    )
     tool_registry = {
         "think_tool": think_tool,
         paper_queue_tool.name: paper_queue_tool,
+        paper_extract_tool.name: paper_extract_tool,
     }
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
@@ -775,6 +788,7 @@ def load_mcp_and_build_kwargs(
         think_tool,
         make_skill_manager_tool(workspace, work_dir=work_dir),
         paper_queue_tool,
+        paper_extract_tool,
     ]
 
     # Fresh tool registry — start from base tools + MCP tools
