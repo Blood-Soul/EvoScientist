@@ -22,6 +22,10 @@ class PaperQueueItem(BaseModel):
     url: str = Field(min_length=1, description="Resolvable paper or full-text URL.")
     paper_id: str = Field(default="", description="arXiv, DOI, S2, or other paper ID.")
     title: str = Field(default="", description="Paper title when known.")
+    domain_arxiv: str | None = Field(
+        default=None,
+        description="Primary arXiv category from paper metadata, when known.",
+    )
 
 
 class EnqueuePaperExperiencesArgs(BaseModel):
@@ -61,6 +65,7 @@ def create_paper_experience_queue_tool(
                 url=paper.url,
                 paper_id=paper.paper_id,
                 title=paper.title,
+                domain_arxiv=paper.domain_arxiv,
             )
             task_ids.append(task.task_id)
             if created:

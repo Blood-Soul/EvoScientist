@@ -557,6 +557,66 @@ def check_tavily_key(api_key: str) -> KeyCheck:
         return _classify_validation_error(e)
 
 
+def check_s2_key(api_key: str) -> KeyCheck:
+    """Check a Semantic Scholar API key against the public search endpoint.
+
+    Semantic Scholar serves ``/graph/v1/paper/search`` unauthenticated too
+    (with lower rate limits), so a bad key does not 401 as most providers do:
+    S2 answers 403. Any other status leaves the key's validity unknown.
+    """
+    if not api_key:
+        return _SKIPPED
+
+    try:
+        import httpx
+
+        resp = httpx.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={"query": "test", "limit": 1},
+            headers={"x-api-key": api_key},
+            timeout=_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            return KeyCheck("valid", "Valid")
+        if resp.status_code == 403:
+            return _INVALID
+        if resp.status_code == 429:
+            return KeyCheck(
+                "inconclusive", "Validation inconclusive — rate-limited, try again later"
+            )
+        return KeyCheck(
+            "inconclusive", f"Validation inconclusive (HTTP {resp.status_code})"
+        )
+    except Exception as e:
+        return _classify_validation_error(e)
+
+
+def check_deepxiv_token(api_key: str) -> KeyCheck:
+    """Check a DeepXiv API token by running a minimal search.
+
+    ``deepxiv-sdk`` is an optional dependency of the paper-navigator skill,
+    not of the core install, so it may be absent; the check is then
+    ``unavailable`` and the token is exercised when the skill first runs.
+    """
+    if not api_key:
+        return _SKIPPED
+
+    try:
+        from deepxiv_sdk import Reader
+    except ImportError:
+        return KeyCheck(
+            "unavailable",
+            "Skipped (deepxiv-sdk not installed; will be checked on first use)",
+        )
+
+    try:
+        reader = Reader(token=api_key, timeout=_TIMEOUT)
+        reader.search(query="test", size=1)
+        return KeyCheck("valid", "Valid")
+    except Exception as e:
+        return _classify_validation_error(e)
+
+
 def _listed_models(body: Any) -> tuple[str, ...] | None:
     """Model ids from a ``/models`` body (``{"data": [{"id": ...}]}``), or
     ``None`` when the body is not such a list."""

@@ -93,3 +93,16 @@ validate_moonshot_key = _pair("check_moonshot_key")
 validate_kimi_key = _pair("check_kimi_key")
 validate_xiaomi_key = _pair("check_xiaomi_key")
 validate_tavily_key = _pair("check_tavily_key")
+validate_s2_key = _pair("check_s2_key")
+
+
+def validate_deepxiv_token(api_key: str) -> tuple[bool, str]:
+    """``check_deepxiv_token`` as ``(is_valid, message)``.
+
+    The token can be saved without a live probe when ``deepxiv-sdk`` is not
+    installed, so an ``unavailable`` check passes the wizard.
+    """
+    result = provider_keys.check_deepxiv_token(api_key)
+    if result.status == "unavailable":
+        return True, result.message
+    return as_pair(result)

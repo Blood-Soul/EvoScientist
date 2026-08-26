@@ -61,6 +61,7 @@ async def drain_paper_experience_queue(
                     paper_text=paper_text,
                     prompts=prompts,
                     model=model,
+                    domain_arxiv=task.domain_arxiv,
                 )
                 await asyncio.to_thread(
                     store_paper_experiences,
@@ -72,6 +73,7 @@ async def drain_paper_experience_queue(
                     paper_text=paper_text,
                     prompts=prompts,
                     payloads=payloads,
+                    domain_arxiv=task.domain_arxiv,
                 )
                 await asyncio.to_thread(complete_task, memory_dir=memory_dir, task=task)
                 processed += 1

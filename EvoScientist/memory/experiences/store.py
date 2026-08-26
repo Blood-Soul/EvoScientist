@@ -22,7 +22,7 @@ from ..types import (
 
 EXPERIENCE_DIR = "experiences/projects"
 EXPERIENCE_CATALOG_FILENAME = "PAPER_EXPERIENCES.md"
-STORE_VERSION = 1
+STORE_VERSION = 2
 
 
 def _sha256(value: str) -> str:
@@ -209,6 +209,7 @@ def store_paper_experiences(
     paper_text: str,
     prompts: Mapping[ExperienceLevel, str],
     payloads: Mapping[ExperienceLevel, Mapping[str, Any]],
+    domain_arxiv: str | None = None,
 ) -> Path:
     """Atomically persist prompt-compatible L1 and L2 JSON payloads."""
     directory = _paper_dir(
@@ -226,13 +227,37 @@ def store_paper_experiences(
             "canonical_paper_id": canonical_paper_identifier(paper_id or url),
             "title": title,
             "url": url,
+            "domain_arxiv": domain_arxiv,
             "paper_sha256": _sha256(paper_text),
             "prompt_sha256": {level: _sha256(prompts[level]) for level in ("l1", "l2")},
+            "confidence_policy": "single_paper_evidence_v1",
+            "supporting_papers": [canonical_paper_identifier(paper_id or url)],
+            "contradicting_papers": [],
             "extracted_at": now,
         },
     )
     refresh_experience_catalog(memory_dir=memory_dir, project_id=project_id)
     return directory
+
+
+def load_paper_experiences(
+    *, memory_dir: str | Path, project_id: str, paper_id: str, url: str
+) -> dict[str, Any] | None:
+    """Load one complete, prompt-compatible L1/L2 extraction if it exists."""
+    directory = _paper_dir(
+        memory_dir, project_id=project_id, paper_id=paper_id, url=url
+    )
+    metadata = _read_json(directory / "metadata.json")
+    l1 = _read_json(directory / "l1.json")
+    l2 = _read_json(directory / "l2.json")
+    if (
+        metadata is None
+        or metadata.get("project_id") != project_id
+        or l1 is None
+        or l2 is None
+    ):
+        return None
+    return {"metadata": metadata, "l1": l1, "l2": l2}
 
 
 def _experience_id(
@@ -243,6 +268,7 @@ def _experience_id(
 
 def _summary(item: Mapping[str, Any], *, title: str, level: ExperienceLevel) -> str:
     candidates = (
+        item.get("statement"),
         item.get("declaration"),
         item.get("keywords_summary"),
         item.get("narrative"),
