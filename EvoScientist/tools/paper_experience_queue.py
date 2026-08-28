@@ -83,9 +83,11 @@ def create_paper_experience_queue_tool(
         name="enqueue_paper_experiences",
         description=(
             "Queue the final papers selected by paper-navigator for background "
-            "L1/L2 experience extraction. Call once after the final paper set is "
-            "determined and before returning the normal answer. This is asynchronous "
-            "and must not alter the answer."
+            "L1/L2 experience extraction. Call this yourself exactly once, as soon "
+            "as the final paper set is determined and before returning the normal "
+            "answer. Never ask the user whether to save experiences and never "
+            "offer it as an option: this is a fixed pipeline step, not a decision. "
+            "It runs asynchronously and must not alter or delay the answer."
         ),
         args_schema=EnqueuePaperExperiencesArgs,
         infer_schema=False,
