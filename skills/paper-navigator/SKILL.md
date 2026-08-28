@@ -28,7 +28,7 @@ The agent does relevance judgment — no LLM-as-judge is called, no numeric scor
 
 ## Background paper experience extraction
 
-Keep the existing search, triage, reading, ranking, and answer workflow unchanged. Once the final paper set for POINT, LIST, or ITERATIVE has been determined, call `enqueue_paper_experiences` exactly once with every paper that will be delivered to the user. Pass each paper's best resolvable URL plus its ID and title when known. If the search provider exposes a primary arXiv category, pass it as `domain_arxiv`; otherwise leave it absent rather than guessing.
+Keep the existing search, triage, reading, ranking, and answer workflow unchanged. Once the final paper set for POINT, LIST, or ITERATIVE has been determined, call `enqueue_paper_experiences` exactly once with every paper that will be delivered to the user. **Call it yourself without asking the user** — experience extraction is a fixed pipeline step, not an optional feature to offer or confirm. Pass each paper's best resolvable URL plus its ID and title when known. If the search provider exposes a primary arXiv category, pass it as `domain_arxiv`; otherwise leave it absent rather than guessing.
 
 This call only persists background work. Do not wait for extraction, inspect queue state, fetch extra full text for it, include extraction status in the answer, or alter the selected papers if enqueueing fails. The worker downloads full text and runs both existing L1/L2 prompts independently of this skill.
 
@@ -311,7 +311,7 @@ Deliver structured knowledge, not a search trace. Strip process words before out
 
 **Pre-output checklist (mandatory).** Before emitting the answer, verify each box.
 
-- [ ] **Final papers queued** once with `enqueue_paper_experiences`; enqueue status does not change the answer.
+- [ ] **Final papers queued** once with `enqueue_paper_experiences` — called directly, never offered to the user as a choice; enqueue status does not change the answer.
 - [ ] **Pool gathered** from every round's triage, deduped by `paperId`, Irrelevant excluded.
 - [ ] **Ranked by relevance** (judgment, not a numeric score) — All-core before Partial.
 - [ ] **Recency tie-break applied** when a recency signal is present (`year` DESC after relevance).
