@@ -477,7 +477,8 @@ async def test_active_extraction_reuses_project_store(
     async def download(_url: str) -> str:
         nonlocal downloads
         downloads += 1
-        return "should not be downloaded"
+        # Reached only by the full-text backfill, never by re-extraction.
+        return "## Method\n\nBackfilled full text for the cached paper.\n"
 
     monkeypatch.setattr(paper_experience_active, "download_paper_text", download)
     monkeypatch.setattr(paper_experience_active.asyncio, "to_thread", run_sync)
@@ -504,7 +505,8 @@ async def test_active_extraction_reuses_project_store(
         )
     )
 
-    assert downloads == 0
+    # Cache hit: no extraction, but the full text is backfilled once.
+    assert downloads == 1
     assert result["completed"][0]["cached"] is True
     assert "cached experience" in json.dumps(result, ensure_ascii=False)
 

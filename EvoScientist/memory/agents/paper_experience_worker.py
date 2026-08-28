@@ -22,6 +22,7 @@ from ..experiences import (
     run_experience_extraction,
     store_paper_experiences,
 )
+from ..papers import persist_paper_fulltext
 from ._factory import resolve_memory_agent_paths
 
 
@@ -54,6 +55,21 @@ async def drain_paper_experience_queue(
         ):
             try:
                 paper_text = await download_paper_text(task.url)
+                # Persist before extracting: the full text keeps its value if
+                # extraction fails, and a retry then reuses it instead of
+                # re-downloading. persist_paper_fulltext never raises, so a
+                # storage problem cannot fail a task whose real job is
+                # extraction.
+                await asyncio.to_thread(
+                    persist_paper_fulltext,
+                    memory_dir=memory_dir,
+                    project_id=project_id,
+                    paper_id=task.paper_id or task.url,
+                    url=task.url,
+                    title=task.title,
+                    paper_text=paper_text,
+                    domain_arxiv=task.domain_arxiv,
+                )
                 prompts = await asyncio.to_thread(load_experience_prompts)
                 payloads = await run_experience_extraction(
                     paper_id=task.paper_id or task.url,

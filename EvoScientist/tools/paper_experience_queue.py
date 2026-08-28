@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated
 
@@ -14,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from ..memory.experiences import enqueue_paper
 from ..memory.paper_experience_launch import launch_paper_experience_worker
+from ..memory.runtime_context import runtime_project_id
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +36,6 @@ class EnqueuePaperExperiencesArgs(BaseModel):
     runtime: Annotated[object | None, InjectedToolArg] = None
 
 
-def _runtime_project_id(runtime: ToolRuntime | None, default: str) -> str:
-    if runtime is None or not isinstance(runtime.config, Mapping):
-        return default
-    configurable = runtime.config.get("configurable", {})
-    if not isinstance(configurable, Mapping):
-        return default
-    value = configurable.get("evomemory_project_id")
-    return value if isinstance(value, str) and value.strip() else default
-
-
 def create_paper_experience_queue_tool(
     *, memory_dir: str | Path, project_id: str
 ) -> BaseTool:
@@ -55,7 +45,7 @@ def create_paper_experience_queue_tool(
         papers: list[PaperQueueItem],
         runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
     ) -> str:
-        active_project = _runtime_project_id(runtime, project_id)
+        active_project = runtime_project_id(runtime, project_id)
         enqueued = existing = 0
         task_ids: list[str] = []
         for paper in papers:

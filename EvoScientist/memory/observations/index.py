@@ -33,7 +33,16 @@ def build_observation_index_context(
         key=lambda document: document.observation_id,
     )
     if not experiences:
-        return observation_context
+        # Full text can exist without experiences -- extraction is persisted
+        # after the text and may have failed -- so still offer the paper block.
+        fulltext_only = _build_paper_fulltext_index(
+            memory_dir=memory_dir,
+            project_id=project_id,
+            remaining=max_inline_chars - len(observation_context) - 2,
+        )
+        if not fulltext_only:
+            return observation_context
+        return f"{observation_context}\n\n{fulltext_only}"
     experience_lines = [
         (
             f"- {document.observation_id} "
@@ -51,17 +60,120 @@ def build_observation_index_context(
         "Use `search_observations` and `read_memory` with E-* IDs.",
         "</paper_experience_memory>",
     ]
-    if len("\n".join([*prefix, *suffix])) > remaining:
+    experience_context = _fit_block(
+        prefix=prefix,
+        lines=experience_lines,
+        suffix=suffix,
+        remaining=remaining,
+        truncation_note="Experience index truncated to entries that fit.",
+    )
+    if not experience_context:
         return observation_context
+    combined = f"{observation_context}\n\n{experience_context}"
+    fulltext_context = _build_paper_fulltext_index(
+        memory_dir=memory_dir,
+        project_id=project_id,
+        remaining=max_inline_chars - len(combined) - 2,
+    )
+    if not fulltext_context:
+        return combined
+    return f"{combined}\n\n{fulltext_context}"
+
+
+def _fit_block(
+    *,
+    prefix: list[str],
+    lines: list[str],
+    suffix: list[str],
+    remaining: int,
+    truncation_note: str,
+) -> str:
+    """Render a bounded index block, or "" when even its framing will not fit.
+
+    The truncation note is part of the prefix while lines are selected, not
+    appended afterwards: adding it later would push an already-exactly-fitting
+    block past ``remaining``.
+    """
+    if remaining <= 0:
+        return ""
+    fits = _fit_lines(prefix=prefix, lines=lines, suffix=suffix, remaining=remaining)
+    if fits is None:
+        return ""
+    selected = fits
+    if len(selected) == len(lines):
+        return "\n".join([*prefix, *selected, *suffix])
+
+    noted_prefix = [*prefix, truncation_note]
+    fits = _fit_lines(
+        prefix=noted_prefix, lines=lines, suffix=suffix, remaining=remaining
+    )
+    if fits is None:
+        # The note itself does not fit; keep the entries and drop the note
+        # rather than dropping the block.
+        return "\n".join([*prefix, *selected, *suffix])
+    return "\n".join([*noted_prefix, *fits, *suffix])
+
+
+def _fit_lines(
+    *,
+    prefix: list[str],
+    lines: list[str],
+    suffix: list[str],
+    remaining: int,
+) -> list[str] | None:
+    """Select the lines that fit, or None when the framing alone is too large."""
+    if len("\n".join([*prefix, *suffix])) > remaining:
+        return None
     selected: list[str] = []
-    for line in experience_lines:
+    for line in lines:
         candidate = "\n".join([*prefix, *selected, line, *suffix])
         if len(candidate) <= remaining:
             selected.append(line)
-    if len(selected) < len(experience_lines):
-        prefix.append("Experience index truncated to entries that fit.")
-    experience_context = "\n".join([*prefix, *selected, *suffix])
-    return f"{observation_context}\n\n{experience_context}"
+    return selected
+
+
+def _build_paper_fulltext_index(
+    *, memory_dir: str | Path, project_id: str, remaining: int
+) -> str:
+    """Build the paper-level full-text index block.
+
+    Deliberately one line per *paper*, never per chunk: a single paper yields
+    tens of chunks, so listing chunks would exhaust the shared inline budget
+    after a few papers. Papers are named here; passages are found by searching.
+    """
+    from ..papers.store import list_papers
+
+    papers = list_papers(memory_dir=memory_dir, project_id=project_id)
+    if not papers or remaining <= 0:
+        return ""
+    lines = [
+        (
+            f"- {paper.get('paper_id') or paper.get('paper_key')}: "
+            f"{' '.join(str(paper.get('title') or 'untitled').split())} "
+            f"({paper.get('chunk_count', 0)} passages, "
+            f"{paper.get('section_count', 0)} sections)"
+        )
+        for paper in papers
+    ]
+    prefix = [
+        "<paper_fulltext_memory>",
+        f"Papers with stored full text: total={len(papers)}.",
+    ]
+    suffix = [
+        (
+            "Search passages with `search_paper_text`, then read them with "
+            "`read_paper`. Experiences (E-*) give judgements; this text gives "
+            "the evidence, numbers, and wording behind them."
+        ),
+        "</paper_fulltext_memory>",
+    ]
+    return _fit_block(
+        prefix=prefix,
+        lines=lines,
+        suffix=suffix,
+        remaining=remaining,
+        truncation_note="Paper index truncated to entries that fit.",
+    )
 
 
 def build_observation_linker_index_context(
