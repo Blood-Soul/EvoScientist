@@ -325,6 +325,19 @@ class EvoScientistConfig:
     # deploy model; raise for a long-running server that cycles through many
     # large workspaces.
     memory_observation_cache_max_files: int = 2048
+    # Paper full-text RAG. Experience records compress a paper into judgements;
+    # the full text keeps the verifiable evidence behind them. When enabled,
+    # text already downloaded for experience extraction is also persisted,
+    # chunked, and exposed through `search_paper_text` / `read_paper`.
+    # Disabling stops new persistence, tool registration, and prompt injection;
+    # text already on disk is left alone.
+    memory_paper_fulltext_enabled: bool = True
+    # Target chunk size in characters. Sections shorter than this stay whole;
+    # longer ones are split at paragraph boundaries with the overlap below.
+    memory_paper_chunk_max_chars: int = 2000
+    # Characters repeated across a split boundary so a statement straddling it
+    # still appears whole in at least one chunk. Clamped below the chunk size.
+    memory_paper_chunk_overlap_chars: int = 200
 
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
@@ -531,6 +544,28 @@ class EvoScientistConfig:
             )
             self.memory_observation_cache_max_files = 2048
 
+        # A non-positive chunk size would make every chunk one character and
+        # explode the index; a negative overlap is meaningless. The chunker
+        # clamps overlap below the window itself, so only the floor is enforced.
+        chunk_max = self.memory_paper_chunk_max_chars
+        if (
+            not isinstance(chunk_max, int)
+            or isinstance(chunk_max, bool)
+            or chunk_max < 1
+        ):
+            logging.getLogger(__name__).warning(
+                "Invalid memory_paper_chunk_max_chars %r; falling back to 2000.",
+                chunk_max,
+            )
+            self.memory_paper_chunk_max_chars = 2000
+        overlap = self.memory_paper_chunk_overlap_chars
+        if not isinstance(overlap, int) or isinstance(overlap, bool) or overlap < 0:
+            logging.getLogger(__name__).warning(
+                "Invalid memory_paper_chunk_overlap_chars %r; falling back to 200.",
+                overlap,
+            )
+            self.memory_paper_chunk_overlap_chars = 200
+
         # auto_mode and dangerous_mode both imply auto_approve regardless of
         # source (CLI, env, config file, direct construction) — done here so the
         # "unattended → zero prompts" contract holds even when either is set via
@@ -571,6 +606,7 @@ class MemoryControls:
     observations_enabled: bool
     observation_writer: MemoryObservationWriter
     workers_enabled: bool
+    paper_fulltext_enabled: bool = True
 
     @classmethod
     def from_config(cls, config: EvoScientistConfig) -> MemoryControls:
@@ -579,6 +615,7 @@ class MemoryControls:
             observations_enabled=config.memory_observations_enabled,
             observation_writer=config.memory_observation_writer,
             workers_enabled=config.memory_workers_enabled,
+            paper_fulltext_enabled=config.memory_paper_fulltext_enabled,
         )
 
     @property
@@ -888,6 +925,9 @@ _ENV_MAPPINGS = {
     "memory_skill_synthesis_cadence": "EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_CADENCE",
     "memory_skill_synthesis_time": "EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_TIME",
     "memory_observation_cache_max_files": "EVOSCIENTIST_MAX_CACHED_FILES",
+    "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
+    "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",
+    "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
 
 

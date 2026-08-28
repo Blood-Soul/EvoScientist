@@ -201,8 +201,8 @@ def _regex_search_documents(
                 pattern=pattern,
             ),
         }
-        if document.record_kind == "experience":
-            hit["record_kind"] = "experience"
+        if document.record_kind != "observation":
+            hit["record_kind"] = document.record_kind
         if document.experience_level is not None:
             hit["experience_level"] = document.experience_level
         if document.related_observations:
@@ -259,8 +259,8 @@ def _ranked_search_documents(
             ),
             "score": round(score, 2),
         }
-        if document.record_kind == "experience":
-            hit["record_kind"] = "experience"
+        if document.record_kind != "observation":
+            hit["record_kind"] = document.record_kind
         if document.experience_level is not None:
             hit["experience_level"] = document.experience_level
         if document.related_observations:

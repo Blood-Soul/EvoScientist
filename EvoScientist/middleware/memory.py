@@ -91,6 +91,33 @@ Required memory preflight:
   no relevant observation was found. Keep this preflight short.
 """
 
+PAPER_FULLTEXT_INSTRUCTIONS = """
+Paper full text for this project is stored under `/memories/papers/` and read
+through `search_paper_text` and `read_paper`.
+
+Experience records and paper text do different jobs, and the second half of the
+preflight is what makes them complementary:
+- Experiences (`E-*`, via `search_observations`) carry transferable judgements:
+  what worked, under which conditions, and what to avoid.
+- Paper text (`C-*`, via `search_paper_text`) carries the verifiable evidence
+  behind those judgements: exact metrics, hyperparameters, dataset splits,
+  ablation outcomes, and the authors' own wording.
+
+After the observation preflight, go to the paper text when you need to quote a
+paper, check a specific number or setting, confirm an experience record actually
+holds for your case, or when the experience records are not specific enough to
+decide. Prefer this over recalling a paper from memory.
+- `search_paper_text` returns locating passages. Retrieval is lexical, so use
+  the terminology a paper would itself use, and try 1-3 phrasing variants when
+  the first query returns little.
+- Read a hit with `read_paper`; `expand=section` (the default) gives the
+  surrounding section, which is usually what makes a number interpretable.
+- When a single paper is central to the task, `read_paper` with `expand=full`
+  and its `paper_id` for a deep read rather than repeated narrow lookups.
+- An experience record's `paper.full_text_available` tells you whether its
+  source paper can be searched this way.
+"""
+
 OBSERVATION_MEMORY_WRITE_INSTRUCTIONS = """
 Call `record_observation` only for durable, non-obvious, evidence-backed
 information that is not already in memory and is likely to change future behavior:
@@ -239,6 +266,7 @@ class EvoMemoryMiddleware(AgentMiddleware):
         enable_profile_memory: bool = True,
         enable_observation_memory: bool = True,
         enable_observation_tool: bool = True,
+        enable_paper_fulltext: bool = True,
         memory_scheduler: MemoryScheduler | None = None,
     ) -> None:
         self._memory_dir = Path(memory_dir).expanduser()
@@ -257,6 +285,12 @@ class EvoMemoryMiddleware(AgentMiddleware):
         self._max_inline_profile_chars = max_inline_profile_chars
         self._enable_observation_tool = (
             enable_observation_memory and enable_observation_tool
+        )
+        # Paper full-text guidance rides along with observation memory: the
+        # instructions describe the second half of one preflight, so injecting
+        # them without the first half would describe a flow the agent cannot run.
+        self._enable_paper_fulltext = (
+            enable_observation_memory and enable_paper_fulltext
         )
         self.tools = []
         if enable_observation_memory:
@@ -494,6 +528,8 @@ class EvoMemoryMiddleware(AgentMiddleware):
         instructions = OBSERVATION_MEMORY_READ_INSTRUCTIONS.format(
             project_id=self._project_id
         )
+        if self._enable_paper_fulltext:
+            instructions += PAPER_FULLTEXT_INSTRUCTIONS
         if not self._enable_observation_tool:
             return instructions
         return instructions + OBSERVATION_MEMORY_WRITE_INSTRUCTIONS
@@ -626,6 +662,7 @@ def create_memory_middleware(
     enable_profile_memory: bool = True,
     enable_observation_memory: bool = True,
     enable_observation_tool: bool = True,
+    enable_paper_fulltext: bool = True,
     memory_scheduler: MemoryScheduler | None = None,
 ) -> EvoMemoryMiddleware:
     """Build profile-memory middleware, defaulting to the shared memories directory."""
@@ -642,5 +679,6 @@ def create_memory_middleware(
         enable_profile_memory=enable_profile_memory,
         enable_observation_memory=enable_observation_memory,
         enable_observation_tool=enable_observation_tool,
+        enable_paper_fulltext=enable_paper_fulltext,
         memory_scheduler=memory_scheduler,
     )

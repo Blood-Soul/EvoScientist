@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field
 
 from ..experiences.retrieval import read_memory_file, search_memory_files
+from ..runtime_context import runtime_config_value, runtime_project_id
 from ..types import (
     MemoryScope,
     MemorySourceType,
@@ -187,22 +188,8 @@ class _ObservationContext:
     source_agent: str
 
 
-def _runtime_config_value(runtime: ToolRuntime | None, key: str) -> str | None:
-    """Read one optional string override from runtime configurable config."""
-    if runtime is None:
-        return None
-    config = runtime.config or {}
-    if not isinstance(config, Mapping):
-        return None
-    configurable = config.get("configurable", {})
-    if not isinstance(configurable, Mapping):
-        return None
-    value = configurable.get(key)
-    return value if isinstance(value, str) and value else None
-
-
-def _runtime_project_id(runtime: ToolRuntime | None, default_project_id: str) -> str:
-    return _runtime_config_value(runtime, "evomemory_project_id") or default_project_id
+_runtime_config_value = runtime_config_value
+_runtime_project_id = runtime_project_id
 
 
 def _runtime_session_id(runtime: ToolRuntime | None) -> str | None:
