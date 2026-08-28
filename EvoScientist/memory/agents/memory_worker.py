@@ -453,6 +453,10 @@ def _memory_worker_middleware(
                 enable_profile_memory=enable_profile_memory,
                 enable_observation_memory=enable_observation_memory,
                 enable_observation_tool=enable_observation_tool,
+                # Memory workers write observations; they never receive the
+                # paper full-text tools, so the retrieval guidance would
+                # describe a flow they cannot run.
+                enable_paper_fulltext=False,
             ),
             excluded_tools=_MEMORY_WORKER_EXCLUDED_TOOLS,
         ),

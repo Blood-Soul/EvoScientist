@@ -3,7 +3,8 @@
 The langgraph-api host supports a top-level ``http`` key in
 ``langgraph.json`` that names an ASGI app to mount on the same
 process as the graph. We use it to surface the registry the WebUI's
-``/model`` picker needs.
+``/model`` picker needs, plus the ``/debug`` pages developers use to
+inspect on-disk state without a front-end change.
 
 Why this lives here and not as a separate sidecar: the WebUI talks to
 ``EvoSci deploy``'s langgraph endpoint anyway, so one origin keeps the
@@ -30,6 +31,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from EvoScientist.config import get_effective_config
+from EvoScientist.langgraph_dev.paper_inspector import (
+    get_paper_store_json,
+    get_paper_store_page,
+)
 from EvoScientist.llm.models import list_model_picker_entries
 
 
@@ -136,5 +141,10 @@ app = Starlette(
     routes=[
         Route("/api/models", get_models, methods=["GET"]),
         Route("/api/teams", get_teams, methods=["GET"]),
+        # Developer debug surface, not part of the WebUI's API contract. Served
+        # from here because this app already shares the dev server's origin, so
+        # inspecting the paper chunk store costs no front-end change.
+        Route("/debug/papers", get_paper_store_page, methods=["GET"]),
+        Route("/debug/papers.json", get_paper_store_json, methods=["GET"]),
     ]
 )

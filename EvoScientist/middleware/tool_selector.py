@@ -52,6 +52,11 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         "read_memory",
         "record_observation",
         "search_observations",
+        # Paper full-text retrieval is the evidence half of the memory
+        # preflight; hiding it would leave the agent with experience records
+        # and no way to verify them against the papers themselves.
+        "search_paper_text",
+        "read_paper",
     }
 )
 

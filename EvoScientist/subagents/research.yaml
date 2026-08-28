@@ -3,7 +3,16 @@ research-agent:
   # paper-navigator is commonly entered from this agent. Keep the queue tool
   # explicitly available so the skill's mandatory post-selection persistence
   # step can actually execute (skill instructions alone do not grant tools).
-  tools: [tavily_search, think_tool, enqueue_paper_experiences]
+  # search_paper_text/read_paper close the loop: papers this agent enqueued
+  # earlier become verifiable source text on later tasks.
+  tools:
+    [
+      tavily_search,
+      think_tool,
+      enqueue_paper_experiences,
+      search_paper_text,
+      read_paper,
+    ]
   skills: ["/skills/"]
   system_prompt: |
     You are a research assistant.

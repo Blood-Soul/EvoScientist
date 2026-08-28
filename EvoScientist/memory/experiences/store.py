@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .._atomic import atomic_write_json, atomic_write_text, read_json
 from ..types import (
     ExperienceLevel,
     MemoryScope,
@@ -41,31 +40,6 @@ def paper_storage_key(paper_id: str, url: str) -> str:
     canonical = canonical_paper_identifier(paper_id or url)
     slug = re.sub(r"[^a-zA-Z0-9._-]+", "_", canonical).strip("._-") or "paper"
     return f"{slug[:48]}-{_sha256(canonical)[:12]}"
-
-
-def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    os.replace(temporary, path)
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
 
 
 def _paper_dir(
@@ -108,7 +82,7 @@ def refresh_experience_catalog(*, memory_dir: str | Path, project_id: str) -> Pa
         paper_dirs = []
 
     for directory in paper_dirs:
-        metadata = _read_json(directory / "metadata.json")
+        metadata = read_json(directory / "metadata.json")
         if metadata is None or metadata.get("project_id") != project_id:
             continue
         extracted_at = str(metadata.get("extracted_at") or "")
@@ -142,7 +116,7 @@ def refresh_experience_catalog(*, memory_dir: str | Path, project_id: str) -> Pa
 
         found_experiences = False
         for level in ("l1", "l2"):
-            payload = _read_json(directory / f"{level}.json")
+            payload = read_json(directory / f"{level}.json")
             experiences = payload.get("experiences") if payload else None
             items = experiences if isinstance(experiences, list) else []
             lines.extend([f"### {level.upper()} experiences ({len(items)})", ""])
@@ -168,7 +142,7 @@ def refresh_experience_catalog(*, memory_dir: str | Path, project_id: str) -> Pa
             lines.extend(["No valid experience records were parsed.", ""])
 
     target = experience_catalog_path(memory_dir=root, project_id=project_id)
-    _atomic_write_text(target, "\n".join(lines).rstrip() + "\n")
+    atomic_write_text(target, "\n".join(lines).rstrip() + "\n")
     return target
 
 
@@ -217,8 +191,8 @@ def store_paper_experiences(
     )
     now = datetime.now(UTC).isoformat()
     for level in ("l1", "l2"):
-        _atomic_write_json(directory / f"{level}.json", payloads[level])
-    _atomic_write_json(
+        atomic_write_json(directory / f"{level}.json", payloads[level])
+    atomic_write_json(
         directory / "metadata.json",
         {
             "store_version": STORE_VERSION,
@@ -247,9 +221,9 @@ def load_paper_experiences(
     directory = _paper_dir(
         memory_dir, project_id=project_id, paper_id=paper_id, url=url
     )
-    metadata = _read_json(directory / "metadata.json")
-    l1 = _read_json(directory / "l1.json")
-    l2 = _read_json(directory / "l2.json")
+    metadata = read_json(directory / "metadata.json")
+    l1 = read_json(directory / "l1.json")
+    l2 = read_json(directory / "l2.json")
     if (
         metadata is None
         or metadata.get("project_id") != project_id
@@ -258,6 +232,17 @@ def load_paper_experiences(
     ):
         return None
     return {"metadata": metadata, "l1": l1, "l2": l2}
+
+
+def _has_full_text(root: Path, *, project_id: str, paper_key: str) -> bool:
+    """Report whether this paper's full text is stored alongside its experiences.
+
+    Imported lazily: ``papers.store`` depends on this module for
+    ``paper_storage_key()``, so a module-level import here would be circular.
+    """
+    from ..papers.store import has_paper_text
+
+    return has_paper_text(root, project_id=project_id, paper_key=paper_key)
 
 
 def _experience_id(
@@ -286,7 +271,13 @@ def _experience_text(
     level: ExperienceLevel,
     metadata: Mapping[str, Any],
     item: Mapping[str, Any],
+    paper_key: str = "",
+    full_text_available: bool = False,
 ) -> str:
+    # `paper_key` names both this paper's experience directory and its
+    # full-text directory, so advertising it here plus whether paper.md exists
+    # tells a reader it can go from this judgement to the evidence behind it
+    # with `search_paper_text` -- no extra lookup round trip.
     return json.dumps(
         {
             "id": experience_id,
@@ -298,6 +289,8 @@ def _experience_text(
                 "paper_id": metadata.get("paper_id"),
                 "title": metadata.get("title"),
                 "url": metadata.get("url"),
+                "paper_key": paper_key,
+                "full_text_available": full_text_available,
             },
             "experience": item,
         },
@@ -319,11 +312,16 @@ def list_experience_documents(
     except OSError:
         return []
     for directory in paper_dirs:
-        metadata = _read_json(directory / "metadata.json")
+        metadata = read_json(directory / "metadata.json")
         if metadata is None or metadata.get("project_id") != project_id:
             continue
+        # One stat per paper, not per experience: every record from this paper
+        # shares the same answer.
+        full_text = _has_full_text(
+            root, project_id=project_id, paper_key=directory.name
+        )
         for level in ("l1", "l2"):
-            payload = _read_json(directory / f"{level}.json")
+            payload = read_json(directory / f"{level}.json")
             experiences = payload.get("experiences") if payload else None
             if not isinstance(experiences, list):
                 continue
@@ -341,6 +339,8 @@ def list_experience_documents(
                     level=level,
                     metadata=metadata,
                     item=item,
+                    paper_key=directory.name,
+                    full_text_available=full_text,
                 )
                 relative = (directory / f"{level}.json").relative_to(root).as_posix()
                 documents.append(
