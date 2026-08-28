@@ -375,6 +375,7 @@ def _inject_subagent_middleware(
             enable_observation_tool=memory_controls.observation_tool_enabled(
                 MemoryObservationTarget.AGENT
             ),
+            enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
             memory_scheduler=memory_scheduler,
         )
         middleware = [
@@ -640,6 +641,59 @@ def _route_async_specs_through_evo_middleware(
     return sync_subs
 
 
+def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
+    """Build the base tools, including the paper experience and full-text tools,
+    shared by both build paths.
+
+    ``_build_base_kwargs`` and ``load_mcp_and_build_kwargs`` are parallel
+    construction paths; anything registered in only one of them disappears the
+    moment the other is taken (MCP enabled vs not). Building them here once
+    keeps the two in step.
+
+    Returns ``(tool_registry, base_tools)``.
+    """
+    from .memory.project import resolve_project_id
+    from .tools import (
+        create_extract_paper_experiences_tool,
+        create_paper_experience_queue_tool,
+        create_read_paper_tool,
+        create_search_paper_text_tool,
+        make_skill_manager_tool,
+        tavily_search,
+        think_tool,
+    )
+
+    memory_dir = str(_paths_mod.MEMORIES_DIR)
+    project_id = resolve_project_id(workspace.root)
+    paper_queue_tool = create_paper_experience_queue_tool(
+        memory_dir=memory_dir, project_id=project_id
+    )
+    paper_extract_tool = create_extract_paper_experiences_tool(
+        memory_dir=memory_dir, project_id=project_id
+    )
+    tool_registry = {
+        "think_tool": think_tool,
+        paper_queue_tool.name: paper_queue_tool,
+        paper_extract_tool.name: paper_extract_tool,
+    }
+    base_tools = [
+        think_tool,
+        make_skill_manager_tool(workspace, work_dir=work_dir),
+        paper_queue_tool,
+        paper_extract_tool,
+    ]
+
+    if getattr(cfg, "memory_paper_fulltext_enabled", True):
+        for factory in (create_search_paper_text_tool, create_read_paper_tool):
+            tool = factory(memory_dir=memory_dir, project_id=project_id)
+            tool_registry[tool.name] = tool
+            base_tools.append(tool)
+
+    if os.environ.get("TAVILY_API_KEY"):
+        tool_registry["tavily_search"] = tavily_search
+    return tool_registry, base_tools
+
+
 def _build_base_kwargs(
     base_backend,
     base_middleware,
@@ -650,39 +704,13 @@ def _build_base_kwargs(
     chat_model=None,
 ):
     """Build agent kwargs *without* MCP (fast, no subprocess spawning)."""
-    from .memory.project import resolve_project_id
-    from .tools import (
-        create_extract_paper_experiences_tool,
-        create_paper_experience_queue_tool,
-        make_skill_manager_tool,
-        tavily_search,
-        think_tool,
-    )
     from .utils import load_subagents
 
     cfg = cfg if cfg is not None else _ensure_config()
     work_dir = work_dir if work_dir is not None else workspace.root
-    paper_queue_tool = create_paper_experience_queue_tool(
-        memory_dir=str(_paths_mod.MEMORIES_DIR),
-        project_id=resolve_project_id(workspace.root),
+    tool_registry, base_tools = _build_paper_tools(
+        cfg=cfg, workspace=workspace, work_dir=work_dir
     )
-    paper_extract_tool = create_extract_paper_experiences_tool(
-        memory_dir=str(_paths_mod.MEMORIES_DIR),
-        project_id=resolve_project_id(workspace.root),
-    )
-    tool_registry = {
-        "think_tool": think_tool,
-        paper_queue_tool.name: paper_queue_tool,
-        paper_extract_tool.name: paper_extract_tool,
-    }
-    if os.environ.get("TAVILY_API_KEY"):
-        tool_registry["tavily_search"] = tavily_search
-    base_tools = [
-        think_tool,
-        make_skill_manager_tool(workspace, work_dir=work_dir),
-        paper_queue_tool,
-        paper_extract_tool,
-    ]
 
     subs = load_subagents(
         SUBAGENTS_CONFIG,
@@ -743,14 +771,6 @@ def load_mcp_and_build_kwargs(
         chat_model: Explicit chat model to bind instead of
             ``_ensure_chat_model()`` (which would write module globals).
     """
-    from .memory.project import resolve_project_id
-    from .tools import (
-        create_extract_paper_experiences_tool,
-        create_paper_experience_queue_tool,
-        make_skill_manager_tool,
-        tavily_search,
-        think_tool,
-    )
     from .utils import load_subagents
 
     cfg = cfg if cfg is not None else _ensure_config()
@@ -769,27 +789,9 @@ def load_mcp_and_build_kwargs(
             chat_model=chat_model,
         )
 
-    paper_queue_tool = create_paper_experience_queue_tool(
-        memory_dir=str(_paths_mod.MEMORIES_DIR),
-        project_id=resolve_project_id(workspace.root),
+    tool_registry, base_tools = _build_paper_tools(
+        cfg=cfg, workspace=workspace, work_dir=work_dir
     )
-    paper_extract_tool = create_extract_paper_experiences_tool(
-        memory_dir=str(_paths_mod.MEMORIES_DIR),
-        project_id=resolve_project_id(workspace.root),
-    )
-    tool_registry = {
-        "think_tool": think_tool,
-        paper_queue_tool.name: paper_queue_tool,
-        paper_extract_tool.name: paper_extract_tool,
-    }
-    if os.environ.get("TAVILY_API_KEY"):
-        tool_registry["tavily_search"] = tavily_search
-    base_tools = [
-        think_tool,
-        make_skill_manager_tool(workspace, work_dir=work_dir),
-        paper_queue_tool,
-        paper_extract_tool,
-    ]
 
     # Fresh tool registry — start from base tools + MCP tools
     registry = dict(tool_registry)
@@ -1048,6 +1050,7 @@ def _get_default_middleware(
         enable_observation_tool=memory_controls.observation_tool_enabled(
             MemoryObservationTarget.AGENT
         ),
+        enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
         memory_scheduler=memory_scheduler,
         # First-contact intro: main agent only, and never in unattended runs.
         enable_profile_bootstrap=not for_async_subagent and not bool(cfg.auto_mode),

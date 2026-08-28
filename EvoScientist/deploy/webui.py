@@ -222,6 +222,9 @@ def run_webui(config: Any, workspace_dir: str | None = None) -> None:
                 f"[dim]({browser_note})[/dim]\n"
                 f"[bold]Logs:[/bold]     {_shorten(str(RUNTIME.log_file))}\n"
                 f"          {_shorten(str(webui_log))}\n"
+                f"[bold]Debug:[/bold]    "
+                f"{_base_url(cfg.backend_port, cfg.backend_host)}/debug/papers  "
+                f"[dim](paper full-text chunk store)[/dim]\n"
                 f"{remote_backend_hint}\n"
                 f"[dim]Press Ctrl+C to stop.[/dim]"
             ),
@@ -232,8 +235,9 @@ def run_webui(config: Any, workspace_dir: str | None = None) -> None:
     if not _is_loopback_host(cfg.backend_host):
         console.print(
             "[bold white on red] ⚠ PUBLIC BIND [/bold white on red] "
-            f"[bold red]Backend listening on {cfg.backend_host} — no auth, and "
-            f"the agent can run shell. Trusted networks only.[/bold red]"
+            f"[bold red]Backend listening on {cfg.backend_host} — no auth (including "
+            f"the debug routes), and the agent can run shell. Trusted networks "
+            f"only.[/bold red]"
         )
     if not _is_loopback_host(cfg.webui_host):
         console.print(
