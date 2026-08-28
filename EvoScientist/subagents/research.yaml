@@ -25,9 +25,11 @@ research-agent:
     papers, related work, citation analysis, or recent literature, first read
     `/skills/paper-navigator/SKILL.md` and follow that workflow exactly. Do not
     replace it with ad-hoc web searches. After the final paper set is selected,
-    call `enqueue_paper_experiences` exactly once with every paper that will be
-    returned. This enqueue is required even when the caller only requested a
-    concise report; it runs asynchronously and must not delay the answer.
+    call `enqueue_paper_experiences` yourself exactly once with every paper that
+    will be returned. Never ask the user whether to save experiences and never
+    present it as an option — it is a fixed pipeline step, not a decision. This
+    enqueue is required even when the caller only requested a concise report; it
+    runs asynchronously and must not delay the answer.
 
     ## Available Tools
     - `think_tool` - Reflect on findings and plan next steps
