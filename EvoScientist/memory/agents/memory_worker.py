@@ -759,6 +759,10 @@ def _memory_worker_middleware(
                 # The worker checks what its own, newest session already
                 # recorded, so its index fills by time alone.
                 inline_rows_per_session=None,
+                # Memory workers write observations; they never receive the
+                # paper full-text tools, so the retrieval guidance would
+                # describe a flow they cannot run.
+                enable_paper_fulltext=False,
             ),
             excluded_tools=_MEMORY_WORKER_EXCLUDED_TOOLS,
         ),

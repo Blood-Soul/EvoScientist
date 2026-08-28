@@ -13,6 +13,12 @@ ExperienceLevel = Literal["l1", "l2"]
 # langgraph-api fills with its own limit otherwise.
 MEMORY_AGENT_RECURSION_LIMIT = 100
 
+# What a search document represents. "paper_chunk" records are addressed by
+# `C-*` ids and are searched by the dedicated paper full-text tools, never by
+# `search_observations` -- mixing thousands of chunks into that ranking would
+# bury the `E-*` and `O-*` records it exists to surface.
+MemoryRecordKind = Literal["observation", "experience", "paper_chunk"]
+
 
 class MemoryType(StrEnum):
     """Kinds of reusable memory an observation can represent."""
@@ -93,7 +99,7 @@ class ObservationSearchDocument:
     related_observations: tuple[RelatedObservationResult, ...] = ()
     created_at: str | None = None
     source_session_id: str | None = None
-    record_kind: Literal["observation", "experience"] = "observation"
+    record_kind: MemoryRecordKind = "observation"
     experience_level: ExperienceLevel | None = None
 
 
@@ -106,7 +112,7 @@ class ObservationSearchHit(TypedDict):
     scope: MemoryScope
     summary: str
     matches: list[str]
-    record_kind: NotRequired[Literal["observation", "experience"]]
+    record_kind: NotRequired[MemoryRecordKind]
     experience_level: NotRequired[ExperienceLevel]
     related_observations: NotRequired[list[RelatedObservationResult]]
     score: NotRequired[float]
@@ -121,6 +127,6 @@ class ObservationReadResult(TypedDict):
     scope: MemoryScope
     summary: str
     text: str
-    record_kind: NotRequired[Literal["observation", "experience"]]
+    record_kind: NotRequired[MemoryRecordKind]
     experience_level: NotRequired[ExperienceLevel]
     related_observations: NotRequired[list[RelatedObservationResult]]

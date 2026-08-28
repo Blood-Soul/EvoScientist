@@ -5,7 +5,8 @@ The langgraph-api host supports a top-level ``http`` key in
 process as the graph. It hosts the project registry and registration
 (``/api/workspaces``), the settings and local-secret routes, the
 AutoSkills reconcile, and the model registry the WebUI's ``/model``
-picker needs.
+picker needs, plus the ``/debug`` pages developers use to inspect on-disk
+state without a front-end change.
 
 Why this lives here and not as a separate sidecar: the WebUI talks to
 ``EvoSci deploy``'s langgraph endpoint anyway, so one server keeps the
@@ -47,6 +48,10 @@ from EvoScientist.langgraph_dev.boundary import (
     BrowserBoundary,
     Trust,
     tunnel_host,
+)
+from EvoScientist.langgraph_dev.paper_inspector import (
+    get_paper_store_json,
+    get_paper_store_page,
 )
 from EvoScientist.llm.models import list_model_picker_entries
 from EvoScientist.local_secret import (
@@ -558,6 +563,12 @@ def _build_app() -> Starlette:
         routes=[
             Route("/api/models", get_models, methods=["GET"]),
             Route("/api/teams", get_teams, methods=["GET"]),
+            # Developer debug surface, not part of the WebUI's API contract.
+            # Served from here because this app already shares the dev
+            # server's origin, so inspecting the paper chunk store costs no
+            # front-end change.
+            Route("/debug/papers", get_paper_store_page, methods=["GET"]),
+            Route("/debug/papers.json", get_paper_store_json, methods=["GET"]),
             Route("/api/bg_process_status", get_bg_process_status, methods=["GET"]),
             Route(
                 "/api/bg_processes/running", get_bg_processes_running, methods=["GET"]
