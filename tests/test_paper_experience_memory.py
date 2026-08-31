@@ -530,6 +530,38 @@ def test_parser_rejects_malformed_current_schema() -> None:
         parse_experience_json(json.dumps(payload), level="l1", paper_id="paper-new")
 
 
+def test_model_supplied_discipline_is_accepted_and_canonicalized() -> None:
+    """The model reading the paper is a better discipline source than arXiv.
+
+    `domain_arxiv` is supplied by the caller at enqueue time and absent for
+    anything that did not come from arXiv -- which is most of the non-CS
+    literature this library is meant to hold.
+    """
+    payload = _llm_payload("paper-new", "statement", level="l1")
+    payload["experiences"][0]["discipline"] = "  BIO "
+
+    parsed = parse_experience_json(
+        json.dumps(payload), level="l1", paper_id="paper-new"
+    )
+
+    # Stored canonically, because `discipline` is an exact-match filter: the
+    # value on disk has to be the one a `discipline=` query is written against.
+    assert parsed["experiences"][0]["discipline"] == "bio"
+
+
+def test_parser_rejects_out_of_vocabulary_discipline() -> None:
+    """An unknown value would make a facet no query can name.
+
+    Normalizing silently would file the record under something the caller never
+    asked for; rejecting keeps the vocabulary bounded at the point of entry.
+    """
+    payload = _llm_payload("paper-new", "statement", level="l1")
+    payload["experiences"][0]["discipline"] = "biology"
+
+    with pytest.raises(ExperienceOutputError, match="discipline"):
+        parse_experience_json(json.dumps(payload), level="l1", paper_id="paper-new")
+
+
 def test_parser_injects_runtime_fields_into_current_schema() -> None:
     parsed = parse_experience_json(
         json.dumps(_llm_payload("paper-new", "statement", level="l1")),

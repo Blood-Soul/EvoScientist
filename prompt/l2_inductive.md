@@ -6,6 +6,7 @@ Return only a JSON object with this shape:
 
 ```json
 {"experiences": [{
+  "discipline": "cs",
   "domain": "agent_planning",
   "task": "specific capability",
   "statement": "A clean, self-contained inductive experience.",
@@ -31,7 +32,16 @@ not_applicable_when, scope, action, effect, rationale,
 rationale_depth, evidence
 ```
 
-Two additional **optional** fields support downstream reuse:
+Three additional **optional** fields support downstream retrieval and reuse:
+
+- `discipline`: the paper's broad field, exactly one of `cs`, `math`, `physics`,
+  `chem`, `bio`, `med`, `materials`, `earth`, `econ`, `eng`, `other`. This is a
+  deliberately coarse top-level facet used to keep a cross-disciplinary library
+  from answering a chemistry question with computer-science records; `domain`
+  remains the fine-grained subject. Judge it from the paper itself, not from
+  where it was published. Omit the field if genuinely unclear rather than
+  guessing -- the runtime then derives it from the arXiv category, and falls
+  back to `other`, which stays browsable.
 
 - `transferable_core`: ≤60 words, a paper-agnostic rephrasing of the claim
   suitable for semantic matching in multi-source contexts. Strip out all
