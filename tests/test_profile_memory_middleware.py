@@ -314,14 +314,19 @@ def test_observation_index_over_budget_keeps_entries_that_fit(tmp_path, monkeypa
         source_agent="research-agent",
     )
 
+    # `max_inline_chars` is the budget for the whole index, of which the
+    # observation block holds a fixed share; the other blocks get their own so a
+    # large experience library cannot starve them. The value here is sized so
+    # the observation share lands between one entry and two.
+    max_inline_chars = 2_800
     context = build_observation_index_context(
         memory_dir=memories,
         project_id=project_id,
-        max_inline_chars=1_350,
+        max_inline_chars=max_inline_chars,
     )
 
     assert "Observation index truncated to entries that fit." in context
-    assert len(context) <= 1_350
+    assert len(context) <= max_inline_chars
     assert "over-budget observation" in context
 
 

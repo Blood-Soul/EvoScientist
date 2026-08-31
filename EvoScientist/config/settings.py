@@ -338,6 +338,14 @@ class EvoScientistConfig:
     # Characters repeated across a split boundary so a statement straddling it
     # still appears whole in at least one chunk. Clamped below the chunk size.
     memory_paper_chunk_overlap_chars: int = 200
+    # Experience retrieval. `E-*` records are searched and browsed through their
+    # own entry points (`search_experience`, `list_experience`) rather than
+    # through `search_observations`: the two stores answer different questions,
+    # and sharing one tool made the observation store's process-shaped query
+    # vocabulary the vocabulary of both, so subject-matter queries missed.
+    # Disabling stops tool registration and prompt injection; records on disk
+    # stay readable by ID through `read_memory`.
+    memory_experience_search_enabled: bool = True
     # Experience-to-policy reuse. An `E-*` record is source-bound prose about
     # what one paper's authors did; injecting it directly makes an agent copy
     # the source's datasets, models, and numbers. When enabled, the
@@ -633,6 +641,7 @@ class MemoryControls:
     observation_writer: MemoryObservationWriter
     workers_enabled: bool
     paper_fulltext_enabled: bool = True
+    experience_search_enabled: bool = True
     experience_policy_enabled: bool = True
     experience_policy_max_selected: int = 4
 
@@ -644,6 +653,7 @@ class MemoryControls:
             observation_writer=config.memory_observation_writer,
             workers_enabled=config.memory_workers_enabled,
             paper_fulltext_enabled=config.memory_paper_fulltext_enabled,
+            experience_search_enabled=config.memory_experience_search_enabled,
             experience_policy_enabled=config.memory_experience_policy_enabled,
             experience_policy_max_selected=config.memory_experience_policy_max_selected,
         )
@@ -957,6 +967,9 @@ _ENV_MAPPINGS = {
     "memory_observation_cache_max_files": "EVOSCIENTIST_MAX_CACHED_FILES",
     "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
     "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",
+    "memory_experience_search_enabled": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_SEARCH_ENABLED"
+    ),
     "memory_experience_policy_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_ENABLED",
     "memory_experience_policy_max_selected": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_MAX_SELECTED"

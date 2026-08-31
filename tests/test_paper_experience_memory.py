@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import EvoScientist.middleware.memory as memory_middleware
 from EvoScientist.memory.agents import paper_experience_worker
 from EvoScientist.memory.experiences import (
     EXPERIENCE_CATALOG_FILENAME,
+    browse_experience_facets,
     claim_next_task,
     enqueue_paper,
     experience_catalog_path,
@@ -19,7 +21,7 @@ from EvoScientist.memory.experiences import (
     read_memory_file,
     refresh_all_experience_catalogs,
     run_experience_extraction,
-    search_memory_files,
+    search_experience_records,
     store_paper_experiences,
 )
 from EvoScientist.memory.experiences.extraction import (
@@ -32,6 +34,7 @@ from EvoScientist.memory.observations import (
     MemorySourceType,
     MemoryType,
     record_observation_file,
+    search_observation_files,
 )
 from EvoScientist.tools import paper_experience_active
 from EvoScientist.tools.paper_experience_queue import (
@@ -156,10 +159,10 @@ def test_experience_storage_is_project_scoped_and_searchable(tmp_path: Path) -> 
     assert {document.experience_level for document in alpha} == {"l1", "l2"}
     assert all("experiences/projects/P-alpha" in document.path for document in alpha)
 
-    hits = search_memory_files(
+    hits = search_experience_records(
         memory_dir=tmp_path,
         project_id="P-alpha",
-        query="contrastive catalyst",
+        topic="contrastive catalyst",
     )
     assert {hit["record_kind"] for hit in hits} == {"experience"}
     read = read_memory_file(
@@ -172,9 +175,17 @@ def test_experience_storage_is_project_scoped_and_searchable(tmp_path: Path) -> 
     assert "contrastive catalyst" in read["text"]
 
 
-def test_observation_and_experience_stores_are_separate_but_search_together(
+def test_observation_and_experience_retrieval_are_separate_entry_points(
     tmp_path: Path,
 ) -> None:
+    """Each store answers only its own queries, even on a shared token.
+
+    This previously asserted the opposite -- that one query returned both kinds
+    -- which is the behaviour that broke experience retrieval. A single entry
+    point meant a single query vocabulary, and since the observation store came
+    first, process-shaped queries got aimed at records that only ever hold
+    subject-matter findings.
+    """
     _store(tmp_path, project_id="P-alpha", marker="shared retrieval token")
     record_observation_file(
         memory_dir=tmp_path,
@@ -182,25 +193,293 @@ def test_observation_and_experience_stores_are_separate_but_search_together(
         memory_type=MemoryType.SEMANTIC,
         summary="Shared retrieval token observation",
         observation="shared retrieval token appears in an observation",
-        why_it_matters="It verifies mixed retrieval without mixed storage.",
+        why_it_matters="It verifies split retrieval over shared storage roots.",
         scope=MemoryScope.PROJECT,
         source_type=MemorySourceType.TURN,
         source_session_id="thread-1",
         source_agent="EvoScientist",
     )
 
-    hits = search_memory_files(
+    experience_hits = search_experience_records(
+        memory_dir=tmp_path,
+        project_id="P-alpha",
+        topic="shared retrieval token",
+        limit=10,
+    )
+    observation_hits = search_observation_files(
         memory_dir=tmp_path,
         project_id="P-alpha",
         query="shared retrieval token",
         limit=10,
     )
-    assert {hit.get("record_kind", "observation") for hit in hits} == {
-        "observation",
-        "experience",
-    }
+
+    assert experience_hits
+    assert observation_hits
+    assert {hit["record_kind"] for hit in experience_hits} == {"experience"}
+    assert all(
+        hit.get("record_kind", "observation") == "observation"
+        for hit in observation_hits
+    )
     assert list((tmp_path / "observations").rglob("*.md"))
     assert list((tmp_path / "experiences").rglob("l1.json"))
+
+
+def test_experience_retrieval_takes_no_observation_filters() -> None:
+    """`memory_type`/`scope` must not be reachable on the experience channel.
+
+    Every `E-*` record is stored semantic/project. The merged retriever accepted
+    both arguments anyway, so `memory_type=procedural` -- the natural pairing for
+    a "how do I do X" query, and one the old tool schema actively suggested --
+    silently returned zero of the library's records with no signal that a filter
+    had emptied the result set.
+    """
+    parameters = inspect.signature(search_experience_records).parameters
+    assert "memory_type" not in parameters
+    assert "scope" not in parameters
+    assert {"topic", "method", "task", "discipline", "domain", "level"} <= set(
+        parameters
+    )
+
+
+def test_experience_search_survives_process_shaped_facets(tmp_path: Path) -> None:
+    """A process-shaped query must not be able to empty the library silently.
+
+    The failure being guarded is not "returns nothing" -- a lexical miss is
+    legitimate -- but returning nothing *because a filter was applied*, which is
+    indistinguishable to the caller from an empty library.
+    """
+    _store(tmp_path, project_id="P-alpha", marker="contrastive catalyst screening")
+
+    assert search_experience_records(
+        memory_dir=tmp_path, project_id="P-alpha", topic="contrastive catalyst"
+    )
+    # Facet-only browse through the search entry point still lists records.
+    assert search_experience_records(memory_dir=tmp_path, project_id="P-alpha")
+    # An unknown discipline filters honestly to empty rather than by accident.
+    assert not search_experience_records(
+        memory_dir=tmp_path,
+        project_id="P-alpha",
+        topic="contrastive catalyst",
+        discipline="bio",
+    )
+
+
+def test_experience_facets_browse_and_page(tmp_path: Path) -> None:
+    _store(tmp_path, project_id="P-alpha", marker="contrastive catalyst screening")
+
+    disciplines = browse_experience_facets(
+        memory_dir=tmp_path, project_id="P-alpha", facet="discipline"
+    )
+    assert disciplines["facet"] == "discipline"
+    assert disciplines["total_records"] == 2
+    assert sum(value["records"] for value in disciplines["values"]) == 2
+
+    records = browse_experience_facets(
+        memory_dir=tmp_path, project_id="P-alpha", facet="records", limit=1
+    )
+    assert records["facet"] == "records"
+    assert records["total_records"] == 2
+    assert len(records["records"]) == 1
+
+    second = browse_experience_facets(
+        memory_dir=tmp_path,
+        project_id="P-alpha",
+        facet="records",
+        limit=1,
+        offset=1,
+    )
+    assert second["offset"] == 1
+    assert second["records"][0]["id"] != records["records"][0]["id"]
+
+    l1_only = browse_experience_facets(
+        memory_dir=tmp_path, project_id="P-alpha", facet="records", level="l1"
+    )
+    assert [record["level"] for record in l1_only["records"]] == ["l1"]
+
+
+def test_experience_summary_leads_with_subject_facets(tmp_path: Path) -> None:
+    """`summary` carries 3x the ranking weight of `body`, so facets belong in it.
+
+    `domain` and `task` are the record's own subject-matter vocabulary and used
+    to live only in the JSON body at weight 1.0, while the summary held the
+    opening characters of `statement` -- prose framing a problem rather than
+    naming the subject it is about.
+    """
+    store_paper_experiences(
+        memory_dir=tmp_path,
+        project_id="P-alpha",
+        paper_id="2401.01234",
+        url="https://arxiv.org/abs/2401.01234",
+        title="Catalyst Study",
+        paper_text="full paper",
+        prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+        payloads={
+            "l1": _new_payload("2401.01234", "L1 statement", level="l1"),
+            "l2": _new_payload("2401.01234", "L2 statement", level="l2"),
+        },
+        domain_arxiv="cs.AI",
+    )
+
+    documents = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+    assert documents
+    for document in documents:
+        assert document.domain == "agent_learning"
+        assert document.task == "test task"
+        # Facets first, then the descriptive tail: what the record is ABOUT is
+        # what the high-weight field should carry.
+        assert document.summary.startswith("agent_learning · test task · ")
+        assert document.discipline == "cs"
+        assert document.paper_key
+
+
+def test_legacy_records_without_facets_stay_retrievable(tmp_path: Path) -> None:
+    """Records predating the facet fields must not drop out of the library.
+
+    The facets are optional on purpose. A record written before they existed has
+    no `domain`/`task` and no `discipline`, and the fallback puts it in `other`
+    rather than excluding it -- an unreachable record is worse than a coarsely
+    filed one.
+    """
+    _store(tmp_path, project_id="P-alpha", marker="contrastive catalyst screening")
+
+    documents = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+    assert documents
+    assert {document.discipline for document in documents} == {"other"}
+    assert all(document.domain is None for document in documents)
+    assert all(document.summary for document in documents)
+    assert search_experience_records(
+        memory_dir=tmp_path, project_id="P-alpha", topic="contrastive catalyst"
+    )
+    browsed = browse_experience_facets(
+        memory_dir=tmp_path, project_id="P-alpha", facet="discipline"
+    )
+    assert browsed["values"] == [{"value": "other", "records": 2}]
+
+
+def test_experience_ids_follow_content_not_position(tmp_path: Path) -> None:
+    """An `E-*` ID must name one claim, even when re-extraction reorders records.
+
+    The ID used to hash the record's index in its level's array. Re-extracting a
+    paper reorders or re-counts records, so the same finding took a new ID and a
+    different finding inherited the old one. Two things read an ID as meaning one
+    specific claim: the policy cache keyed on `(task, sorted(selected_ids))`, and
+    the audit trail from a policy line back to its supporting record. Under drift
+    the cache serves a policy synthesized from other records.
+    """
+    first = _new_payload("2401.01234", "first finding", level="l1")
+    second = _new_payload("2401.01234", "second finding", level="l1")
+    both = dict(first)
+    both["experiences"] = [
+        first["experiences"][0],  # type: ignore[index]
+        second["experiences"][0],  # type: ignore[index]
+    ]
+    reversed_order = dict(first)
+    reversed_order["experiences"] = list(reversed(both["experiences"]))  # type: ignore[arg-type]
+
+    def store_and_map(payload: dict[str, object]) -> dict[str, str]:
+        store_paper_experiences(
+            memory_dir=tmp_path,
+            project_id="P-alpha",
+            paper_id="2401.01234",
+            url="https://arxiv.org/abs/2401.01234",
+            title="Catalyst Study",
+            paper_text="full paper",
+            prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+            payloads={
+                "l1": payload,
+                "l2": _new_payload("2401.01234", "L2 statement", level="l2"),
+            },
+            domain_arxiv="cs.AI",
+        )
+        documents = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+        return {
+            document.observation_id: document.body
+            for document in documents
+            if document.experience_level == "l1"
+        }
+
+    before = store_and_map(both)
+    after = store_and_map(reversed_order)
+
+    assert len(before) == 2
+    # Same two claims, so the same two IDs -- order in the payload is not part
+    # of a record's identity.
+    assert set(before) == set(after)
+    for record_id, body in before.items():
+        statement_before = "first finding" if "first finding" in body else "second"
+        assert statement_before in after[record_id]
+
+
+def test_experience_parse_cache_reuses_documents_until_the_file_changes(
+    tmp_path: Path,
+) -> None:
+    """Re-reading and re-parsing every level file per query does not scale.
+
+    `experience_library_stats` runs on every model request, so the parse cost is
+    paid on the hot path. The cache is validated on mtime and size rather than
+    on a timer, so a rewritten file is still picked up -- correctness does not
+    depend on the library being small.
+    """
+    from EvoScientist.memory.experiences.store import reset_experience_parse_cache
+
+    _store(tmp_path, project_id="P-alpha", marker="cached catalyst lesson")
+    reset_experience_parse_cache()
+
+    first = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+    second = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+    assert first
+    assert len(first) == len(second)
+    # Same objects, not merely equal ones: the parse was skipped entirely.
+    assert all(a is b for a, b in zip(first, second, strict=True))
+
+    store_paper_experiences(
+        memory_dir=tmp_path,
+        project_id="P-alpha",
+        paper_id="2401.01234",
+        url="https://arxiv.org/abs/2401.01234",
+        title="Catalyst Study",
+        paper_text="full paper",
+        prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+        payloads={
+            "l1": _payload("2401.01234", "rewritten catalyst lesson"),
+            "l2": _payload("2401.01234", "rewritten catalyst claim"),
+        },
+    )
+    third = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+    assert any("rewritten catalyst lesson" in document.body for document in third)
+
+
+def test_ranked_search_memoizes_document_tokens_without_changing_scores(
+    tmp_path: Path,
+) -> None:
+    """Tokenizing is corpus-wide work repeated per facet pass, so it is memoized.
+
+    Every document is tokenized to compute IDF whether or not it can score, and
+    facet fusion multiplied that by the number of facets supplied. The memo must
+    be invisible in the results: it is a cache of the document's own fields, so
+    the tokens it hands back have to equal a fresh tokenization.
+    """
+    from EvoScientist.memory.search import _tokens, document_token_index
+
+    _store(tmp_path, project_id="P-alpha", marker="memoized catalyst lesson")
+    documents = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
+    assert documents
+
+    for document in documents:
+        index = document_token_index(document)
+        assert index.id_tokens == frozenset(_tokens(document.observation_id))
+        assert index.summary_tokens == frozenset(_tokens(document.summary))
+        assert index.body_tokens == frozenset(_tokens(document.body))
+        assert index.all_tokens >= index.summary_tokens | index.body_tokens
+        # Second call returns the memo rather than rebuilding it.
+        assert document_token_index(document) is index
+
+    # The memo is not part of the record's identity, so it must not leak into
+    # equality -- a document is the same document before and after being scored.
+    assert documents[0] == documents[0]
+    assert search_experience_records(
+        memory_dir=tmp_path, project_id="P-alpha", topic="memoized catalyst"
+    )
 
 
 def test_experience_catalog_is_webui_visible_and_derived(tmp_path: Path) -> None:

@@ -5,7 +5,15 @@ planner-agent:
   # apply_experience is the primary memory path here: a plan is exactly where a
   # source-bound experience record gets copied verbatim (the paper's dataset,
   # model, and thresholds), and it returns those as values to re-derive instead.
-  tools: [think_tool, apply_experience, search_paper_text, read_paper]
+  tools:
+    [
+      think_tool,
+      search_experience,
+      list_experience,
+      apply_experience,
+      search_paper_text,
+      read_paper,
+    ]
   skills: ["/skills/"]
   system_prompt: |
     You are the planner-agent. You do NOT implement code. You create and update experimental plans
