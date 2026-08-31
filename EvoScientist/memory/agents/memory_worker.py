@@ -455,8 +455,10 @@ def _memory_worker_middleware(
                 enable_observation_tool=enable_observation_tool,
                 # Memory workers write observations; they never receive the
                 # paper full-text tools, so the retrieval guidance would
-                # describe a flow they cannot run.
+                # describe a flow they cannot run. `apply_experience` is out for
+                # the same reason, and reuse is a reader's concern regardless.
                 enable_paper_fulltext=False,
+                enable_experience_policy=False,
             ),
             excluded_tools=_MEMORY_WORKER_EXCLUDED_TOOLS,
         ),

@@ -17,17 +17,36 @@ Return only a JSON object with this shape:
   "effect": "Observed or expected result.",
   "rationale": "Author-stated reason, or null.",
   "rationale_depth": "deep",
-  "evidence": [{"section": "discussion", "quote": "verbatim quote"}]
+  "evidence": [{"section": "discussion", "quote": "verbatim quote"}],
+  "transferable_core": "The claim with every source-specific value stripped.",
+  "bindings": [{"name": "GPT-4", "kind": "model"}]
 }]}
 ```
 
-Every experience MUST contain exactly these 12 fields:
+Every experience MUST contain these 12 fields:
 
 ```text
 domain, task, statement, claim_type, applicable_when,
 not_applicable_when, scope, action, effect, rationale,
 rationale_depth, evidence
 ```
+
+Two additional **optional** fields support downstream reuse:
+
+- `transferable_core`: ≤60 words, a paper-agnostic rephrasing of the claim
+  suitable for semantic matching in multi-source contexts. Strip out all
+  dataset names, model names, specific hyperparameters, and scale mentions, but
+  keep the causal structure ("when X, doing Y yields Z"). For example, if the
+  claim is "using GPT-4 as the backbone, reflection improves accuracy by 15%
+  across coding tasks", the core is "when using large language models, adding a
+  reflection step improves reasoning accuracy". Omit this field if the claim
+  does not transfer meaningfully.
+
+- `bindings`: an array of `{name, kind}` objects listing every source-fixed
+  value in the claim. The `kind` must be one of: `dataset`, `model`, `scale`,
+  `hyperparam`, `baseline`, `metric`, `toolchain`, `other`. For example:
+  `[{"name": "GPT-4", "kind": "model"}, {"name": "HumanEval", "kind":
+  "dataset"}]`. Omit this field if no source-fixed values appear.
 
 Do NOT output `id`, `layer`, `paper_id`, `domain_arxiv`, `utility`,
 `confidence`, `source_id`, `created_at`, or extraction metadata. The runtime
@@ -61,6 +80,14 @@ Extract only genuine claims; zero is valid and the soft cap is about six.
   `abstract`, `introduction`, `method`, `experiment`, `results`, `discussion`,
   or `conclusion`. `quote` must be verbatim, at least 150 characters, and cover
   the claim plus its supporting finding. Do not invent evidence.
+
+The two optional fields exist because a later agent must reuse these records on
+a task with *different* datasets, models, and scales. Recording which values are
+source-fixed (`bindings`) alongside what survives their removal
+(`transferable_core`) lets that agent re-derive the values for its own setting
+instead of copying yours. Note that gate 3 above already requires the claim to
+survive removal of the paper's system name; `transferable_core` is that surviving
+form written out explicitly.
 
 The runtime calculates initial evidence confidence and later aggregation may
 raise or lower it using independent supporting and contradicting papers.

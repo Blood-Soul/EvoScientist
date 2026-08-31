@@ -358,6 +358,13 @@ def _inject_subagent_middleware(
                 MemoryObservationTarget.AGENT
             ),
             enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
+            # Gated on the subagent actually holding the tool: the instructions
+            # tell it to route reuse through `apply_experience`, which is wrong
+            # guidance for a subagent whose YAML does not grant it.
+            enable_experience_policy=(
+                memory_controls.experience_policy_enabled
+                and "apply_experience" in (sa.get("tools") or [])
+            ),
             memory_scheduler=memory_scheduler,
         )
         middleware = [
@@ -637,6 +644,7 @@ def _build_paper_tools(*, cfg, workspace_dir):
     """
     from .memory.project import resolve_project_id
     from .tools import (
+        create_apply_experience_tool,
         create_extract_paper_experiences_tool,
         create_paper_experience_queue_tool,
         create_read_paper_tool,
@@ -666,6 +674,15 @@ def _build_paper_tools(*, cfg, workspace_dir):
             tool = factory(memory_dir=memory_dir, project_id=project_id)
             tool_registry[tool.name] = tool
             base_tools.append(tool)
+
+    if getattr(cfg, "memory_experience_policy_enabled", True):
+        policy_tool = create_apply_experience_tool(
+            memory_dir=memory_dir,
+            project_id=project_id,
+            max_selected=getattr(cfg, "memory_experience_policy_max_selected", 4),
+        )
+        tool_registry[policy_tool.name] = policy_tool
+        base_tools.append(policy_tool)
 
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
@@ -964,6 +981,7 @@ def _get_default_middleware(
             MemoryObservationTarget.AGENT
         ),
         enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
+        enable_experience_policy=memory_controls.experience_policy_enabled,
         memory_scheduler=memory_scheduler,
         # First-contact intro: main agent only, and never in unattended runs.
         enable_profile_bootstrap=not for_async_subagent and not bool(cfg.auto_mode),

@@ -15,16 +15,36 @@ Return only a JSON object with this shape:
   "action": "What was concretely done.",
   "effect": "Measured result, including numbers where reported.",
   "practice_trace": [{"action": "step", "feedback": "result"}],
-  "evidence": [{"section": "experiment", "quote": "verbatim quote"}]
+  "evidence": [{"section": "experiment", "quote": "verbatim quote"}],
+  "transferable_core": "The claim with every source-specific value stripped.",
+  "bindings": [{"name": "ImageNet", "kind": "dataset"}]
 }]}
 ```
 
-Every experience MUST contain exactly these 10 fields:
+Every experience MUST contain these 10 fields:
 
 ```text
 domain, task, statement, applicable_when, not_applicable_when, scope,
 action, effect, practice_trace, evidence
 ```
+
+Two additional **optional** fields support downstream reuse:
+
+- `transferable_core`: ≤60 words, a paper-agnostic rephrasing of the claim
+  suitable for semantic matching in multi-source contexts. Strip out all
+  dataset names, model names, specific hyperparameters, and scale mentions, but
+  keep the causal structure ("when X, doing Y yields Z"). For example, if the
+  claim is "on ImageNet with ResNet-50, cosine LR schedule reduced overfitting
+  by 3.2%", the core is "when training large vision models, using a cosine LR
+  schedule reduces overfitting". Omit this field if the claim does not transfer
+  meaningfully (e.g., a pure ablation of a single method's hyperparameters).
+
+- `bindings`: an array of `{name, kind}` objects listing every source-fixed
+  value in the claim. The `kind` must be one of: `dataset`, `model`, `scale`,
+  `hyperparam`, `baseline`, `metric`, `toolchain`, `other`. For example:
+  `[{"name": "ImageNet", "kind": "dataset"}, {"name": "ResNet-50", "kind":
+  "model"}, {"name": "cosine schedule", "kind": "hyperparam"}]`. Omit this
+  field if no source-fixed values appear (rare).
 
 Do NOT output `id`, `layer`, `paper_id`, `domain_arxiv`, `utility`,
 `confidence`, `source_id`, `created_at`, or extraction metadata. The runtime
@@ -60,6 +80,13 @@ or two records, while a rich empirical paper should stay near six or fewer.
 
 Use the paper's terminology, datasets, models, metrics, hyperparameters and
 limitations. Keep statements clean and put all provenance only in evidence.
+
+The two optional fields exist because a later agent must reuse these records on
+a task with *different* datasets, models, and scales. Recording which values are
+source-fixed (`bindings`) alongside what survives their removal
+(`transferable_core`) lets that agent re-derive the values for its own setting
+instead of copying yours. Populate them whenever the claim contains any
+source-specific value; the record stays valid without them, but reuse degrades.
 
 ## Input
 
