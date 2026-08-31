@@ -1,0 +1,273 @@
+{
+  "_comment": [
+    "Fixture for scripts/policy_ab.py. Each paper's experiences are stored as-is",
+    "into a throwaway memory dir, so records here use the post-normalization shape",
+    "(id/layer/confidence already present) rather than raw extractor output.",
+    "Every source-fixed value MUST appear in `bindings`: the harness scores a stale",
+    "binding by matching those names against the plan, so a value missing here is a",
+    "value the harness cannot catch. Task `target_values` are what a correct plan",
+    "should land on instead, and must not overlap any source binding name."
+  ],
+  "tasks": [
+    {
+      "name": "medical_dialogue_sft",
+      "description": "Supervised-finetune Llama-3-8B on 40k internal doctor-patient dialogue turns so it answers triage questions in our clinic's house style.",
+      "setting": "Single node, 8x A100 80GB. Data is private and cannot leave the cluster. Success is human preference over the current template-based responder, measured by three clinicians.",
+      "target_values": ["Llama-3-8B", "40k", "A100", "clinician"]
+    },
+    {
+      "name": "cifar_vit_classifier",
+      "description": "Train a ViT-Tiny image classifier on CIFAR-10 to beat 94% test accuracy within a two-hour budget.",
+      "setting": "One RTX 4090. CIFAR-10 is 50k 32x32 training images across 10 classes. Wall-clock budget is hard; accuracy is the only quality metric.",
+      "target_values": ["ViT-Tiny", "CIFAR-10", "94", "4090", "32x32"]
+    },
+    {
+      "name": "internal_pdf_retrieval",
+      "description": "Build retrieval over 20k internal engineering PDFs using bge-m3 embeddings so support engineers can find the paragraph that answers a customer question.",
+      "setting": "PDFs are 5-300 pages, heavy on tables and code blocks. Queries are natural-language support tickets. Success is recall@10 judged on 200 hand-labelled ticket-to-paragraph pairs.",
+      "target_values": ["bge-m3", "20k", "recall@10", "200"]
+    },
+    {
+      "name": "small_model_dpo",
+      "description": "Align a 1.5B-parameter chat model with DPO on 12k internal preference pairs collected from support-agent thumbs-up/down.",
+      "setting": "Preference pairs are noisy: labellers are support agents, not annotators, and agreement is around 0.6. Two 4090s. Success is win rate against the current model on a held-out 500-pair set.",
+      "target_values": ["DPO", "1.5B", "12k", "win rate"]
+    }
+  ],
+  "papers": [
+    {
+      "paper_id": "2301.11111",
+      "title": "Cosine Schedules and Overfitting in Large-Scale Image Classification",
+      "url": "https://arxiv.org/abs/2301.11111",
+      "l1": [
+        {
+          "domain": "computer_vision",
+          "task": "image classification training schedule",
+          "statement": "Training ResNet-50 on ImageNet-1k for 90 epochs, replacing the standard step-decay learning rate schedule with a cosine annealing schedule that starts at 0.1 and anneals to 1e-5 reduced the train-test accuracy gap from 8.4 points to 5.2 points and raised top-1 validation accuracy from 76.1% to 77.3%. The effect held across three seeds with a standard deviation of 0.14 points. Batch size was 256 across 8 V100 GPUs with SGD momentum 0.9 and weight decay 1e-4. The gap reduction concentrated in the final 20 epochs, where step decay plateaued while cosine continued to lower the effective learning rate smoothly. Runs shorter than 40 epochs showed no significant difference between the two schedules, because the cosine curve had not yet entered its low-learning-rate phase where the regularizing effect appears. The authors also report that combining cosine annealing with label smoothing at 0.1 produced no additional gap reduction beyond cosine alone, suggesting the two mechanisms address overlapping sources of overconfidence rather than complementary ones.",
+          "applicable_when": ["training runs of at least 40 epochs", "large-scale image classification with more than 1M training images", "SGD with momentum"],
+          "not_applicable_when": ["short fine-tuning runs under 40 epochs", "adaptive optimizers where the schedule interacts with per-parameter scaling", "datasets small enough that overfitting is dominated by data volume rather than schedule"],
+          "scope": "Image classification, 25M parameter convolutional backbone, ImageNet-scale pretraining from random initialization.",
+          "action": "Replace step-decay learning rate schedule with cosine annealing from 0.1 to 1e-5 over the full epoch budget.",
+          "effect": "Train-test gap fell from 8.4 to 5.2 points; top-1 rose from 76.1% to 77.3% across three seeds.",
+          "practice_trace": [
+            {"action": "Train ResNet-50 on ImageNet-1k for 90 epochs with step decay at epochs 30/60/80", "feedback": "76.1% top-1, 8.4-point train-test gap"},
+            {"action": "Swap in cosine annealing from 0.1 to 1e-5 over 90 epochs, all else fixed", "feedback": "77.3% top-1, 5.2-point train-test gap"},
+            {"action": "Repeat the cosine run at 40 and 20 epochs", "feedback": "No significant difference from step decay below 40 epochs"},
+            {"action": "Add label smoothing 0.1 on top of cosine", "feedback": "No further gap reduction, 77.4% top-1"}
+          ],
+          "evidence": [{"section": "experiment", "quote": "Replacing step decay with cosine annealing over the same 90-epoch budget reduces the train-test accuracy gap from 8.4 to 5.2 points and improves top-1 validation accuracy from 76.1% to 77.3%, averaged over three seeds with standard deviation 0.14."}],
+          "transferable_core": "In long training runs, annealing the learning rate smoothly to near zero rather than in discrete steps reduces overfitting, with the benefit appearing only once the run is long enough to reach the low-learning-rate phase.",
+          "bindings": [
+            {"name": "ImageNet", "kind": "dataset"},
+            {"name": "ResNet-50", "kind": "model"},
+            {"name": "90 epochs", "kind": "hyperparam"},
+            {"name": "0.1", "kind": "hyperparam"},
+            {"name": "1e-5", "kind": "hyperparam"},
+            {"name": "batch size 256", "kind": "hyperparam"},
+            {"name": "V100", "kind": "toolchain"},
+            {"name": "step decay", "kind": "baseline"},
+            {"name": "top-1 accuracy", "kind": "metric"}
+          ]
+        }
+      ],
+      "l2": [
+        {
+          "domain": "computer_vision",
+          "task": "choosing a learning rate schedule",
+          "statement": "Learning rate schedule choice acts as a regularizer whose strength depends on the total optimization budget rather than on the dataset or architecture in isolation. Schedules that decay smoothly to a very low terminal learning rate spend their final phase making small, well-averaged updates, which the authors interpret as an implicit averaging effect that narrows the train-test gap. Because that phase is a fixed fraction of the schedule rather than a fixed number of steps, the benefit scales with run length and vanishes for runs too short to reach it. This reframes schedule selection as a budget-conditioned decision: the same schedule that helps a 90-epoch run can be neutral or harmful in a 10-epoch run, so schedule comparisons reported at one budget do not transfer to another. The authors note the same reasoning predicts that any schedule reaching a comparably low terminal learning rate should show similar gap reduction, and report a linear-decay-to-zero control that matches cosine within 0.2 points, supporting the mechanism over the specific curve shape.",
+          "claim_type": "conditional",
+          "applicable_when": ["comparing learning rate schedules", "the total step budget is known and fixed", "training from scratch rather than brief fine-tuning"],
+          "not_applicable_when": ["step budget is not fixed in advance", "schedules that never reach a low terminal learning rate", "runs short enough that the terminal phase is never entered"],
+          "scope": "Supervised training of vision backbones from random initialization, budgets from 20 to 90 epochs, convolutional and comparable architectures.",
+          "action": "Treat schedule choice as conditional on the step budget, and re-evaluate rather than inherit a schedule when the budget changes.",
+          "effect": "Predicts, and the paper confirms, that the schedule's regularizing benefit disappears below roughly half the original epoch budget.",
+          "rationale": "The regularizing effect comes from the terminal low-learning-rate phase acting as implicit weight averaging; that phase is a fraction of the schedule, so short runs never reach it.",
+          "rationale_depth": "deep",
+          "evidence": [{"section": "discussion", "quote": "The benefit is not a property of the cosine curve itself but of the terminal low-learning-rate phase; a linear-decay-to-zero control matches cosine within 0.2 points, and both lose their advantage when the budget falls below 40 epochs."}],
+          "transferable_core": "A training schedule's regularizing benefit is conditional on the total step budget, so a schedule validated at one budget should be re-evaluated rather than inherited when the budget changes.",
+          "bindings": [
+            {"name": "ImageNet", "kind": "dataset"},
+            {"name": "ResNet-50", "kind": "model"},
+            {"name": "cosine annealing", "kind": "hyperparam"},
+            {"name": "40 epochs", "kind": "scale"},
+            {"name": "90 epochs", "kind": "scale"}
+          ]
+        }
+      ]
+    },
+    {
+      "paper_id": "2302.22222",
+      "title": "Warmup and Loss Stability in Instruction Finetuning",
+      "url": "https://arxiv.org/abs/2302.22222",
+      "l1": [
+        {
+          "domain": "natural_language_processing",
+          "task": "instruction finetuning stability",
+          "statement": "Finetuning GPT-3 175B on the 52k-example Alpaca instruction set without a warmup phase produced loss spikes above 4.0 within the first 200 optimizer steps in four of six seeds, and two of those runs never recovered to the loss level of the stable runs. Introducing a linear warmup over the first 5% of total steps, reaching a peak learning rate of 2e-5 before cosine decay, eliminated spikes in all six seeds and improved final held-out perplexity from 6.81 to 6.44. The authors traced the spikes to the interaction between Adam's second-moment estimate and the near-uniform gradient scale of the first few batches: with the moment estimates still uninitialized, the effective step size briefly exceeded the stable region. Warmup lengths between 2% and 10% of total steps performed equivalently within noise, while 1% left spikes in two seeds, indicating the mechanism requires enough steps for the moment estimates to settle rather than a specific fraction. Gradient clipping at 1.0 reduced spike magnitude but did not prevent the non-recovering runs, so clipping alone was not a substitute.",
+          "applicable_when": ["finetuning with Adam or AdamW from a pretrained checkpoint", "instruction or preference data with heterogeneous sequence lengths", "runs where a single unstable seed is expensive to discard"],
+          "not_applicable_when": ["optimizers without accumulated moment estimates such as plain SGD", "continued pretraining where moment estimates are carried over from the previous run", "runs short enough that warmup would consume most of the budget"],
+          "scope": "Instruction finetuning of a 175B-parameter decoder-only language model, 52k examples, single epoch, AdamW.",
+          "action": "Add a linear warmup over the first 5% of total optimizer steps before the main decay schedule.",
+          "effect": "Loss spikes eliminated in all six seeds; held-out perplexity improved from 6.81 to 6.44.",
+          "practice_trace": [
+            {"action": "Finetune GPT-3 175B on Alpaca 52k with no warmup, six seeds", "feedback": "Loss spikes above 4.0 within 200 steps in four seeds; two never recovered"},
+            {"action": "Add gradient clipping at 1.0, no warmup", "feedback": "Spike magnitude reduced but two seeds still failed to recover"},
+            {"action": "Add linear warmup over 5% of steps to peak 2e-5, then cosine decay", "feedback": "No spikes in any of six seeds; perplexity 6.44 versus 6.81"},
+            {"action": "Sweep warmup fraction at 1%, 2%, 5%, 10%", "feedback": "2-10% equivalent within noise; 1% left spikes in two seeds"}
+          ],
+          "evidence": [{"section": "experiment", "quote": "Without warmup, four of six seeds exhibit loss spikes exceeding 4.0 within the first 200 steps, and two fail to recover. A linear warmup over 5% of total steps eliminates spikes across all seeds and improves held-out perplexity from 6.81 to 6.44."}],
+          "transferable_core": "When finetuning with an adaptive optimizer from a pretrained checkpoint, a warmup phase long enough for the optimizer's moment estimates to settle prevents early loss spikes that some runs never recover from; gradient clipping alone does not substitute.",
+          "bindings": [
+            {"name": "GPT-3 175B", "kind": "model"},
+            {"name": "Alpaca", "kind": "dataset"},
+            {"name": "52k", "kind": "scale"},
+            {"name": "5% warmup", "kind": "hyperparam"},
+            {"name": "2e-5", "kind": "hyperparam"},
+            {"name": "AdamW", "kind": "toolchain"},
+            {"name": "gradient clipping at 1.0", "kind": "baseline"},
+            {"name": "perplexity", "kind": "metric"}
+          ]
+        }
+      ],
+      "l2": [
+        {
+          "domain": "natural_language_processing",
+          "task": "diagnosing finetuning instability",
+          "statement": "Early-training instability in adaptive-optimizer finetuning is a transient property of uninitialized optimizer state rather than a property of the data or the learning rate peak, which means the correct remedy is a schedule change rather than a lower learning rate. The authors argue that practitioners who respond to observed spikes by halving the peak learning rate pay a permanent cost in final quality to solve a problem confined to the first few hundred steps, and show a control run at half the peak learning rate that avoids spikes but lands at perplexity 6.79, worse than warmup at the original peak. The general principle is that instability localized in time should be met with a time-localized intervention. The authors extend this to a diagnostic rule: if instability disappears when only the first few hundred steps are altered, the cause is optimizer state rather than data or capacity, and interventions that change the whole run are mis-targeted. They caution the rule does not apply when spikes recur late in training, which in their experience indicates data problems such as duplicated or corrupted examples instead.",
+          "claim_type": "conditional",
+          "applicable_when": ["instability appears in the first few hundred steps and not later", "adaptive optimizer starting from fresh moment estimates", "final quality matters enough that a lower peak learning rate is a real cost"],
+          "not_applicable_when": ["loss spikes recurring late in training, which indicate data problems", "instability that persists after warmup is added", "settings where a lower peak learning rate costs nothing"],
+          "scope": "Finetuning decoder-only language models with AdamW, models from 1B to 175B parameters, single-epoch instruction and preference data.",
+          "action": "When spikes appear early, fix the schedule's first phase rather than lowering the peak learning rate for the whole run.",
+          "effect": "Warmup at the original peak reached perplexity 6.44 versus 6.79 for a halved peak learning rate, both spike-free.",
+          "rationale": "The instability window coincides with the period before Adam's second-moment estimates have accumulated enough history to scale steps correctly, so it is bounded in time and should be treated with a time-bounded fix.",
+          "rationale_depth": "deep",
+          "evidence": [{"section": "discussion", "quote": "Halving the peak learning rate also removes the spikes, but converges to 6.79 perplexity against 6.44 for warmup at the original peak: the whole-run intervention pays a permanent cost for a transient problem."}],
+          "transferable_core": "Instability confined to the start of training should be met with a time-localized fix rather than a global reduction in learning rate, because the global fix pays a permanent quality cost for a transient cause.",
+          "bindings": [
+            {"name": "GPT-3 175B", "kind": "model"},
+            {"name": "AdamW", "kind": "toolchain"},
+            {"name": "5% warmup", "kind": "hyperparam"},
+            {"name": "perplexity", "kind": "metric"},
+            {"name": "halved peak learning rate", "kind": "baseline"}
+          ]
+        }
+      ]
+    },
+    {
+      "paper_id": "2303.33333",
+      "title": "Chunk Granularity in Dense Passage Retrieval",
+      "url": "https://arxiv.org/abs/2303.33333",
+      "l1": [
+        {
+          "domain": "information_retrieval",
+          "task": "chunking strategy for dense retrieval",
+          "statement": "Indexing the BEIR benchmark with Contriever embeddings, the authors compared fixed-size chunking at 128, 256, and 512 tokens against sentence-boundary chunking with a 256-token soft cap. Fixed 256-token chunks reached nDCG@10 of 0.412 averaged across the 14 BEIR datasets, while sentence-boundary chunking at the same soft cap reached 0.431, and the gap widened to 4.1 nDCG points on the three datasets whose documents contain tables. Fixed 128-token chunks scored 0.389 and fixed 512 scored 0.398, making 256 the best fixed size but still worse than boundary-aware chunking. Adding a 32-token overlap to fixed chunking recovered roughly half the gap, reaching 0.421, at the cost of a 12.5% larger index. The authors attribute the boundary-aware advantage to fixed splitting cutting through semantic units: a chunk that begins mid-sentence carries a fragment whose embedding averages two unrelated topics, and on table-heavy documents a fixed cut frequently separates a column header from its values, leaving both fragments unretrievable for queries naming the header.",
+          "applicable_when": ["dense retrieval over documents with clear internal structure", "documents containing tables, lists, or code blocks", "index size is not the binding constraint"],
+          "not_applicable_when": ["short documents that fit inside one chunk", "corpora of unstructured continuous prose where boundaries carry little signal", "settings where index size is hard-capped and overlap is unaffordable"],
+          "scope": "Dense passage retrieval, 14 BEIR datasets, bi-encoder retrieval with a 110M-parameter encoder, chunk sizes 128 to 512 tokens.",
+          "action": "Chunk on sentence or structural boundaries with a soft token cap instead of splitting at a fixed token count.",
+          "effect": "nDCG@10 rose from 0.412 to 0.431 on average, and by 4.1 points on table-heavy datasets.",
+          "practice_trace": [
+            {"action": "Index BEIR with Contriever at fixed 128, 256, 512-token chunks", "feedback": "nDCG@10 of 0.389, 0.412, 0.398 respectively"},
+            {"action": "Switch to sentence-boundary chunking with a 256-token soft cap", "feedback": "nDCG@10 of 0.431, a 1.9-point average gain"},
+            {"action": "Isolate the three table-heavy datasets", "feedback": "Gap widens to 4.1 nDCG points"},
+            {"action": "Add 32-token overlap to fixed 256-token chunking", "feedback": "nDCG@10 of 0.421, recovering half the gap for 12.5% more index"}
+          ],
+          "evidence": [{"section": "results", "quote": "Sentence-boundary chunking with a 256-token soft cap reaches 0.431 nDCG@10 against 0.412 for fixed 256-token chunks, and the margin grows to 4.1 points on the three table-heavy datasets where fixed splits separate headers from their values."}],
+          "transferable_core": "Chunking on structural boundaries with a soft size cap retrieves better than splitting at a fixed size, and the advantage grows with how much internal structure the documents carry; adding overlap to fixed chunking recovers part of the gap by enlarging the index.",
+          "bindings": [
+            {"name": "BEIR", "kind": "dataset"},
+            {"name": "Contriever", "kind": "model"},
+            {"name": "256-token", "kind": "hyperparam"},
+            {"name": "32-token overlap", "kind": "hyperparam"},
+            {"name": "nDCG@10", "kind": "metric"},
+            {"name": "fixed-size chunking", "kind": "baseline"}
+          ]
+        }
+      ],
+      "l2": [
+        {
+          "domain": "information_retrieval",
+          "task": "predicting where retrieval preprocessing matters",
+          "statement": "The payoff from careful chunking is proportional to how much of a document's meaning lives in its structure rather than in its running prose, which lets practitioners predict whether the engineering effort is worth spending before running an ablation. The authors formalize this as a structural-density heuristic: corpora where a large fraction of tokens sit inside tables, lists, or code carry meaning in the association between a label and its value, and any split that separates the two destroys information that no embedding model can recover. Continuous prose degrades gracefully under a bad split because adjacent sentences share topic, so the fragments remain individually meaningful. The practical consequence is that chunking ablations reported on prose benchmarks systematically understate the benefit on structured corpora, and vice versa, so a chunking decision imported from a benchmark whose structural density differs from the target corpus is unsupported by that benchmark. The authors do not propose a quantitative threshold and note that their evidence covers only three structured datasets, so the direction of the effect is better supported than its magnitude.",
+          "claim_type": "relation",
+          "applicable_when": ["choosing preprocessing for a new corpus", "the corpus structural density can be estimated cheaply", "retrieval quality is the objective"],
+          "not_applicable_when": ["deciding a precise chunk size, which the paper does not address", "corpora whose structure is unlike tables, lists, or code", "cases needing a quantitative threshold rather than a direction"],
+          "scope": "Dense retrieval preprocessing decisions, corpora ranging from continuous prose to table-heavy technical documents, bi-encoder retrieval.",
+          "action": "Estimate the target corpus's structural density first, and use it to decide how much chunking effort to spend rather than importing a benchmark's chunking choice.",
+          "effect": "Explains a 1.9-point average versus 4.1-point structured-subset gap, and predicts near-zero benefit on pure prose.",
+          "rationale": "Structural elements encode meaning in label-value adjacency, which a split destroys irrecoverably, whereas prose fragments retain topical meaning individually.",
+          "rationale_depth": "deep",
+          "evidence": [{"section": "discussion", "quote": "The benefit of boundary-aware chunking scales with structural density: on the table-heavy subset the gap is 4.1 points, on the prose-dominated subset it falls below the 0.5-point noise floor, so a chunking choice imported across corpora of differing density is not supported by the source measurement."}],
+          "transferable_core": "The benefit of boundary-aware preprocessing scales with how much of a corpus's meaning lives in structure rather than prose, so a preprocessing choice validated on one corpus does not transfer to a corpus of different structural density.",
+          "bindings": [
+            {"name": "BEIR", "kind": "dataset"},
+            {"name": "Contriever", "kind": "model"},
+            {"name": "nDCG@10", "kind": "metric"}
+          ]
+        }
+      ]
+    },
+    {
+      "paper_id": "2304.44444",
+      "title": "Label Noise and Preference Optimization at Small Scale",
+      "url": "https://arxiv.org/abs/2304.44444",
+      "l1": [
+        {
+          "domain": "alignment",
+          "task": "preference optimization under noisy labels",
+          "statement": "Running PPO against a 6B-parameter reward model trained on 64k Anthropic HH preference pairs, the authors injected synthetic label noise by flipping a controlled fraction of preference pairs. At 10% flipped labels the aligned model's win rate against the SFT baseline fell from 68.2% to 61.5%; at 25% it fell to 52.1%, statistically indistinguishable from the unaligned baseline. Filtering the training set by reward-model margin, discarding the lowest-margin 20% of pairs, recovered win rate to 58.9% at the 25% noise level. The authors report that the reward model's held-out accuracy degraded far more slowly than downstream win rate: at 25% noise the reward model still scored 0.71 pairwise accuracy against 0.78 clean, so reward-model accuracy was a poor early warning signal for the downstream collapse. Increasing the KL penalty coefficient from 0.02 to 0.05 partially mitigated the collapse at high noise, reaching 56.3%, by keeping the policy closer to the SFT initialization and thereby limiting how far a corrupted reward signal could push it.",
+          "applicable_when": ["preference data whose labeller agreement is known to be imperfect", "a reward model or implicit reward is trained on that data", "a trustworthy held-out evaluation exists independent of the reward model"],
+          "not_applicable_when": ["preference data with expert-level agreement", "evaluating alignment using the same reward model that was trained on the noisy data", "settings without an SFT initialization to stay close to"],
+          "scope": "RLHF with PPO, 6B reward model, 64k preference pairs, decoder-only policy models, synthetic noise from 0% to 25%.",
+          "action": "Filter low-margin preference pairs and raise the KL penalty when labeller agreement is imperfect; do not rely on reward-model accuracy to detect the problem.",
+          "effect": "At 25% label noise, margin filtering recovered win rate from 52.1% to 58.9% and a higher KL penalty reached 56.3%, against 68.2% clean.",
+          "practice_trace": [
+            {"action": "Train a 6B reward model on clean Anthropic HH 64k pairs and run PPO", "feedback": "68.2% win rate against the SFT baseline"},
+            {"action": "Flip 10% of preference labels and repeat", "feedback": "Win rate falls to 61.5%"},
+            {"action": "Flip 25% and repeat", "feedback": "Win rate 52.1%, indistinguishable from unaligned; reward-model accuracy only fell 0.78 to 0.71"},
+            {"action": "Discard the lowest-margin 20% of pairs at 25% noise", "feedback": "Win rate recovers to 58.9%"},
+            {"action": "Raise the KL coefficient from 0.02 to 0.05 at 25% noise", "feedback": "Win rate 56.3%"}
+          ],
+          "evidence": [{"section": "experiment", "quote": "At 25% flipped labels the win rate falls to 52.1%, indistinguishable from the unaligned baseline, while reward-model held-out accuracy declines only from 0.78 to 0.71: reward-model accuracy is not a reliable early warning for downstream collapse."}],
+          "transferable_core": "Preference optimization degrades faster than the reward signal's own accuracy suggests, so noisy preference labels need margin-based filtering and a stronger pull toward the initialization, and the reward signal's accuracy must not be used to detect the problem.",
+          "bindings": [
+            {"name": "PPO", "kind": "toolchain"},
+            {"name": "Anthropic HH", "kind": "dataset"},
+            {"name": "6B reward model", "kind": "model"},
+            {"name": "64k", "kind": "scale"},
+            {"name": "KL coefficient 0.02", "kind": "hyperparam"},
+            {"name": "KL coefficient 0.05", "kind": "hyperparam"},
+            {"name": "lowest-margin 20%", "kind": "hyperparam"},
+            {"name": "win rate", "kind": "metric"},
+            {"name": "SFT baseline", "kind": "baseline"}
+          ]
+        }
+      ],
+      "l2": [
+        {
+          "domain": "alignment",
+          "task": "evaluating alignment pipelines",
+          "statement": "An intermediate model's own accuracy is an unreliable proxy for the quality of the pipeline built on top of it, because optimization against that model amplifies exactly the errors the accuracy metric averages away. The authors develop the argument in terms of where errors sit in the input distribution: a reward model that is wrong on a small, systematically related region of inputs loses little aggregate accuracy, but a policy optimizing against it will search out precisely that region, so the aggregate metric hides the failure mode that matters. The general principle is that any component subject to downstream optimization pressure must be evaluated on the distribution the optimizer will actually reach, not on a held-out sample of the training distribution. The authors note this generalizes beyond reward models to learned verifiers, learned retrievers scored offline, and any judged metric that a system is subsequently tuned against, and that the practical remedy is an evaluation held out from the optimization loop rather than a better aggregate score.",
+          "claim_type": "property",
+          "applicable_when": ["a learned component is optimized against by a downstream process", "that component's quality is measured on held-out data from its own training distribution", "the downstream objective can shift the input distribution"],
+          "not_applicable_when": ["components not subject to downstream optimization pressure", "cases where the optimizer's reachable distribution is already covered by the held-out sample", "purely descriptive use of the component without optimization"],
+          "scope": "Learned reward models, verifiers, and judged metrics inside optimization loops; RLHF and preference optimization pipelines.",
+          "action": "Evaluate any optimized-against component on an evaluation held out from the optimization loop, not on its own held-out split.",
+          "effect": "Explains an 8-point aggregate reward-model accuracy drop coinciding with a 16-point downstream win-rate collapse.",
+          "rationale": "Optimization pressure concentrates the input distribution on the component's error region, so aggregate accuracy over the original distribution systematically understates the impact.",
+          "rationale_depth": "deep",
+          "evidence": [{"section": "discussion", "quote": "Because the policy searches for inputs where the reward model is wrong, the reward model's aggregate held-out accuracy systematically understates the damage: the metric averages over a distribution the optimizer has already left."}],
+          "transferable_core": "A learned component that a downstream process optimizes against cannot be evaluated on its own held-out split, because optimization concentrates on its error region; it needs an evaluation held out from the optimization loop.",
+          "bindings": [
+            {"name": "PPO", "kind": "toolchain"},
+            {"name": "6B reward model", "kind": "model"},
+            {"name": "Anthropic HH", "kind": "dataset"},
+            {"name": "win rate", "kind": "metric"}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -47,17 +47,69 @@ _COMMON_LLM_KEYS = {
 _L1_LLM_KEYS = _COMMON_LLM_KEYS | {"practice_trace"}
 _L2_LLM_KEYS = _COMMON_LLM_KEYS | {"claim_type", "rationale", "rationale_depth"}
 
+# Fields the reuse layer consumes, added after the first ~100 records were
+# already extracted. Optional on read so those records stay usable without
+# re-extraction: `policy.select.transferable_core()` falls back to the head of
+# `statement`, and the policy writer mines bindings out of the prose when the
+# structured list is absent.
+#
+# `transferable_core`: the claim with every paper-specific value removed. Used
+#   as the rerank descriptor, where a truncated `statement` opening is a poor
+#   signal.
+# `bindings`: the source-fixed values themselves, tagged by kind. Gives the
+#   writer's `rebind` step a structured input instead of prose mining, and lets
+#   the A/B harness count stale-binding hits without an LLM judge.
+_OPTIONAL_LLM_KEYS = {"transferable_core", "bindings"}
+
+_BINDING_KINDS = {
+    "dataset",
+    "model",
+    "scale",
+    "hyperparam",
+    "baseline",
+    "metric",
+    "toolchain",
+    "other",
+}
+
+
+def _validate_bindings(value: Any, *, level: ExperienceLevel) -> None:
+    """Validate the optional bindings list when the model supplies it."""
+    if not isinstance(value, list):
+        raise ExperienceOutputError(f"{level.upper()} bindings must be an array")
+    for row in value:
+        if not isinstance(row, Mapping):
+            raise ExperienceOutputError(
+                f"{level.upper()} bindings entries must be objects"
+            )
+        if not str(row.get("name") or "").strip():
+            raise ExperienceOutputError(
+                f"{level.upper()} bindings entries need a non-empty name"
+            )
+        kind = str(row.get("kind") or "").strip().casefold()
+        if kind not in _BINDING_KINDS:
+            raise ExperienceOutputError(
+                f"{level.upper()} binding kind {kind!r} is not recognized"
+            )
+
 
 def _validate_llm_experience(
     item: Mapping[str, Any], *, level: ExperienceLevel
 ) -> None:
     """Validate only fields the current prompt asks the model to produce."""
-    expected = _L1_LLM_KEYS if level == "l1" else _L2_LLM_KEYS
-    if set(item) != expected:
-        missing = sorted(expected - set(item))
-        extra = sorted(set(item) - expected)
+    required = _L1_LLM_KEYS if level == "l1" else _L2_LLM_KEYS
+    keys = set(item)
+    missing = sorted(required - keys)
+    extra = sorted(keys - required - _OPTIONAL_LLM_KEYS)
+    if missing or extra:
         raise ExperienceOutputError(
             f"{level.upper()} experience keys mismatch; missing={missing}, extra={extra}"
+        )
+    if "bindings" in item:
+        _validate_bindings(item["bindings"], level=level)
+    if "transferable_core" in item and not isinstance(item["transferable_core"], str):
+        raise ExperienceOutputError(
+            f"{level.upper()} transferable_core must be a string"
         )
     for field in ("applicable_when", "not_applicable_when", "evidence"):
         if not isinstance(item[field], list):

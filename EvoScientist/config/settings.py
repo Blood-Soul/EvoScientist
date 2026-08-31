@@ -338,6 +338,18 @@ class EvoScientistConfig:
     # Characters repeated across a split boundary so a statement straddling it
     # still appears whole in at least one chunk. Clamped below the chunk size.
     memory_paper_chunk_overlap_chars: int = 200
+    # Experience-to-policy reuse. An `E-*` record is source-bound prose about
+    # what one paper's authors did; injecting it directly makes an agent copy
+    # the source's datasets, models, and numbers. When enabled, the
+    # `apply_experience` tool rewrites the relevant records into a target-bound
+    # policy (procedure, values to re-derive, preconditions, checks) using the
+    # auxiliary model. Disabling stops tool registration and prompt injection;
+    # policies already cached on disk are left alone.
+    memory_experience_policy_enabled: bool = True
+    # How many stored experiences one policy may draw on. More widens coverage
+    # and surfaces conflicts between papers; fewer keeps the policy tight and
+    # the synthesis call small.
+    memory_experience_policy_max_selected: int = 4
 
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
@@ -566,6 +578,20 @@ class EvoScientistConfig:
             )
             self.memory_paper_chunk_overlap_chars = 200
 
+        # Zero selected records would make every policy empty; an unbounded
+        # value would push the whole experience library into one synthesis call.
+        selected = self.memory_experience_policy_max_selected
+        if (
+            not isinstance(selected, int)
+            or isinstance(selected, bool)
+            or not 1 <= selected <= 6
+        ):
+            logging.getLogger(__name__).warning(
+                "Invalid memory_experience_policy_max_selected %r; falling back to 4.",
+                selected,
+            )
+            self.memory_experience_policy_max_selected = 4
+
         # auto_mode and dangerous_mode both imply auto_approve regardless of
         # source (CLI, env, config file, direct construction) — done here so the
         # "unattended → zero prompts" contract holds even when either is set via
@@ -607,6 +633,8 @@ class MemoryControls:
     observation_writer: MemoryObservationWriter
     workers_enabled: bool
     paper_fulltext_enabled: bool = True
+    experience_policy_enabled: bool = True
+    experience_policy_max_selected: int = 4
 
     @classmethod
     def from_config(cls, config: EvoScientistConfig) -> MemoryControls:
@@ -616,6 +644,8 @@ class MemoryControls:
             observation_writer=config.memory_observation_writer,
             workers_enabled=config.memory_workers_enabled,
             paper_fulltext_enabled=config.memory_paper_fulltext_enabled,
+            experience_policy_enabled=config.memory_experience_policy_enabled,
+            experience_policy_max_selected=config.memory_experience_policy_max_selected,
         )
 
     @property
@@ -927,6 +957,10 @@ _ENV_MAPPINGS = {
     "memory_observation_cache_max_files": "EVOSCIENTIST_MAX_CACHED_FILES",
     "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
     "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",
+    "memory_experience_policy_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_ENABLED",
+    "memory_experience_policy_max_selected": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_MAX_SELECTED"
+    ),
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
 
