@@ -10,6 +10,7 @@ research-agent:
       tavily_search,
       think_tool,
       enqueue_paper_experiences,
+      apply_experience,
       search_paper_text,
       read_paper,
     ]
