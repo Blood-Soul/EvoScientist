@@ -225,7 +225,7 @@ def list_paper_chunk_documents(
     """Expose stored chunks in one project as search documents.
 
     These feed the dedicated paper search entry point only. They are
-    deliberately absent from ``experiences/retrieval.list_memory_documents()``.
+    deliberately absent from both the observation and the experience retriever.
 
     ``paper_id`` restricts the set to one paper. Filtering here rather than
     after ranking keeps the ranker's IDF computed over exactly the candidates

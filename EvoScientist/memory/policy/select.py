@@ -4,8 +4,13 @@ A target task arrives with no annotation. The retriever indexes show only
 compact locators. We cannot read 98 full experience records (500K characters)
 in search of the relevant handful; that is what the working set delivers.
 
-Step 1 (retrieve): TF-IDF against the summary/domain/scope via the existing
-`search_memory_files`; returns `E-*` IDs plus match snippets. Unchanged.
+Step 1 (retrieve): TF-IDF against the summary/domain/scope via
+`search_experience_records`, the same experience-only retrieval core that backs
+the `search_experience` tool; returns `E-*` IDs plus match snippets. It replaced
+a call into the old merged retriever that passed `scope=project` and
+`memory_type=semantic` to keep observations out -- filter values that had to
+match the experience store's hardcoded pair exactly, so the reuse layer's
+candidate supply depended on an incidental coupling between two stores.
 
 Step 2 (rerank): a lightweight aux-model prompt reading compact *descriptors*
 (id, level, confidence, core statement, domain, scope -- 200-300 chars each)
@@ -23,9 +28,9 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
-from ..experiences.retrieval import search_memory_files
+from ..experiences.retrieval import search_experience_records
 from ..experiences.store import list_experience_documents
-from ..types import MemoryScope, MemoryType, ObservationSearchMode
+from ..types import ExperienceLevel, ObservationSearchMode
 from .prompts import load_rerank_prompt
 from .trace import emit_trace, emit_trace_async
 
@@ -94,6 +99,10 @@ def gather_candidates(
     memory_dir: str | Path,
     project_id: str,
     query: str,
+    method: str = "",
+    discipline: str = "",
+    domain: str = "",
+    level: ExperienceLevel | None = None,
     limit: int = DEFAULT_RETRIEVE_LIMIT,
     call_id: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -103,19 +112,24 @@ def gather_candidates(
     and target-neutral, so reading one directly costs little and the reuse
     layer adds nothing; this transformation exists for the long, source-bound
     records where direct injection is what fails.
+
+    The optional facets are the same ones `search_experience` exposes. They are
+    passed through rather than folded into `query` so that a caller narrowing by
+    structure ("materials-science records only") does not have that constraint
+    competing for lexical weight against the subject-matter terms.
     """
-    hits = search_memory_files(
+    hits = search_experience_records(
         memory_dir=memory_dir,
         project_id=project_id,
-        query=query,
-        scope=MemoryScope.PROJECT,
-        memory_type=MemoryType.SEMANTIC,
-        limit=max(limit * 2, limit),
+        topic=query,
+        method=method,
+        discipline=discipline,
+        domain=domain,
+        level=level,
+        limit=limit,
         mode=ObservationSearchMode.RANKED,
     )
-    ranked_ids = [
-        hit["observation_id"] for hit in hits if hit.get("record_kind") == "experience"
-    ][:limit]
+    ranked_ids = [hit["observation_id"] for hit in hits][:limit]
     if not ranked_ids:
         return []
     bodies = {

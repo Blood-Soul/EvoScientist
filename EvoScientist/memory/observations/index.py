@@ -6,12 +6,22 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..experiences.store import list_experience_documents
+from ..experiences.retrieval import experience_library_stats
 from ..types import MemoryScope, MemoryType, ObservationSearchDocument
 from .store import list_observation_documents
 
 DEFAULT_MAX_INLINE_OBSERVATION_INDEX_CHARS = 12_000
 DEFAULT_INLINE_ROWS_PER_SESSION = 3
+
+# Each block gets its own budget rather than consuming one shared pool in
+# sequence. Under the shared pool the observation block ran first and the
+# experience block second, so a library of any real size spent the whole budget
+# on experience lines and the paper full-text block was never emitted at all --
+# while the prompt still instructed the agent to use `search_paper_text`. The
+# fractions are of `max_inline_chars`, so callers keep one knob.
+_OBSERVATION_BUDGET_FRACTION = 0.55
+_EXPERIENCE_BUDGET_FRACTION = 0.15
+_FULLTEXT_BUDGET_FRACTION = 0.30
 
 
 def build_observation_index_context(
@@ -22,75 +32,100 @@ def build_observation_index_context(
     include_search_hints: bool = True,
     rows_per_session: int | None = DEFAULT_INLINE_ROWS_PER_SESSION,
 ) -> str:
-    """Build a compact observation-memory index for prompts.
+    """Build a compact memory index for prompts.
 
-    ``include_search_hints=False`` omits the tool-usage footer, for model calls
-    that carry no memory tools. When the index does not fit, every source
-    session's newest ``rows_per_session`` rows claim space first and the rest
-    fill what is left, so one session that wrote many observations cannot push
-    the others out; ``None`` fills by time alone.
+    Three independent blocks: observations (per record), paper experience (facet
+    counts only, never per record), and papers with stored full text (per
+    paper). Only the observation block scales with record count, and it is the
+    one store an agent writes to during a session.
+
+    ``include_search_hints=False`` omits the observation block's tool-usage
+    footer, for model calls that carry no memory tools. When the observation
+    block does not fit, every source session's newest ``rows_per_session`` rows
+    claim space first and the rest fill what is left, so one session that wrote
+    many observations cannot push the others out; ``None`` fills by time alone.
     """
-    observation_context = _format_observation_index_context(
-        _observation_documents(memory_dir=memory_dir, project_id=project_id),
-        include_counts=True,
-        include_paths=True,
-        include_search_hints=include_search_hints,
-        can_search=include_search_hints,
-        empty_context=True,
-        intro="Indexed observations:",
-        max_inline_chars=max_inline_chars,
-        rows_per_session=rows_per_session,
-    )
-    experiences = sorted(
-        list_experience_documents(memory_dir=memory_dir, project_id=project_id),
-        key=lambda document: document.observation_id,
-    )
-    if not experiences:
-        # Full text can exist without experiences -- extraction is persisted
-        # after the text and may have failed -- so still offer the paper block.
-        fulltext_only = _build_paper_fulltext_index(
+    blocks = [
+        _format_observation_index_context(
+            _observation_documents(memory_dir=memory_dir, project_id=project_id),
+            include_counts=True,
+            include_paths=True,
+            include_search_hints=include_search_hints,
+            can_search=include_search_hints,
+            empty_context=True,
+            intro="Indexed observations:",
+            max_inline_chars=_budget(max_inline_chars, _OBSERVATION_BUDGET_FRACTION),
+            rows_per_session=rows_per_session,
+        ),
+        _build_experience_index(
             memory_dir=memory_dir,
             project_id=project_id,
-            remaining=max_inline_chars - len(observation_context) - 2,
-        )
-        if not fulltext_only:
-            return observation_context
-        return f"{observation_context}\n\n{fulltext_only}"
-    experience_lines = [
+            remaining=_budget(max_inline_chars, _EXPERIENCE_BUDGET_FRACTION),
+        ),
+        # Full text can exist without experiences -- extraction is persisted
+        # after the text and may have failed -- so this block is independent.
+        _build_paper_fulltext_index(
+            memory_dir=memory_dir,
+            project_id=project_id,
+            remaining=_budget(max_inline_chars, _FULLTEXT_BUDGET_FRACTION),
+        ),
+    ]
+    return "\n\n".join(block for block in blocks if block)
+
+
+def _budget(max_inline_chars: int, fraction: float) -> int:
+    return max(int(max_inline_chars * fraction), 0)
+
+
+def _build_experience_index(
+    *, memory_dir: str | Path, project_id: str, remaining: int
+) -> str:
+    """Build the paper-experience block as a facet summary, never a record list.
+
+    One line per record cannot survive library growth: at 98 records it already
+    consumed the whole shared inline budget, and the block's job is not to be a
+    catalog. What the agent needs inlined is (a) that the library exists and is
+    non-empty, (b) roughly what subjects it covers, so it can judge whether a
+    query is worth making, and (c) which tool reaches it. All three are
+    record-count independent, so this block's size stays flat as the library
+    grows from 98 records to 100,000.
+    """
+    if remaining <= 0:
+        return ""
+    stats = experience_library_stats(memory_dir=memory_dir, project_id=project_id)
+    if not stats["records"]:
+        return ""
+    levels = stats["levels"]
+    lines = [
         (
-            f"- {document.observation_id} "
-            f"[{document.experience_level}/project] {document.path}: "
-            f"{document.summary}"
-        )
-        for document in experiences
+            f"Coverage: {stats['records']} records from {stats['papers']} papers "
+            f"(L1 practice={levels.get('l1', 0)}, L2 inductive={levels.get('l2', 0)})."
+        ),
+        "- Disciplines: "
+        + ", ".join(f"{value}={count}" for value, count in stats["disciplines"]),
+        "- Top domains: "
+        + ", ".join(f"{value}={count}" for value, count in stats["top_domains"]),
     ]
-    remaining = max_inline_chars - len(observation_context) - 2
-    prefix = [
-        "<paper_experience_memory>",
-        f"Indexed project paper experiences: total={len(experiences)}.",
-    ]
+    prefix = ["<paper_experience_memory>"]
     suffix = [
-        "Use `search_observations` and `read_memory` with E-* IDs.",
+        (
+            "These are findings extracted from published papers: methods, "
+            "results, evaluation protocols, subject-matter knowledge. Query them "
+            "by SUBJECT, not by process -- `search_experience(topic=...)` with "
+            "the research content you care about. Use `list_experience` to browse "
+            "by discipline or domain when you do not know the vocabulary, "
+            "`read_memory` for a known E-* ID, and `apply_experience` to turn "
+            "records into a plan bound to the current task."
+        ),
         "</paper_experience_memory>",
     ]
-    experience_context = _fit_block(
+    return _fit_block(
         prefix=prefix,
-        lines=experience_lines,
+        lines=lines,
         suffix=suffix,
         remaining=remaining,
-        truncation_note="Experience index truncated to entries that fit.",
+        truncation_note="",
     )
-    if not experience_context:
-        return observation_context
-    combined = f"{observation_context}\n\n{experience_context}"
-    fulltext_context = _build_paper_fulltext_index(
-        memory_dir=memory_dir,
-        project_id=project_id,
-        remaining=max_inline_chars - len(combined) - 2,
-    )
-    if not fulltext_context:
-        return combined
-    return f"{combined}\n\n{fulltext_context}"
 
 
 def _fit_block(
@@ -113,7 +148,7 @@ def _fit_block(
     if fits is None:
         return ""
     selected = fits
-    if len(selected) == len(lines):
+    if len(selected) == len(lines) or not truncation_note:
         return "\n".join([*prefix, *selected, *suffix])
 
     noted_prefix = [*prefix, truncation_note]
@@ -315,7 +350,9 @@ def _format_observation_index_context(
 
     footer = [_observation_search_hints()] if include_search_hints else []
     if not documents:
-        return "\n".join([*header, *footer, "</observation_memory>"])
+        return _frame_only(
+            header=header, footer=footer, max_inline_chars=max_inline_chars
+        )
 
     lines = [
         _observation_index_line(document, include_paths=include_paths)
@@ -348,6 +385,24 @@ def _format_observation_index_context(
             else None
         ),
     )
+
+
+def _frame_only(
+    *, header: Sequence[str], footer: Sequence[str], max_inline_chars: int
+) -> str:
+    """Render an entry-less block, dropping the hints when they do not fit.
+
+    The empty-store path used to return header plus footer unconditionally, so
+    it ignored its budget: the search hints alone are several hundred characters
+    and could overrun a small allowance on their own. That went unnoticed while
+    all three blocks drew from one shared pool and the observation block ran
+    first -- it simply took what it wanted and starved whatever came after.
+    """
+    full = "\n".join([*header, *footer, "</observation_memory>"])
+    if len(full) <= max_inline_chars:
+        return full
+    bare = "\n".join([*header, "</observation_memory>"])
+    return bare if len(bare) <= max_inline_chars else ""
 
 
 def _truncated_observation_index_context(
@@ -386,13 +441,13 @@ def _truncated_observation_index_context(
     # A reader without a search tool (a tool-less model call) is not told to
     # search.
     too_large = "Observation summaries are too large to inline"
-    return "\n".join(
-        [
+    return _frame_only(
+        header=[
             *header,
             f"{too_large}; search on demand." if can_search else f"{too_large}.",
-            *footer,
-            "</observation_memory>",
-        ]
+        ],
+        footer=footer,
+        max_inline_chars=max_inline_chars,
     )
 
 
@@ -447,7 +502,16 @@ def _observation_index_count_line(
 
 
 def _observation_search_hints() -> str:
-    """Return stable search hints for observation memory."""
+    """Return stable search hints for observation memory.
+
+    Scoped to `O-*` on purpose. These hints used to describe the only retrieval
+    entry point there was, so they doubled as the instructions for reaching
+    paper experience -- which is how process-shaped queries came to be aimed at
+    records that only ever hold subject-matter findings. The routing note now
+    sends subject-matter questions to the experience block's own tools, and the
+    `memory_type`/`scope` filters are documented as observation-only, since they
+    describe an observation's frontmatter and nothing else.
+    """
     return "\n".join(
         [
             "Search hints:",
@@ -459,18 +523,20 @@ def _observation_search_hints() -> str:
             "- Use `mode=regex` only when exact grep-like matching is required.",
             "- Search by id when you already know it from the index.",
             (
-                "- Filter by type when appropriate: "
-                "`memory_type: procedural`, `memory_type: semantic`, or "
-                "`memory_type: episodic`."
-            ),
-            (
-                "- Filter by scope when appropriate: "
-                "`scope: project` or `scope: global`."
+                "- `memory_type` and `scope` filter observations only: "
+                "`memory_type: procedural|semantic|episodic`, "
+                "`scope: project|global`. They do not apply to paper experience."
             ),
             (
                 "- Search with a few distinctive words or phrases from "
                 "the current work that describe the issue, constraint, "
                 "procedure, or prior result to find."
+            ),
+            (
+                "- This store holds your own operating memory. For knowledge "
+                "extracted from papers -- a method, a result, an evaluation "
+                "protocol, a research subject -- use `search_experience` "
+                "instead; asking here returns nothing useful."
             ),
         ]
     )
