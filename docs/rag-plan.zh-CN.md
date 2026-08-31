@@ -34,7 +34,8 @@
 1. **检索方式：纯词法。** 复用 `memory/search.py` 的排序器。零新依赖、零 API 成本、
    与经验检索同一套排序逻辑。代价见第 9 节。
 2. **工具形态：新增独立工具** `search_paper_text` + `read_paper`，**不混进**
-   `search_observations`。避免上千个 chunk 在同一个排序里淹没高信号的 `E-*` 记录。
+   `search_observations` 或 `search_experience`。避免上千个 chunk 在同一个排序里
+   淹没高信号的 `E-*` 记录。
 3. **入库范围：复用现有经验队列**，在抽取前顺手落盘，**零新增网络调用**。
 4. **返回粒度：两级。** 先返回 chunk 定位与片段，再按需 `read_paper` 展开到整节或整篇。
 5. **工具授权范围：只有** `research-agent` 与 `planner-agent` 拿到这两个工具。
@@ -185,14 +186,20 @@ section_path, char_start, char_end, text`。
 ### 6.0 检索隔离：结构上的保证
 
 `memory/papers/retrieval.py` 是**唯一**的检索入口（45 行，一个函数）。chunk 只从这里
-被搜索，**永远不进** `experiences/retrieval.list_memory_documents()`。理由写在模块
+被搜索，**永远不进** `experiences/store.list_experience_documents()`。理由写在模块
 docstring 里：一篇论文产出几十个 chunk，一个项目几十篇论文，如果混进共享排序，
-原文会淹没 `search_observations` 本该返回的 `E-*` 记录。
+原文会淹没 `search_experience` 本该返回的 `E-*` 记录。
 
-这条约束有专门的测试守着 —— `test_chunks_never_appear_in_observation_search`
-断言：同一个 query 下，经验记录仍然可被 `search_observations` 找到，且结果里
+这条约束有专门的测试守着 —— `test_chunks_never_appear_in_experience_search`
+断言：同一个 query 下，经验记录仍然可被 `search_experience` 找到，且结果里
 不出现任何 `C-*` / `record_kind == "paper_chunk"`；同时该 query 通过
 `search_paper_chunks` 确实能拿到原文。
+
+> 三个库现在各有各的入口：`O-*` 走 `search_observations`，`E-*` 走
+> `search_experience` / `list_experience`，`C-*` 走 `search_paper_chunks`。
+> 经验检索曾经复用 `search_observations`，于是 agent 只学到了 observation 那套
+> 查询词汇 —— 面向过程的问法（"怎么从摘要构建 idea"）打向只装论文结论的记录，
+> 结果要么为空要么是自信的噪声。拆开入口，才让每个 schema 自己教会调用方该怎么问。
 
 chunk 被投影成 `ObservationSearchDocument` 时的字段安排（决定 TF-IDF 权重）：
 - `observation_id` = `chunk_id`（ranker 里 id 字段权重 ×5）
