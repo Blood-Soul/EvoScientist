@@ -356,6 +356,45 @@ def test_legacy_records_without_facets_stay_retrievable(tmp_path: Path) -> None:
     assert browsed["values"] == [{"value": "other", "records": 2}]
 
 
+def test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently(
+    tmp_path: Path,
+) -> None:
+    """The failure mode is confident noise, so the response has to admit it.
+
+    Ranking tokenizes on `[a-z0-9_]+`, so a Chinese query survives only as its
+    incidental Latin fragments: "如何利用摘要完成idea的构建" becomes `idea`, which
+    matches most of the library and returns a full page of high scores that has
+    nothing to do with the question asked.
+    """
+    from EvoScientist.memory.experiences.retrieval import degenerate_facets
+    from EvoScientist.tools.experience_search import create_search_experience_tool
+
+    _store(tmp_path, project_id="P-alpha", marker="idea generation from abstracts")
+    tool = create_search_experience_tool(memory_dir=tmp_path, project_id="P-alpha")
+
+    reported = degenerate_facets("如何利用摘要完成idea的构建")
+    assert reported == [
+        {
+            "facet": "如何利用摘要完成idea的构建",
+            "searched_as": ["idea"],
+            "coverage": pytest.approx(0.27, abs=0.01),
+        }
+    ]
+    # A query the tokenizer keeps is not flagged, so the warning stays a signal.
+    assert degenerate_facets("automated scientific discovery") == []
+    # Nor is an empty facet, which simply was not searched.
+    assert degenerate_facets("", "   ") == []
+
+    payload = json.loads(tool.func(topic="如何利用摘要完成idea的构建"))
+    assert payload["results"]  # the fragment does match, which is the problem
+    warning = payload["query_warning"]
+    assert warning["facets"][0]["searched_as"] == ["idea"]
+    assert "list_experience" in warning["reason"]
+
+    clean = json.loads(tool.func(topic="idea generation from abstracts"))
+    assert "query_warning" not in clean
+
+
 def test_experience_ids_follow_content_not_position(tmp_path: Path) -> None:
     """An `E-*` ID must name one claim, even when re-extraction reorders records.
 
