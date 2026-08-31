@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
 from ..types import ExperienceLevel
+from .taxonomy import DISCIPLINES, normalize_discipline
 
 # Matches a References/Bibliography heading line on its own (optionally numbered,
 # optionally under a Markdown "#" heading) — not the word appearing inside a
@@ -59,7 +60,12 @@ _L2_LLM_KEYS = _COMMON_LLM_KEYS | {"claim_type", "rationale", "rationale_depth"}
 # `bindings`: the source-fixed values themselves, tagged by kind. Gives the
 #   writer's `rebind` step a structured input instead of prose mining, and lets
 #   the A/B harness count stale-binding hits without an LLM judge.
-_OPTIONAL_LLM_KEYS = {"transferable_core", "bindings"}
+# `discipline`: the coarse top-level retrieval facet. Optional because the
+#   runtime can derive it from `domain_arxiv`, but the model reading the paper
+#   is the better source: `domain_arxiv` is caller-supplied at enqueue time and
+#   absent for anything that did not come from arXiv, which is most of the
+#   non-CS literature this library is meant to hold.
+_OPTIONAL_LLM_KEYS = {"transferable_core", "bindings", "discipline"}
 
 _BINDING_KINDS = {
     "dataset",
@@ -111,6 +117,15 @@ def _validate_llm_experience(
         raise ExperienceOutputError(
             f"{level.upper()} transferable_core must be a string"
         )
+    if "discipline" in item:
+        # Reject rather than silently normalize: `discipline` is an exact-match
+        # retrieval filter, so an out-of-vocabulary value produces a facet no
+        # query can name, and a whole record that browsing cannot reach.
+        if normalize_discipline(item["discipline"]) is None:
+            raise ExperienceOutputError(
+                f"{level.upper()} discipline {item['discipline']!r} is not one of "
+                f"{', '.join(DISCIPLINES)}"
+            )
     for field in ("applicable_when", "not_applicable_when", "evidence"):
         if not isinstance(item[field], list):
             raise ExperienceOutputError(f"{level.upper()} {field} must be an array")
@@ -257,6 +272,11 @@ def _normalize_current_payload(
         item["id"] = f"{level}_{slug}_{index:02d}"
         item["layer"] = level.upper()
         item["domain_arxiv"] = domain_arxiv
+        if "discipline" in item:
+            # Validation accepted case and whitespace variants; store the
+            # canonical spelling so the facet value on disk is the one a
+            # `discipline=` filter is written against.
+            item["discipline"] = normalize_discipline(item["discipline"])
         item["utility"] = None
         item["confidence"] = _initial_confidence(item, level=level)
         item["evidence"] = [

@@ -29,7 +29,8 @@
                                              校验归一化 → 存储 → 完成/失败
 
 项目经验存储 → PAPER_EXPERIENCES.md（目录）
-             → search_observations / read_memory（统一检索与读取）
+             → search_experience / list_experience（按学科内容检索与浏览）
+             → read_memory（读单条完整记录）/ apply_experience（改绑到当前任务）
              → 后续 agent、skill 和对话复用
 ```
 
@@ -127,11 +128,21 @@ L2 把单篇论文中的结果提升为可迁移的作者支持的规律、比�
 
 ## 7. 经验如何被利用
 
-经验存储与传统 observation 存储物理分离，但在项目范围内统一进入 EvoMemory 检索：
+经验存储与传统 observation 存储物理分离，检索入口也分离 —— 两个库回答的是不同的问题
+（observation 记录本 agent 的工具和环境如何表现，experience 记录论文发现了什么），
+共用一个入口会让 observation 那套词汇变成两者共同的词汇：
 
-- `search_observations` 可以按关键词检索 observation 与论文经验，并返回 `record_kind=experience` 及 `experience_level`；
+- `search_experience` 按**内容**检索论文经验：`topic` / `method` / `task` 三个主题面
+  分别检索再用 RRF 融合，`discipline` / `domain` / `level` 是精确过滤。它不接受
+  `memory_type` / `scope` —— 每条 `E-*` 都存为 semantic/project，传这两个参数只会
+  静默清空结果集；
+- `list_experience` 按结构浏览（discipline → domain → records，每层都分页并报总数）。
+  词法检索的前提是调用方已经知道库里的说法，开放式问题往往没有唯一正确的问法，
+  浏览绕开了措辞问题；
+- `search_observations` 只检索 `O-*`，面向过程的问法（"该怎么做…"）属于这里；
 - `read_memory` 通过稳定的 `E-...` ID 读取完整经验 JSON；
-- 检索结果可按 L1/L2、项目范围和语义相关性进一步筛选；
+- `apply_experience` 在需要**做决策**而非补充上下文时使用：它把来源里写死的值改绑到
+  当前任务上，而不是让调用方照抄；
 - 后续 agent/skill 可以把经验作为上下文，用于方案设计、实验规划、参数选择、风险边界判断和论文阅读；
 - 同一项目内共享经验，不同项目之间不会互相污染。
 
