@@ -543,6 +543,12 @@ class TestInstructionGating:
 
     Injecting the reuse guidance to an agent that lacks `apply_experience` tells
     it to route decisions through a tool it cannot call.
+
+    The assertions target the reuse *block* rather than the bare tool name,
+    because the cross-store routing table names every memory tool in one place
+    so the agent can tell the three stores apart. That table is what stops
+    subject-matter queries from being aimed at the observation store, so it is
+    not gated on the reuse layer.
     """
 
     def _instructions(self, **kwargs: Any) -> str:
@@ -553,19 +559,43 @@ class TestInstructionGating:
         )
         return middleware._observation_memory_instructions()
 
+    def _has_policy_block(self, text: str) -> bool:
+        from EvoScientist.middleware.memory import EXPERIENCE_POLICY_INSTRUCTIONS
+
+        return EXPERIENCE_POLICY_INSTRUCTIONS in text
+
     def test_injected_when_enabled(self) -> None:
-        assert "apply_experience" in self._instructions()
+        text = self._instructions()
+        assert self._has_policy_block(text)
+        assert "apply_experience" in text
 
     def test_absent_when_disabled(self) -> None:
         text = self._instructions(enable_experience_policy=False)
-        assert "apply_experience" not in text
+        assert not self._has_policy_block(text)
         # The rest of the observation guidance must survive the flag.
         assert "search_observations" in text
 
     def test_absent_when_observations_off(self) -> None:
         """Reuse rides on observation memory; without it there is nothing to reuse."""
         text = self._instructions(enable_observation_memory=False)
+        assert not self._has_policy_block(text)
         assert "apply_experience" not in text
+
+    def test_experience_search_gated_independently(self) -> None:
+        """Retrieval and reuse are separate switches.
+
+        Disabling the two aux-model calls of `apply_experience` must not also
+        remove the cheap read-only path to the library, or the inlined
+        experience block would advertise a store with no way to reach it.
+        """
+        from EvoScientist.middleware.memory import EXPERIENCE_SEARCH_INSTRUCTIONS
+
+        policy_off = self._instructions(enable_experience_policy=False)
+        assert EXPERIENCE_SEARCH_INSTRUCTIONS in policy_off
+
+        search_off = self._instructions(enable_experience_search=False)
+        assert EXPERIENCE_SEARCH_INSTRUCTIONS not in search_off
+        assert self._has_policy_block(search_off)
 
 
 class TestExtractionBackwardCompatibility:

@@ -4,11 +4,10 @@ A single choke point on purpose: the whole store is behind one function, so
 swapping lexical TF-IDF for embeddings or a hybrid ranker later touches this
 file and nothing else.
 
-Chunks are searched *here*, never through
-``experiences/retrieval.list_memory_documents()``. One paper yields tens of
-chunks and a project holds dozens of papers, so folding them into the shared
-observation ranking would let raw text crowd out the ``E-*`` records that
-``search_observations`` exists to return.
+Chunks are searched *here*, never through the observation or experience
+retrievers. One paper yields tens of chunks and a project holds dozens of
+papers, so folding them into either ranking would let raw text crowd out the
+distilled ``O-*`` and ``E-*`` records those entry points exist to return.
 """
 
 from __future__ import annotations
