@@ -28,7 +28,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from ..search import search_documents
+from ..search import _tokens, search_documents
 from ..types import (
     ExperienceLevel,
     ObservationReadResult,
@@ -42,6 +42,12 @@ from .store import list_experience_documents, read_experience_file
 # and is scale-free: it damps the contribution of deep ranks without depending
 # on library size or on how many facets were supplied.
 RRF_K = 60
+
+# Fraction of a facet's non-whitespace characters that must survive
+# tokenization before its ranking is treated as representing the query. Set low
+# on purpose: the case worth reporting is a query reduced to one incidental
+# fragment, not an ordinary query with a stopword or two dropped.
+_MIN_TOKEN_COVERAGE = 0.4
 
 
 def _facet_documents(
@@ -138,6 +144,45 @@ def search_experience_records(
         merged["score"] = round(scores[hit["observation_id"]], 5)
         fused.append(merged)  # type: ignore[arg-type]
     return fused
+
+
+def degenerate_facets(*facets: str) -> list[dict[str, Any]]:
+    """Report facets the tokenizer largely discarded, with what survived.
+
+    The ranker tokenizes on ``[a-z0-9_]+``, so a query written in Chinese (or
+    any non-Latin script) is reduced to whatever Latin fragments it happens to
+    contain: "如何利用摘要完成idea的构建" becomes the single token ``idea``, which
+    matches most of the library and produces a full page of high scores. The
+    results are not wrong so much as unrelated to the question asked, and
+    nothing in the response says so.
+
+    This does not attempt to translate or expand the query -- it reports what
+    was actually searched, so the caller can see that the ranking rests on a
+    fragment and rephrase. Coverage is measured in characters rather than tokens
+    because one surviving token out of a long query is exactly the case worth
+    flagging.
+    """
+    report: list[dict[str, Any]] = []
+    for facet in facets:
+        text = facet.strip()
+        if not text:
+            continue
+        significant = [character for character in text if not character.isspace()]
+        if not significant:
+            continue
+        tokens = _tokens(text)
+        covered = sum(len(token) for token in tokens)
+        coverage = covered / len(significant)
+        if tokens and coverage >= _MIN_TOKEN_COVERAGE:
+            continue
+        report.append(
+            {
+                "facet": text,
+                "searched_as": tokens,
+                "coverage": round(coverage, 2),
+            }
+        )
+    return report
 
 
 def _hit_from_document(document: ObservationSearchDocument) -> ObservationSearchHit:

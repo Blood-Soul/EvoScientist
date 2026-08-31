@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 
 from ..memory.experiences.retrieval import (
     browse_experience_facets,
+    degenerate_facets,
     search_experience_records,
 )
 from ..memory.experiences.taxonomy import DISCIPLINES
@@ -189,6 +190,25 @@ def create_search_experience_tool(
             limit=limit,
         )
         payload: dict[str, object] = {"results": results}
+        thin = degenerate_facets(topic, method, task)
+        if thin:
+            # Ranking is lexical over `[a-z0-9_]+`. A facet written in Chinese
+            # survives only as whatever Latin fragments it contains, and one
+            # such fragment matches most of the library -- producing a full page
+            # of high scores that has nothing to do with the question. Say what
+            # was actually searched instead of letting the scores imply
+            # relevance the query never expressed.
+            payload["query_warning"] = {
+                "reason": (
+                    "Retrieval is lexical and matches only Latin letters, "
+                    "digits, and underscores, so these facets were searched as "
+                    "little more than a fragment of what you wrote. Any ranking "
+                    "below reflects the fragment, not your question. Re-query "
+                    "with English subject-matter terms, or browse the library's "
+                    "own vocabulary with `list_experience`."
+                ),
+                "facets": thin,
+            }
         if not results:
             # An empty page is ambiguous between "nothing matches" and "your
             # phrasing missed", and the second is the common case for a lexical
