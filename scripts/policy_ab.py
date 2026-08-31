@@ -477,6 +477,44 @@ async def run_cell(
     )
 
 
+def _resolve_actor_model(
+    model: str | None, provider: str | None
+) -> tuple[str | None, str | None]:
+    """Resolve the actor model, defaulting to the project's configured main one.
+
+    `get_chat_model(model=None)` does not read this project's config -- it falls
+    back to its own library default, which is an Anthropic model. So passing the
+    flags straight through made `--model` unset mean "Anthropic", not "whatever
+    this project runs on" as the flag documents, and the harness failed on a
+    missing `ANTHROPIC_API_KEY` for a model nobody selected.
+
+    An explicit flag always wins. Config is only consulted for the part the
+    caller left unset, and if config cannot be loaded the original values are
+    returned so the library default remains the last resort rather than an error.
+
+    Loading config also publishes its API keys and base URLs to the environment,
+    which is where `get_chat_model` looks for them. The agent gets this via
+    `_ensure_auxiliary_chat_model`; a standalone script calling `get_chat_model`
+    directly does not, so a project whose credentials live in the config file
+    rather than the shell would otherwise fail here with a missing-key error.
+    `apply_config_to_env` is set-if-unset, so a real environment variable still
+    takes precedence.
+    """
+    try:
+        from EvoScientist.config.settings import (
+            apply_config_to_env,
+            get_effective_config,
+        )
+
+        cfg = get_effective_config()
+        apply_config_to_env(cfg)
+    except Exception:  # pragma: no cover - config is environment-dependent
+        return model, provider
+    return model or getattr(cfg, "model", None) or None, (
+        provider or getattr(cfg, "provider", None) or None
+    )
+
+
 def _message_text(response: Any) -> str:
     content = getattr(response, "content", response)
     if isinstance(content, str):
@@ -668,7 +706,17 @@ async def main_async(args: argparse.Namespace) -> int:
 
     from EvoScientist.llm import get_chat_model
 
-    model = get_chat_model(model=args.model, provider=args.provider)
+    # `get_chat_model()` with no model falls back to its own hardcoded default,
+    # which is an Anthropic model regardless of how this project is configured.
+    # The flags document their default as "the project main/auxiliary model", so
+    # resolve that from config here rather than letting the library default
+    # decide -- otherwise a project running on any other provider fails on a
+    # missing ANTHROPIC_API_KEY for a model it never asked for.
+    actor_model, actor_provider = _resolve_actor_model(args.model, args.provider)
+    model = get_chat_model(model=actor_model, provider=actor_provider)
+    # `--policy-model` left unset stays None on purpose: `derive_policy()` then
+    # resolves the project auxiliary model itself, which is the documented
+    # default and already config-aware.
     policy_model = (
         get_chat_model(model=args.policy_model, provider=args.policy_provider)
         if args.policy_model
