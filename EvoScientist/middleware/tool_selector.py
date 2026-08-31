@@ -52,6 +52,13 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         "read_memory",
         "record_observation",
         "search_observations",
+        # The experience half of the memory preflight. `search_observations`
+        # alone is not a substitute: it searches a different store, so hiding
+        # these would leave the agent unable to reach paper experience at all
+        # while the prompt still directs it there -- which is how subject-matter
+        # questions ended up aimed at the observation store to begin with.
+        "search_experience",
+        "list_experience",
         # Paper full-text retrieval is the evidence half of the memory
         # preflight; hiding it would leave the agent with experience records
         # and no way to verify them against the papers themselves.

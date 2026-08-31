@@ -13,7 +13,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field
 
-from ..experiences.retrieval import read_memory_file, search_memory_files
+from ..experiences.retrieval import read_memory_file
 from ..runtime_context import runtime_config_value, runtime_project_id
 from ..types import (
     MemoryScope,
@@ -24,7 +24,7 @@ from ..types import (
     ObservationSearchMode,
 )
 from .relations import link_observation_files
-from .store import record_observation_file
+from .store import record_observation_file, search_observation_files
 
 logger = logging.getLogger(__name__)
 ObservationRecordedHook = Callable[[ObservationRecordResult], None]
@@ -88,10 +88,13 @@ class SearchObservationsArgs(BaseModel):
     query: str = Field(
         min_length=1,
         description=(
-            "Search text. In ranked mode, provide compact natural-language "
-            "keywords or short phrases that describe the issue, constraint, "
-            "procedure, or prior result to find. In regex mode, provide a "
-            "case-insensitive grep-like pattern."
+            "Search text over this agent's own operating memory. In ranked mode, "
+            "provide compact keywords or short phrases describing the issue, "
+            "constraint, procedure, or prior result to find -- process-shaped "
+            "queries belong here ('rate limit retry', 'pdf parse failure'). In "
+            "regex mode, provide a case-insensitive grep-like pattern. Do not "
+            "use this to look up subject-matter knowledge from papers; that is "
+            "`search_experience`."
         ),
     )
     mode: ObservationSearchMode = Field(
@@ -240,7 +243,7 @@ def create_search_observations_tool(
         runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
     ) -> str:
         search_mode = ObservationSearchMode(mode)
-        results = search_memory_files(
+        results = search_observation_files(
             memory_dir=memory_dir,
             project_id=_runtime_project_id(runtime, project_id),
             query=query,
@@ -259,14 +262,20 @@ def create_search_observations_tool(
         func=_search_observations,
         name="search_observations",
         description=(
-            "Search EvoMemory observations and project paper experiences with ranked "
-            "free-text retrieval. Use a few distinctive words or short phrases "
-            "that describe the issue, constraint, procedure, or prior result "
-            "to find. For exact grep-like matching, pass `mode=regex`. For "
-            "substantial coding, debugging, research, planning, or evaluation "
-            "work, use this as the memory preflight before inspecting workspace "
-            "files unless the inlined observation index already gives an exact "
-            "observation ID to read. Read promising hits with `read_memory`."
+            "Search this agent's own operating memory (`O-*`): how tools behave, "
+            "what failed before, workarounds, commands, project conventions, and "
+            "prior session results. Use a few distinctive words describing the "
+            "issue, constraint, procedure, or prior result. For exact grep-like "
+            "matching, pass `mode=regex`. For substantial coding, debugging, "
+            "research, planning, or evaluation work, use this as the memory "
+            "preflight before inspecting workspace files unless the inlined "
+            "observation index already gives an exact ID to read. Read promising "
+            "hits with `read_memory`.\n\n"
+            "This does NOT search paper experience. Findings extracted from "
+            "published papers -- methods, results, evaluation protocols, "
+            "subject-matter knowledge -- live in a separate library reached by "
+            "`search_experience`, `list_experience`, and `apply_experience`. "
+            "Asking here about a research topic returns nothing useful."
         ),
         args_schema=SearchObservationsArgs,
         infer_schema=False,

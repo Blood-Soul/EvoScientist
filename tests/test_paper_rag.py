@@ -9,6 +9,7 @@ records rather than raw text.
 from __future__ import annotations
 
 import json
+import re
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from EvoScientist.memory.experiences import (
     enqueue_paper,
     list_experience_documents,
     list_tasks,
-    search_memory_files,
+    search_experience_records,
     store_paper_experiences,
 )
 from EvoScientist.memory.experiences.store import paper_storage_key
@@ -373,20 +374,20 @@ def test_chunks_are_searchable_through_the_paper_entry_point(tmp_path: Path) -> 
     assert all(hit.get("record_kind") == "paper_chunk" for hit in hits)
 
 
-def test_chunks_never_appear_in_observation_search(tmp_path: Path) -> None:
+def test_chunks_never_appear_in_experience_search(tmp_path: Path) -> None:
     """The central constraint: raw text must not crowd the E-*/O-* ranking."""
     _store_text(tmp_path)
     _store_experiences(tmp_path)
 
-    observation_hits = search_memory_files(
+    experience_hits = search_experience_records(
         memory_dir=tmp_path,
         project_id="P-alpha",
-        query="top-1 accuracy catalyst split contrastive",
+        topic="top-1 accuracy catalyst split contrastive",
         limit=20,
     )
-    assert observation_hits, "the experience record should still be findable"
-    assert all(not hit["observation_id"].startswith("C-") for hit in observation_hits)
-    assert all(hit.get("record_kind") != "paper_chunk" for hit in observation_hits)
+    assert experience_hits, "the experience record should still be findable"
+    assert all(not hit["observation_id"].startswith("C-") for hit in experience_hits)
+    assert all(hit.get("record_kind") != "paper_chunk" for hit in experience_hits)
 
     # ...while the same query does reach the text through the paper tool.
     assert search_paper_chunks(
@@ -1000,7 +1001,7 @@ def test_index_omits_the_paper_block_when_nothing_is_stored(tmp_path: Path) -> N
     assert "<paper_fulltext_memory>" not in context
 
 
-def test_index_truncates_the_paper_block_to_the_shared_budget(tmp_path: Path) -> None:
+def test_index_truncates_the_paper_block_to_its_own_budget(tmp_path: Path) -> None:
     for index in range(30):
         _store_text(
             tmp_path,
@@ -1016,6 +1017,37 @@ def test_index_truncates_the_paper_block_to_the_shared_budget(tmp_path: Path) ->
     if "<paper_fulltext_memory>" in context:
         block = context[context.index("<paper_fulltext_memory>") :]
         assert block.count("\n- ") < 30
+
+
+def test_index_blocks_hold_independent_budgets(tmp_path: Path) -> None:
+    """A large experience library must not starve the paper block.
+
+    The three blocks used to draw from one pool in sequence, so the experience
+    block -- one line per record -- consumed whatever the observation block left
+    and `<paper_fulltext_memory>` was never emitted at all, while the prompt
+    still told the agent to use `search_paper_text`. Independent budgets make
+    each block's presence depend only on its own store.
+    """
+    for index in range(40):
+        _store_experiences(
+            tmp_path,
+            paper_id=f"2404.{index:05d}",
+            url=f"https://arxiv.org/abs/2404.{index:05d}",
+        )
+    _store_text(tmp_path)
+
+    context = build_observation_index_context(memory_dir=tmp_path, project_id="P-alpha")
+    assert "<paper_experience_memory>" in context
+    assert "<paper_fulltext_memory>" in context
+    # The experience block reports coverage, never one line per record, so its
+    # size does not track library growth.
+    experience_block = context[
+        context.index("<paper_experience_memory>") : context.index(
+            "<paper_fulltext_memory>"
+        )
+    ]
+    assert "records from" in experience_block
+    assert not re.search(r"E-[0-9a-f]{16}", experience_block)
 
 
 def test_middleware_instructions_are_gated_on_the_switch(tmp_path: Path) -> None:
