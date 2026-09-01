@@ -47,8 +47,9 @@ _CLOSE_TIMEOUT_SECONDS: float = 10.0
 logger = logging.getLogger(__name__)
 
 _MEMORY_FIRST_INTERPRETER_PROMPT = (
-    "\n\nWhen memory tools (search_observations, read_memory) are available, use "
-    "them before `code_interpreter` for workspace inspection or implementation work."
+    "\n\nWhen memory tools (search_observations, search_experience, read_memory) "
+    "are available, use them before `code_interpreter` for workspace inspection "
+    "or implementation work."
 )
 
 _live_interpreters: weakref.WeakSet[EvoCodeInterpreterMiddleware]
@@ -127,6 +128,11 @@ async def aclose_code_interpreters(
 _DEFAULT_PTC_ALLOWLIST: list[str] = [
     # Memory lookup (read-only, should precede workspace inspection)
     "search_observations",
+    # Experience retrieval batches well here: probing a library whose
+    # vocabulary you do not know takes several queries, and running the
+    # variants in one JS call costs one round trip instead of several.
+    "search_experience",
+    "list_experience",
     "read_memory",
     # Async sub-agent dispatch (langgraph dev). `task` is excluded — see docstring.
     "start_async_task",

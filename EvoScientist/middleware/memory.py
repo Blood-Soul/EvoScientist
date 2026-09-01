@@ -73,6 +73,25 @@ Observation memory lives under `/memories/observations/`:
 - `/memories/observations/global/`: cross-project observations.
 - `/memories/observations/projects/{project_id}/`: observations for this workspace.
 
+Three memory stores, three different questions. Pick by what you are asking,
+not by which tool you used last:
+- "How does this work / what went wrong before / what did we decide?" —
+  your own operating memory (`O-*`): tool behavior, failures, workarounds,
+  commands, project conventions, prior results. `search_observations`.
+- "What is known about this subject?" — experience extracted from published
+  papers (`E-*`): methods, measured results, evaluation protocols,
+  subject-matter findings. `search_experience`, or `list_experience` to browse
+  when you do not know the library's vocabulary. When you are making a decision
+  rather than gathering context, `apply_experience`.
+- "What exactly did that paper say?" — stored paper full text (`C-*`): the
+  numbers, settings, and wording behind an experience record.
+  `search_paper_text`, then `read_paper`.
+
+The stores do not overlap, and querying the wrong one returns nothing useful
+rather than an error. A research subject asked of `search_observations` misses
+because no observation describes a paper's findings; a workflow question asked
+of `search_experience` misses because no paper describes your workflow.
+
 Required memory preflight:
 - For coding, debugging, research, planning, or evaluation tasks, complete this
   preflight before inspecting workspace/task files, running commands, editing
@@ -85,10 +104,58 @@ Required memory preflight:
   when exact grep-like matching is required. If a result looks promising but
   the snippet is not enough to act on confidently, call `read_memory` with its
   observation ID.
+- When the task also involves research subject matter -- reading or comparing
+  papers, generating or judging ideas, choosing a method or evaluation
+  protocol, surveying what is known -- also query the experience library in the
+  same preflight. These are separate lookups against separate stores; doing the
+  observation half does not cover the subject-matter half.
 - After this preflight, use direct tools or `code_interpreter` to do or batch
   the actual workspace work as appropriate.
 - Mention the result briefly before continuing: observation IDs used, or that
   no relevant observation was found. Keep this preflight short.
+"""
+
+EXPERIENCE_SEARCH_INSTRUCTIONS = """
+Paper experience (`E-*`) is reached through `search_experience` and
+`list_experience`, never through `search_observations`. It is a separate store
+holding what published papers found: methods, measured results, evaluation
+protocols, and subject-matter knowledge, across every discipline in this
+project's library.
+
+Query it by SUBJECT. These records describe what other researchers did in their
+own settings; not one of them describes your workflow, your tools, or your
+environment. This is the distinction that decides whether retrieval works:
+- Ask about content: `topic="automated scientific discovery"`,
+  `topic="protein structure prediction"`, `method="multi-agent orchestration"`,
+  `task="hypothesis generation"`.
+- Not about process: "how do I build an idea from these abstracts", "which API
+  finds papers", "what to do when a download fails". Those are questions about
+  your own operating memory -- `search_observations` -- and asking them here
+  matches nothing.
+- When a task hands you papers and asks you to reason about them, the query is
+  what those papers are ABOUT, not what you have been asked to do with them.
+  Papers on autonomous research agents make the topic "autonomous research
+  agents", not "how to generate ideas from abstracts".
+
+Retrieval is lexical, so phrasing matters and a miss usually means wrong
+vocabulary rather than an empty library:
+- `topic`, `method`, and `task` are searched separately and fused. Supplying
+  two or three narrows by agreement; packing everything into one long `topic`
+  string dilutes it.
+- `discipline`, `domain`, and `level` are exact-match filters. Use `discipline`
+  to stop a cross-disciplinary library from answering a chemistry question with
+  computer-science records.
+- When a query returns nothing, browse with `list_experience` before rephrasing:
+  `facet=discipline` for the field counts, then `facet=domain`, then
+  `facet=records`. Browsing is phrasing-independent, which is exactly what you
+  need when you do not yet know how the library words things.
+- There is no `memory_type` and no `scope` on this store. Those filter
+  observations only.
+
+`read_memory` with an `E-*` ID reads one full record. Prefer `apply_experience`
+when you are making a decision: a raw record carries the source's fixed
+datasets, models, and thresholds alongside its transferable procedure, and
+reading it into a plan is how those values get copied.
 """
 
 PAPER_FULLTEXT_INSTRUCTIONS = """
@@ -97,7 +164,7 @@ through `search_paper_text` and `read_paper`.
 
 Experience records and paper text do different jobs, and the second half of the
 preflight is what makes them complementary:
-- Experiences (`E-*`, via `search_observations`) carry transferable judgements:
+- Experiences (`E-*`, via `search_experience`) carry transferable judgements:
   what worked, under which conditions, and what to avoid.
 - Paper text (`C-*`, via `search_paper_text`) carries the verifiable evidence
   behind those judgements: exact metrics, hyperparameters, dataset splits,
@@ -144,8 +211,14 @@ your task:
   or `search_paper_text` instead of assuming they were handled.
 
 When to call it: planning an experiment, choosing a method, evaluation
-protocol, baseline, or parameter, or judging whether a published result applies
-to this project. Once per decision, not once per search.
+protocol, baseline, or parameter, judging whether a published result applies to
+this project, generating or narrowing research ideas, surveying what is already
+known about a subject, or deciding whether an idea is close to prior work. Once
+per decision, not once per search.
+
+For gathering context rather than deciding, `search_experience` and
+`list_experience` are the cheaper path -- this tool costs two aux-model calls,
+so reach for it when the answer will actually shape what you do next.
 
 `verdict: decline` is a real answer, not a failure — it means the stored
 experience does not apply to your task, and inventing applicability from it
@@ -306,6 +379,7 @@ class EvoMemoryMiddleware(AgentMiddleware):
         enable_observation_memory: bool = True,
         enable_observation_tool: bool = True,
         enable_paper_fulltext: bool = True,
+        enable_experience_search: bool = True,
         enable_experience_policy: bool = True,
         memory_scheduler: MemoryScheduler | None = None,
     ) -> None:
@@ -331,6 +405,15 @@ class EvoMemoryMiddleware(AgentMiddleware):
         # them without the first half would describe a flow the agent cannot run.
         self._enable_paper_fulltext = (
             enable_observation_memory and enable_paper_fulltext
+        )
+        # Kept separate from the policy flag: browsing and searching the
+        # experience library is read-only and always affordable, while
+        # `apply_experience` costs two aux-model calls. A deployment that
+        # disables the expensive reuse layer still needs the retrieval half,
+        # otherwise the inlined experience block advertises a store with no way
+        # to reach it.
+        self._enable_experience_search = (
+            enable_observation_memory and enable_experience_search
         )
         self._enable_experience_policy = (
             enable_observation_memory and enable_experience_policy
@@ -571,6 +654,8 @@ class EvoMemoryMiddleware(AgentMiddleware):
         instructions = OBSERVATION_MEMORY_READ_INSTRUCTIONS.format(
             project_id=self._project_id
         )
+        if self._enable_experience_search:
+            instructions += EXPERIENCE_SEARCH_INSTRUCTIONS
         if self._enable_paper_fulltext:
             instructions += PAPER_FULLTEXT_INSTRUCTIONS
         if self._enable_experience_policy:
@@ -708,6 +793,7 @@ def create_memory_middleware(
     enable_observation_memory: bool = True,
     enable_observation_tool: bool = True,
     enable_paper_fulltext: bool = True,
+    enable_experience_search: bool = True,
     enable_experience_policy: bool = True,
     memory_scheduler: MemoryScheduler | None = None,
 ) -> EvoMemoryMiddleware:
@@ -726,6 +812,7 @@ def create_memory_middleware(
         enable_observation_memory=enable_observation_memory,
         enable_observation_tool=enable_observation_tool,
         enable_paper_fulltext=enable_paper_fulltext,
+        enable_experience_search=enable_experience_search,
         enable_experience_policy=enable_experience_policy,
         memory_scheduler=memory_scheduler,
     )

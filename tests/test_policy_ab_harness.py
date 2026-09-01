@@ -262,3 +262,81 @@ async def test_failed_cell_is_recorded_not_raised(tmp_path: Path) -> None:
     )
     assert "model unavailable" in sample.error
     assert ab.summarize([sample])["none"] == {"n": 0, "errors": 1}
+
+
+def test_unset_actor_model_resolves_to_the_project_not_a_library_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--model` unset means "this project's main model", as the flag documents.
+
+    `get_chat_model(model=None)` does not read the project config -- it falls
+    back to its own default, which is an Anthropic model. Passing the flag
+    straight through therefore made an unset `--model` mean "Anthropic"
+    regardless of configuration, and every cell failed on a missing
+    `ANTHROPIC_API_KEY` for a model nobody selected.
+    """
+    import EvoScientist.config.settings as settings
+
+    monkeypatch.setattr(
+        settings,
+        "get_effective_config",
+        lambda: SimpleNamespace(model="deepseek-v4-pro", provider="custom-openai"),
+    )
+    monkeypatch.setattr(settings, "apply_config_to_env", lambda cfg: None)
+
+    assert ab._resolve_actor_model(None, None) == ("deepseek-v4-pro", "custom-openai")
+
+
+def test_an_explicit_actor_flag_overrides_the_configured_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import EvoScientist.config.settings as settings
+
+    monkeypatch.setattr(
+        settings,
+        "get_effective_config",
+        lambda: SimpleNamespace(model="deepseek-v4-pro", provider="custom-openai"),
+    )
+    monkeypatch.setattr(settings, "apply_config_to_env", lambda cfg: None)
+
+    assert ab._resolve_actor_model("gpt-4o", "openai") == ("gpt-4o", "openai")
+    # A flag may set only the model; the provider still comes from config.
+    assert ab._resolve_actor_model("gpt-4o", None) == ("gpt-4o", "custom-openai")
+
+
+def test_resolution_publishes_config_credentials_to_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A standalone script bypasses the agent's own config-to-env step.
+
+    Credentials that live in the config file rather than the shell are only
+    visible to `get_chat_model` once `apply_config_to_env` has run, so resolving
+    the model has to trigger it or the harness fails with a missing key.
+    """
+    import EvoScientist.config.settings as settings
+
+    applied: list[Any] = []
+    monkeypatch.setattr(
+        settings,
+        "get_effective_config",
+        lambda: SimpleNamespace(model="m", provider="p"),
+    )
+    monkeypatch.setattr(settings, "apply_config_to_env", applied.append)
+
+    ab._resolve_actor_model(None, None)
+    assert len(applied) == 1
+
+
+def test_unloadable_config_falls_back_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Config is environment-dependent; failing to read it must not be fatal."""
+    import EvoScientist.config.settings as settings
+
+    def _boom() -> Any:
+        raise RuntimeError("no config file")
+
+    monkeypatch.setattr(settings, "get_effective_config", _boom)
+
+    assert ab._resolve_actor_model(None, None) == (None, None)
+    assert ab._resolve_actor_model("gpt-4o", "openai") == ("gpt-4o", "openai")

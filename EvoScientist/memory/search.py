@@ -7,6 +7,7 @@ import re
 from collections import Counter
 
 from .types import (
+    DocumentTokenIndex,
     ObservationSearchDocument,
     ObservationSearchHit,
     ObservationSearchMode,
@@ -42,28 +43,39 @@ def _tokens(text: str) -> list[str]:
     ]
 
 
-def _document_tokens(document: ObservationSearchDocument) -> set[str]:
-    """Return unique tokens used for IDF calculation."""
-    return set(
-        _tokens(
-            " ".join(
-                [
-                    document.observation_id,
-                    document.summary,
-                    str(document.memory_type),
-                    str(document.scope),
-                    document.body,
-                ]
-            )
-        )
+def document_token_index(document: ObservationSearchDocument) -> DocumentTokenIndex:
+    """Return this document's per-field token sets, deriving them at most once.
+
+    Tokenizing dominates a ranked query, and it is corpus-wide work: every
+    document is tokenized to compute IDF whether or not it can score. Facet
+    fusion multiplied that by the number of facets supplied. The stores hand
+    back the same document objects across calls, so the result is memoized on
+    the document -- `ObservationSearchDocument` is frozen, hence the explicit
+    `__setattr__`. Documents built fresh per call simply pay the old cost.
+    """
+    cached = document.token_index
+    if cached is not None:
+        return cached
+    id_tokens = frozenset(_tokens(document.observation_id))
+    summary_tokens = frozenset(_tokens(document.summary))
+    body_tokens = frozenset(_tokens(document.body))
+    metadata_tokens = frozenset(_tokens(f"{document.memory_type} {document.scope}"))
+    index = DocumentTokenIndex(
+        id_tokens=id_tokens,
+        summary_tokens=summary_tokens,
+        body_tokens=body_tokens,
+        metadata_tokens=metadata_tokens,
+        all_tokens=id_tokens | summary_tokens | body_tokens | metadata_tokens,
     )
+    object.__setattr__(document, "token_index", index)
+    return index
 
 
 def _token_idf(documents: list[ObservationSearchDocument]) -> dict[str, float]:
     """Compute smoothed IDF over the current observation corpus."""
     document_frequency: Counter[str] = Counter()
     for document in documents:
-        document_frequency.update(_document_tokens(document))
+        document_frequency.update(document_token_index(document).all_tokens)
     document_count = len(documents)
     return {
         token: math.log((document_count + 1) / (count + IDF_SMOOTHING)) + IDF_OFFSET
@@ -78,21 +90,18 @@ def _ranked_score(
     idf: dict[str, float],
 ) -> float:
     """Score a document with named token-overlap weights."""
-    id_tokens = set(_tokens(document.observation_id))
-    summary_tokens = set(_tokens(document.summary))
-    body_tokens = set(_tokens(document.body))
-    metadata_tokens = set(_tokens(f"{document.memory_type} {document.scope}"))
+    index = document_token_index(document)
 
     score = 0.0
     for token in query_tokens:
         token_weight = idf.get(token, 0.0)
-        if token in id_tokens:
+        if token in index.id_tokens:
             score += ID_MATCH_WEIGHT * token_weight
-        if token in summary_tokens:
+        if token in index.summary_tokens:
             score += SUMMARY_MATCH_WEIGHT * token_weight
-        if token in body_tokens:
+        if token in index.body_tokens:
             score += BODY_MATCH_WEIGHT * token_weight
-        elif token in metadata_tokens:
+        elif token in index.metadata_tokens:
             score += METADATA_MATCH_WEIGHT * token_weight
     return score
 

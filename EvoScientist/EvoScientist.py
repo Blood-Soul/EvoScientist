@@ -356,6 +356,13 @@ def _inject_subagent_middleware(
                 MemoryObservationTarget.AGENT
             ),
             enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
+            # Gated on the subagent actually holding the tools: the instructions
+            # tell it to route subject-matter lookups through `search_experience`,
+            # which is wrong guidance for a subagent whose YAML does not grant it.
+            enable_experience_search=(
+                memory_controls.experience_search_enabled
+                and "search_experience" in (sa.get("tools") or [])
+            ),
             # Gated on the subagent actually holding the tool: the instructions
             # tell it to route reuse through `apply_experience`, which is wrong
             # guidance for a subagent whose YAML does not grant it.
@@ -683,8 +690,10 @@ def _build_paper_tools(*, cfg, workspace_dir):
     from .tools import (
         create_apply_experience_tool,
         create_extract_paper_experiences_tool,
+        create_list_experience_tool,
         create_paper_experience_queue_tool,
         create_read_paper_tool,
+        create_search_experience_tool,
         create_search_paper_text_tool,
         skill_manager,
         tavily_search,
@@ -705,6 +714,15 @@ def _build_paper_tools(*, cfg, workspace_dir):
         paper_extract_tool.name: paper_extract_tool,
     }
     base_tools = [think_tool, skill_manager, paper_queue_tool, paper_extract_tool]
+
+    # Retrieval over `E-*`, registered alongside the extraction tools: a store
+    # that can be written but not read is worse than one that is absent,
+    # because the prompt still advertises the experiences.
+    if getattr(cfg, "memory_experience_search_enabled", True):
+        for factory in (create_search_experience_tool, create_list_experience_tool):
+            tool = factory(memory_dir=memory_dir, project_id=project_id)
+            tool_registry[tool.name] = tool
+            base_tools.append(tool)
 
     if getattr(cfg, "memory_paper_fulltext_enabled", True):
         for factory in (create_search_paper_text_tool, create_read_paper_tool):
@@ -1006,6 +1024,7 @@ def _get_default_middleware(
             MemoryObservationTarget.AGENT
         ),
         enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
+        enable_experience_search=memory_controls.experience_search_enabled,
         enable_experience_policy=memory_controls.experience_policy_enabled,
         memory_scheduler=memory_scheduler,
     )

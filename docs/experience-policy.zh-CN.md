@@ -113,7 +113,10 @@ scripts/policy_trace_view.py              调试日志查看器（独立，见�
 2. **缓存**。键为 `SHA256(task, sorted(选中的 E-* ID))[:16]`。任务改写措辞会产生
    新键并重新合成——这是正确的，因为写手是逐字读任务的，措辞变了策略就可能变。
 3. **按需调用**。工具描述明确要求"在真正做决策时调用"，不是每次检索都调。这也是
-   它没有并入 `search_observations` 的原因：那个工具负责定位记录，这个负责转换记录。
+   它没有并入 `search_experience` 的原因：那个工具负责**定位**记录，这个负责**转换**
+   记录。两者共用同一套检索内核（`gather_candidates` 直接调
+   `search_experience_records`），所以拆的是用途，不是实现 —— 不存在两份会各自漂移的
+   排序逻辑。
 
 ## 6. 降级行为
 
@@ -204,8 +207,13 @@ graph 装配的回归也不会悄悄改变数字。代价是它测的是**隔离
 `--policy-model` 用来固定"辅助模型做中间工作"这个变量，与 actor 模型独立。
 默认 4 任务 × 3 条件 × 1 重复 = 12 次 actor 调用，`--dry-run` 会先报出这个数字。
 
-**注意：本次改动只跑到了桩模型的端到端验证，真实 LLM 的 A/B 数字尚未采集。**
-上述 stale-binding 率的对比表需要你用自己的额度跑一次才有数。
+**现状：已经用真实 LLM 跑通，但数字还不能引用。**
+方向上与设计意图一致（B 散文 100% stale、每份计划 3 个源值；C 派生策略 0% stale、
+target 命中 100%），但 12 格里有 7–8 格死于 `APIConnectionError`，每格只剩 n=1–2；
+且条件 A"无记忆"也报出 50–100% stale——命中的是 `AdamW`、`2e-5`、`0.1` 这类领域通用
+默认值，任何一份像样的计划都会自己写出来。所以 **B−C 的对比有意义，绝对 stale% 没有
+意义**，要让地板线读作 0 需要先把这类通用值从 fixture 的 `bindings` 里剔除。
+详见 [经验检索独立化改造](experience-retrieval-split.zh-CN.md) 第 9 节。
 
 ## 9. 开发期调试可见性
 
@@ -258,23 +266,25 @@ scripts/policy_trace_view.py --memory-dir <dir> --full        # 不截断长字�
 .venv/bin/pytest tests/test_experience_policy.py tests/test_policy_ab_harness.py -v
 ```
 
-- `tests/test_experience_policy.py`（44 项）：schema 校验与容错、
+- `tests/test_experience_policy.py`（45 项）：schema 校验与容错、
   `transferable_core` 回退、缓存键稳定性（含 ID 顺序无关）、写手输出的格式容错、
   `derive_policy` 全流程（空候选 / 缓存命中 / `refresh` 绕过缓存 / 重排降级 /
   合成失败上抛）、调试追踪（默认关闭不落盘 / 开启后全链路共享一个 `call_id` /
   写入失败不影响主流程 / 自定义路径）、工具层（正常返回 / 失败返回提示 / 配置的
   `max_selected` 确实进了 prompt / 越界值被钳制）、说明注入的开关门控、以及抽取
   侧的**向后兼容**（老记录仍合法、新字段能落盘、未知字段仍被拒）。
-- `tests/test_policy_ab_harness.py`（13 项）：词边界匹配、评分器四种判定、fixture
+- `tests/test_policy_ab_harness.py`（17 项）：词边界匹配、评分器四种判定、fixture
   自检、桩模型端到端（播种 → 检索 → 合成 → 渲染 → 评分 → 汇总）、单格失败不影响
-  其他格。
+  其他格、以及 actor 模型默认值从项目配置解析（其中 3 项在修复前的行为下会失败）。
 
-已知无关失败：`tests/test_backends.py::...::test_execute_e2e_workspace_tier_skill`
-在干净树上同样失败（本机 PATH 只有 `python3`，没有 `python`），与本次改动无关。
+已知无关失败：`tests/test_backends.py` 的 8 项在干净树上同样失败（本机 PATH 只有
+`python3`，没有 `python`），与本次改动无关，用 `--ignore` 排除。
 
 ## 11. 遗留
 
-- 真实 LLM 的 A/B 数字未采集（见第 8 节）。
+- A/B 数字已跑通但还不能引用：样本量不足，且条件 A 的地板线被领域通用默认值污染
+  （见第 8 节）。`PolicyOutputError` 还会把辅助模型的偶发抖动和真正的功能损坏记成
+  同一种失败格子，无法区分。
 - `utility` 字段仍未接入：策略被采纳后的实际效果没有回写到记录置信度上，因此
   "这条经验用过效果好"这类信号目前不会影响后续重排。
 - 缓存不按记录内容失效。同一批 `E-*` ID 的记录被更新（例如置信度聚合改变）时，
