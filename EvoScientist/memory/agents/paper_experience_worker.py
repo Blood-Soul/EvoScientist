@@ -35,6 +35,10 @@ async def drain_paper_experience_queue(
     *, memory_dir: str | Path, project_id: str, model: Any | None = None
 ) -> dict[str, int]:
     """Drain all currently pending tasks for one project."""
+    from ...config import get_effective_config
+
+    if not get_effective_config().memory_evolution_enabled:
+        return {"processed": 0, "failed": 0}
     lock_path = queue_worker_lock_path(memory_dir, project_id)
     # The LangGraph dev event loop rejects synchronous filesystem operations.
     # Queue persistence deliberately uses normal file APIs, so keep that work

@@ -65,6 +65,15 @@ class MemoryObservationWriter(StrEnum):
                 )
 
 
+class MemoryObservationScope(StrEnum):
+    """Which observation scopes are visible to an agent."""
+
+    BOTH = "both"
+    PROJECT = "project"
+    GLOBAL = "global"
+    DISABLED = "disabled"
+
+
 class MemorySkillSynthesisMode(StrEnum):
     """Configured AutoSkills approval behavior."""
 
@@ -291,12 +300,18 @@ class EvoScientistConfig:
     recursion_limit: int = 1_000_000
 
     # Memory Settings
+    # Master switch for the self-evolving/experience extensions. The original
+    # observation/profile memory switches remain independently controllable.
+    memory_evolution_enabled: bool = True
     # Profile memory injects and maintains `/memories/profile/...` files.
     memory_profile_enabled: bool = True
     # Observation memory indexes `/memories/observations/...` and adds
     # observation-read guidance/context. Writes require this switch plus an
     # allowed `memory_observation_writer` role below.
     memory_observations_enabled: bool = True
+    # Observation visibility/write scope. ``both`` preserves historical
+    # behavior; ``project`` is recommended for isolated experiments.
+    memory_observation_scope: MemoryObservationScope = MemoryObservationScope.BOTH
     # Which observation-writing path receives the `record_observation` tool:
     # "off" disables writes; "agent" means live agents; "worker" means
     # post-run memory workers; "all" means live agents and post-run memory
@@ -642,30 +657,46 @@ class MemoryControls:
     observations_enabled: bool
     observation_writer: MemoryObservationWriter
     workers_enabled: bool
+    observation_scope: MemoryObservationScope = MemoryObservationScope.BOTH
     paper_fulltext_enabled: bool = True
     experience_search_enabled: bool = True
     experience_policy_enabled: bool = True
     experience_policy_max_selected: int = 4
+    evolution_enabled: bool = True
 
     @classmethod
     def from_config(cls, config: EvoScientistConfig) -> MemoryControls:
         return cls(
             profile_enabled=config.memory_profile_enabled,
             observations_enabled=config.memory_observations_enabled,
+            observation_scope=config.memory_observation_scope,
             observation_writer=config.memory_observation_writer,
             workers_enabled=config.memory_workers_enabled,
             paper_fulltext_enabled=config.memory_paper_fulltext_enabled,
             experience_search_enabled=config.memory_experience_search_enabled,
             experience_policy_enabled=config.memory_experience_policy_enabled,
             experience_policy_max_selected=config.memory_experience_policy_max_selected,
+            evolution_enabled=config.memory_evolution_enabled,
         )
 
     @property
     def memory_enabled(self) -> bool:
         return self.profile_enabled or self.observations_enabled
 
+    @property
+    def effective_experience_search_enabled(self) -> bool:
+        return self.evolution_enabled and self.experience_search_enabled
+
+    @property
+    def effective_experience_policy_enabled(self) -> bool:
+        return self.evolution_enabled and self.experience_policy_enabled
+
     def observation_tool_enabled(self, target: MemoryObservationTarget) -> bool:
-        return self.observations_enabled and self.observation_writer.enables(target)
+        return (
+            self.observations_enabled
+            and self.observation_scope != MemoryObservationScope.DISABLED
+            and self.observation_writer.enables(target)
+        )
 
     def worker_needed(self, target: MemoryObservationTarget) -> bool:
         if not self.workers_enabled:
@@ -959,7 +990,9 @@ _ENV_MAPPINGS = {
     "langgraph_dev_keepalive": "EVOSCIENTIST_LANGGRAPH_DEV_KEEPALIVE",
     "recursion_limit": "EVOSCIENTIST_RECURSION_LIMIT",
     "memory_profile_enabled": "EVOSCIENTIST_MEMORY_PROFILE_ENABLED",
+    "memory_evolution_enabled": "EVOSCIENTIST_MEMORY_EVOLUTION_ENABLED",
     "memory_observations_enabled": "EVOSCIENTIST_MEMORY_OBSERVATIONS_ENABLED",
+    "memory_observation_scope": "EVOSCIENTIST_MEMORY_OBSERVATION_SCOPE",
     "memory_observation_writer": "EVOSCIENTIST_MEMORY_OBSERVATION_WRITER",
     "memory_workers_enabled": "EVOSCIENTIST_MEMORY_WORKERS_ENABLED",
     "memory_skill_synthesis_enabled": "EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_ENABLED",

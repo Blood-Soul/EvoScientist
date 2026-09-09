@@ -29,6 +29,7 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import HumanMessage
 
 from .. import paths as _paths
+from ..config import MemoryObservationScope
 from ..memory import (
     MemorySourceType,
     ObservationRecordResult,
@@ -605,6 +606,7 @@ class EvoMemoryMiddleware(AgentMiddleware):
         enable_paper_fulltext: bool = True,
         enable_experience_search: bool = True,
         enable_experience_policy: bool = True,
+        observation_scope: MemoryObservationScope | None = None,
         memory_scheduler: MemoryScheduler | None = None,
         enable_profile_bootstrap: bool = False,
     ) -> None:
@@ -615,6 +617,7 @@ class EvoMemoryMiddleware(AgentMiddleware):
         self._enable_profile_memory = enable_profile_memory
         self._enable_profile_bootstrap = enable_profile_bootstrap
         self._enable_observation_memory = enable_observation_memory
+        self._observation_scope = observation_scope
         self._memory_scheduler = memory_scheduler
         self._profile_specs = _profile_specs(self._project_id)
         pointer_lines = ["Profile files are available at:"]
@@ -650,12 +653,22 @@ class EvoMemoryMiddleware(AgentMiddleware):
                 create_search_observations_tool(
                     memory_dir=self._memory_dir,
                     project_id=self._project_id,
+                    observation_scope=(
+                        None
+                        if observation_scope in (None, MemoryObservationScope.BOTH)
+                        else observation_scope
+                    ),
                 )
             )
             self.tools.append(
                 create_read_memory_tool(
                     memory_dir=self._memory_dir,
                     project_id=self._project_id,
+                    observation_scope=(
+                        None
+                        if observation_scope in (None, MemoryObservationScope.BOTH)
+                        else observation_scope
+                    ),
                 )
             )
         if self._enable_observation_tool:
@@ -665,6 +678,11 @@ class EvoMemoryMiddleware(AgentMiddleware):
                     project_id=self._project_id,
                     source_type=source_type,
                     source_agent=source_agent,
+                    observation_scope=(
+                        None
+                        if observation_scope in (None, MemoryObservationScope.BOTH)
+                        else observation_scope
+                    ),
                     on_observation_recorded=self._record_observation_created,
                 )
             )
@@ -928,6 +946,13 @@ class EvoMemoryMiddleware(AgentMiddleware):
             context = build_observation_index_context(
                 memory_dir=self._memory_dir,
                 project_id=self._project_id,
+                observation_scope=(
+                    None
+                    if self._observation_scope in (None, MemoryObservationScope.BOTH)
+                    else self._observation_scope
+                ),
+                enable_experience=self._enable_experience_search,
+                enable_paper_fulltext=self._enable_paper_fulltext,
             )
         except OSError as e:
             logger.warning("Failed to refresh observation memory index: %s", e)
@@ -1108,6 +1133,7 @@ def create_memory_middleware(
     enable_paper_fulltext: bool = True,
     enable_experience_search: bool = True,
     enable_experience_policy: bool = True,
+    observation_scope: MemoryObservationScope | None = None,
     memory_scheduler: MemoryScheduler | None = None,
     enable_profile_bootstrap: bool = False,
 ) -> EvoMemoryMiddleware:
@@ -1128,6 +1154,7 @@ def create_memory_middleware(
         enable_paper_fulltext=enable_paper_fulltext,
         enable_experience_search=enable_experience_search,
         enable_experience_policy=enable_experience_policy,
+        observation_scope=observation_scope,
         memory_scheduler=memory_scheduler,
         enable_profile_bootstrap=enable_profile_bootstrap,
     )

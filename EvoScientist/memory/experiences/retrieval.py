@@ -31,6 +31,7 @@ from typing import Any
 from ..search import _tokens, search_documents
 from ..types import (
     ExperienceLevel,
+    MemoryScope,
     ObservationReadResult,
     ObservationSearchDocument,
     ObservationSearchHit,
@@ -303,7 +304,11 @@ def experience_library_stats(
 
 
 def read_memory_file(
-    *, memory_dir: str | Path, project_id: str, record_id: str
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+    record_id: str,
+    observation_scope: MemoryScope | None = None,
 ) -> ObservationReadResult | None:
     """Read either an observation or a project experience by stable ID."""
     from ..observations.store import read_observation_file
@@ -319,6 +324,7 @@ def read_memory_file(
         memory_dir=memory_dir,
         project_id=project_id,
         observation_id=requested,
+        scope=observation_scope,
     )
 
 

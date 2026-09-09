@@ -27,6 +27,9 @@ def build_observation_index_context(
     memory_dir: str | Path,
     project_id: str,
     max_inline_chars: int = DEFAULT_MAX_INLINE_OBSERVATION_INDEX_CHARS,
+    observation_scope: MemoryScope | None = None,
+    enable_experience: bool = True,
+    enable_paper_fulltext: bool = True,
 ) -> str:
     """Build a compact memory index for prompts.
 
@@ -37,7 +40,11 @@ def build_observation_index_context(
     """
     blocks = [
         _format_observation_index_context(
-            _observation_documents(memory_dir=memory_dir, project_id=project_id),
+            _observation_documents(
+                memory_dir=memory_dir,
+                project_id=project_id,
+                scope=observation_scope,
+            ),
             include_counts=True,
             include_paths=True,
             include_search_hints=True,
@@ -49,14 +56,18 @@ def build_observation_index_context(
             memory_dir=memory_dir,
             project_id=project_id,
             remaining=_budget(max_inline_chars, _EXPERIENCE_BUDGET_FRACTION),
-        ),
+        )
+        if enable_experience
+        else "",
         # Full text can exist without experiences -- extraction is persisted
         # after the text and may have failed -- so this block is independent.
         _build_paper_fulltext_index(
             memory_dir=memory_dir,
             project_id=project_id,
             remaining=_budget(max_inline_chars, _FULLTEXT_BUDGET_FRACTION),
-        ),
+        )
+        if enable_paper_fulltext
+        else "",
     ]
     return "\n\n".join(block for block in blocks if block)
 
@@ -243,6 +254,7 @@ def _observation_documents(
     memory_dir: str | Path,
     project_id: str,
     exclude_ids: Iterable[str] = (),
+    scope: MemoryScope | None = None,
 ) -> list[ObservationSearchDocument]:
     excluded = set(exclude_ids)
     return sorted(
@@ -251,6 +263,7 @@ def _observation_documents(
             for document in list_observation_documents(
                 memory_dir=memory_dir,
                 project_id=project_id,
+                scope=scope,
             )
             if document.observation_id not in excluded
         ),

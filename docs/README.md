@@ -16,6 +16,7 @@
 | Guide                                                      | Description                                                                     |
 |------------------------------------------------------------|---------------------------------------------------------------------------------|
 | [`stream-json` output protocol](https://github.com/EvoScientist/EvoScientist/blob/main/docs/guides/stream-json.md#stream-json-output-protocol)   | Line-delimited JSON event stream (`--output-format stream-json`) for driving EvoScientist headlessly from SDK / programmatic clients |
+| [Memory 开关与实验配置](./memory-controls.zh-CN.md) | 经验系统、observation 作用域和消融实验配置 |
 
 ## Contributing a Recipe
 

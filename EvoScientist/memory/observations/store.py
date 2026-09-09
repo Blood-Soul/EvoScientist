@@ -550,6 +550,7 @@ def read_observation_file(
     memory_dir: str | Path,
     project_id: str,
     observation_id: str,
+    scope: MemoryScope | None = None,
 ) -> ObservationReadResult | None:
     """Read a full observation document by frontmatter id."""
     requested_id = observation_id.strip()
@@ -560,7 +561,7 @@ def read_observation_file(
     for document in list_observation_documents(
         memory_dir=root,
         project_id=project_id,
-        scope=None,
+        scope=scope,
     ):
         if document.observation_id != requested_id:
             continue

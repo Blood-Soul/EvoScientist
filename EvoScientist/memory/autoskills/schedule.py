@@ -102,7 +102,7 @@ def reconcile_autoskill_schedule(
         config,
         limit=AUTOSKILL_SCHEDULE_SEARCH_LIMIT,
     )
-    if not config.memory_skill_synthesis_enabled:
+    if not config.memory_evolution_enabled or not config.memory_skill_synthesis_enabled:
         for row in existing:
             client.crons.delete(str(row["cron_id"]))
         return {"status": "disabled", "deleted": len(existing)}

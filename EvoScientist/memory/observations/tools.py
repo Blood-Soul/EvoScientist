@@ -231,6 +231,7 @@ def create_search_observations_tool(
     *,
     memory_dir: str | Path,
     project_id: str,
+    observation_scope: MemoryScope | None = None,
 ) -> BaseTool:
     """Build the read-only `search_observations` tool for one project context."""
 
@@ -247,7 +248,7 @@ def create_search_observations_tool(
             memory_dir=memory_dir,
             project_id=_runtime_project_id(runtime, project_id),
             query=query,
-            scope=scope,
+            scope=observation_scope or scope,
             memory_type=memory_type,
             limit=limit,
             mode=search_mode,
@@ -286,6 +287,7 @@ def create_read_memory_tool(
     *,
     memory_dir: str | Path,
     project_id: str,
+    observation_scope: MemoryScope | None = None,
 ) -> BaseTool:
     """Build the read-only `read_memory` tool for one project context."""
 
@@ -298,6 +300,7 @@ def create_read_memory_tool(
             memory_dir=memory_dir,
             project_id=_runtime_project_id(runtime, project_id),
             record_id=requested_id,
+            observation_scope=observation_scope,
         )
         if result is None:
             return json.dumps(
@@ -334,6 +337,7 @@ def create_record_observation_tool(
     project_id: str,
     source_type: MemorySourceType,
     source_agent: str,
+    observation_scope: MemoryScope | None = None,
     on_observation_recorded: ObservationRecordedHook | None = None,
 ) -> BaseTool:
     """Build the `record_observation` tool for one agent context."""
@@ -368,7 +372,7 @@ def create_record_observation_tool(
             observation=observation,
             why_it_matters=why_it_matters,
             evidence=evidence,
-            scope=scope,
+            scope=observation_scope or scope,
             source_type=source_type,
             source_session_id=context.source_session_id,
             source_agent=context.source_agent,

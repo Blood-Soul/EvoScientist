@@ -256,15 +256,16 @@ def build_async_subagent_graph(name: str) -> Any:
     # Keep async sub-agent tool resolution feature-parity with the in-process
     # main-agent factory. In particular, paper-navigator requires this tool to
     # persist its final paper set; merely mounting the skill does not expose it.
-    paper_queue_tool = create_paper_experience_queue_tool(
-        memory_dir=str(_paths.MEMORIES_DIR),
-        project_id=resolve_project_id(_paths.WORKSPACE_ROOT),
-    )
     tool_registry = {
         "think_tool": think_tool,
         "skill_manager": skill_manager,
-        paper_queue_tool.name: paper_queue_tool,
     }
+    if cfg.memory_evolution_enabled:
+        paper_queue_tool = create_paper_experience_queue_tool(
+            memory_dir=str(_paths.MEMORIES_DIR),
+            project_id=resolve_project_id(_paths.WORKSPACE_ROOT),
+        )
+        tool_registry[paper_queue_tool.name] = paper_queue_tool
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
 

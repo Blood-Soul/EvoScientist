@@ -351,23 +351,30 @@ def _inject_subagent_middleware(
             source_type=source_type,
             source_agent=name,
             enable_profile_memory=memory_controls.profile_enabled,
-            enable_observation_memory=memory_controls.observations_enabled,
+            enable_observation_memory=(
+                memory_controls.observations_enabled
+                and memory_controls.observation_scope.value != "disabled"
+            ),
             enable_observation_tool=memory_controls.observation_tool_enabled(
                 MemoryObservationTarget.AGENT
             ),
-            enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
+            observation_scope=memory_controls.observation_scope,
+            enable_paper_fulltext=(
+                memory_controls.evolution_enabled
+                and memory_controls.paper_fulltext_enabled
+            ),
             # Gated on the subagent actually holding the tools: the instructions
             # tell it to route subject-matter lookups through `search_experience`,
             # which is wrong guidance for a subagent whose YAML does not grant it.
             enable_experience_search=(
-                memory_controls.experience_search_enabled
+                memory_controls.effective_experience_search_enabled
                 and "search_experience" in (sa.get("tools") or [])
             ),
             # Gated on the subagent actually holding the tool: the instructions
             # tell it to route reuse through `apply_experience`, which is wrong
             # guidance for a subagent whose YAML does not grant it.
             enable_experience_policy=(
-                memory_controls.experience_policy_enabled
+                memory_controls.effective_experience_policy_enabled
                 and "apply_experience" in (sa.get("tools") or [])
             ),
             memory_scheduler=memory_scheduler,
@@ -702,35 +709,47 @@ def _build_paper_tools(*, cfg, workspace_dir):
 
     memory_dir = str(_paths_mod.MEMORIES_DIR)
     project_id = resolve_project_id(workspace_dir or _paths_mod.WORKSPACE_ROOT)
-    paper_queue_tool = create_paper_experience_queue_tool(
-        memory_dir=memory_dir, project_id=project_id
-    )
-    paper_extract_tool = create_extract_paper_experiences_tool(
-        memory_dir=memory_dir, project_id=project_id
-    )
     tool_registry = {
         "think_tool": think_tool,
-        paper_queue_tool.name: paper_queue_tool,
-        paper_extract_tool.name: paper_extract_tool,
     }
-    base_tools = [think_tool, skill_manager, paper_queue_tool, paper_extract_tool]
+    base_tools = [think_tool, skill_manager]
+    if getattr(cfg, "memory_evolution_enabled", True):
+        paper_queue_tool = create_paper_experience_queue_tool(
+            memory_dir=memory_dir, project_id=project_id
+        )
+        paper_extract_tool = create_extract_paper_experiences_tool(
+            memory_dir=memory_dir, project_id=project_id
+        )
+        tool_registry.update(
+            {
+                paper_queue_tool.name: paper_queue_tool,
+                paper_extract_tool.name: paper_extract_tool,
+            }
+        )
+        base_tools.extend([paper_queue_tool, paper_extract_tool])
 
     # Retrieval over `E-*`, registered alongside the extraction tools: a store
     # that can be written but not read is worse than one that is absent,
     # because the prompt still advertises the experiences.
-    if getattr(cfg, "memory_experience_search_enabled", True):
+    if getattr(cfg, "memory_evolution_enabled", True) and getattr(
+        cfg, "memory_experience_search_enabled", True
+    ):
         for factory in (create_search_experience_tool, create_list_experience_tool):
             tool = factory(memory_dir=memory_dir, project_id=project_id)
             tool_registry[tool.name] = tool
             base_tools.append(tool)
 
-    if getattr(cfg, "memory_paper_fulltext_enabled", True):
+    if getattr(cfg, "memory_evolution_enabled", True) and getattr(
+        cfg, "memory_paper_fulltext_enabled", True
+    ):
         for factory in (create_search_paper_text_tool, create_read_paper_tool):
             tool = factory(memory_dir=memory_dir, project_id=project_id)
             tool_registry[tool.name] = tool
             base_tools.append(tool)
 
-    if getattr(cfg, "memory_experience_policy_enabled", True):
+    if getattr(cfg, "memory_evolution_enabled", True) and getattr(
+        cfg, "memory_experience_policy_enabled", True
+    ):
         policy_tool = create_apply_experience_tool(
             memory_dir=memory_dir,
             project_id=project_id,
@@ -1019,13 +1038,19 @@ def _get_default_middleware(
         source_type=source_type,
         source_agent=memory_source_agent,
         enable_profile_memory=memory_controls.profile_enabled,
-        enable_observation_memory=memory_controls.observations_enabled,
+        enable_observation_memory=(
+            memory_controls.observations_enabled
+            and memory_controls.observation_scope.value != "disabled"
+        ),
         enable_observation_tool=memory_controls.observation_tool_enabled(
             MemoryObservationTarget.AGENT
         ),
-        enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
-        enable_experience_search=memory_controls.experience_search_enabled,
-        enable_experience_policy=memory_controls.experience_policy_enabled,
+        enable_paper_fulltext=(
+            memory_controls.evolution_enabled and memory_controls.paper_fulltext_enabled
+        ),
+        enable_experience_search=memory_controls.effective_experience_search_enabled,
+        enable_experience_policy=memory_controls.effective_experience_policy_enabled,
+        observation_scope=memory_controls.observation_scope,
         memory_scheduler=memory_scheduler,
         # First-contact intro: main agent only, and never in unattended runs.
         enable_profile_bootstrap=not for_async_subagent and not bool(cfg.auto_mode),
