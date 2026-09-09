@@ -1027,6 +1027,8 @@ def _get_default_middleware(
         enable_experience_search=memory_controls.experience_search_enabled,
         enable_experience_policy=memory_controls.experience_policy_enabled,
         memory_scheduler=memory_scheduler,
+        # First-contact intro: main agent only, and never in unattended runs.
+        enable_profile_bootstrap=not for_async_subagent and not bool(cfg.auto_mode),
     )
     # Main-agent tool selection may use the auxiliary model; async sub-agents
     # keep the main model (they do real work, not a one-off helper call).
