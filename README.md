@@ -402,6 +402,7 @@ export TAVILY_API_KEY="tvly-..."    # app.tavily.com
 # Paper full-text fetch, used by the paper-navigator skill (optional)
 export S2_API_KEY="..."             # Semantic Scholar — semanticscholar.org/product/api
 export DEEPXIV_API_TOKEN="..."      # DeepXiv (arXiv fallback) — `deepxiv token`
+export JINA_API_KEY="..."           # Jina Reader — jina.ai/reader (free tier works without a key)
 ```
 
 Or use `EvoSci config set` to persist keys in `~/.config/evoscientist/config.yaml`.

@@ -190,11 +190,13 @@ class EvoScientistConfig:
     custom_anthropic_base_url: str = ""
     ollama_base_url: str = ""
     tavily_api_key: str = ""
-    # Both optional — used by the paper-navigator skill's full-text fetch
-    # chain (Semantic Scholar API -> arXiv/DeepXiv -> scraping fallback).
-    # Unset just means lower rate limits / fewer S2 endpoints available.
+    # All optional — used by the paper-navigator skill's full-text fetch chain
+    # (Semantic Scholar API -> arXiv/DeepXiv -> scraping fallback) and by the
+    # Jina Reader fetch used for paper full text (memory experience
+    # extraction, paper-navigator). Unset just means lower rate limits.
     s2_api_key: str = ""
     deepxiv_api_token: str = ""
+    jina_api_key: str = ""
 
     # LLM Settings
     provider: str = "anthropic"
@@ -992,6 +994,7 @@ _ENV_MAPPINGS = {
     "tavily_api_key": "TAVILY_API_KEY",
     "s2_api_key": "S2_API_KEY",
     "deepxiv_api_token": "DEEPXIV_API_TOKEN",
+    "jina_api_key": "JINA_API_KEY",
     "default_mode": "EVOSCIENTIST_DEFAULT_MODE",
     "default_workdir": "EVOSCIENTIST_WORKSPACE_DIR",
     "ui_backend": "EVOSCIENTIST_UI_BACKEND",
@@ -1210,6 +1213,8 @@ def apply_config_to_env(config: EvoScientistConfig) -> None:
         os.environ["S2_API_KEY"] = config.s2_api_key
     if config.deepxiv_api_token and not os.environ.get("DEEPXIV_API_TOKEN"):
         os.environ["DEEPXIV_API_TOKEN"] = config.deepxiv_api_token
+    if config.jina_api_key and not os.environ.get("JINA_API_KEY"):
+        os.environ["JINA_API_KEY"] = config.jina_api_key
     if config.reasoning_effort and not os.environ.get("EVOSCIENTIST_REASONING_EFFORT"):
         os.environ["EVOSCIENTIST_REASONING_EFFORT"] = config.reasoning_effort
     if config.openrouter_http_referer and not os.environ.get(

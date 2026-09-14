@@ -411,6 +411,7 @@ export TAVILY_API_KEY="tvly-..."    # app.tavily.com
 # 论文全文获取，供 paper-navigator 技能使用（可选）
 export S2_API_KEY="..."             # Semantic Scholar — semanticscholar.org/product/api
 export DEEPXIV_API_TOKEN="..."      # DeepXiv（arXiv 兜底）— 运行 `deepxiv token` 获取
+export JINA_API_KEY="..."           # Jina Reader — jina.ai/reader（免费额度无需 key 即可使用）
 ```
 
 也可以使用 `EvoSci config set` 将密钥持久化到 `~/.config/evoscientist/config.yaml`。

@@ -132,6 +132,9 @@ def onboard(
     deepxiv_token: str | None = typer.Option(
         None, "--deepxiv-token", help="Pre-set DeepXiv API token (optional)"
     ),
+    jina_key: str | None = typer.Option(
+        None, "--jina-key", help="Pre-set Jina Reader API key (optional)"
+    ),
     workspace_mode: str | None = typer.Option(
         None,
         "--workspace-mode",
@@ -226,6 +229,8 @@ def onboard(
         answers["s2_key"] = s2_key
     if deepxiv_token is not None:
         answers["deepxiv_token"] = deepxiv_token
+    if jina_key is not None:
+        answers["jina_key"] = jina_key
     if workspace_mode is not None:
         answers["workspace_mode"] = workspace_mode
     if show_thinking is not None:
