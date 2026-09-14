@@ -185,8 +185,18 @@ def load_experience_prompts() -> dict[ExperienceLevel, str]:
     raise FileNotFoundError(f"Experience prompts not found; searched: {searched}")
 
 
+_JINA_RETRY_DELAYS_S = (2.0, 5.0)  # 3 attempts total
+
+
 async def download_paper_text(url: str, *, timeout: float = 90.0) -> str:
-    """Download full text through Jina Reader, with a direct-text fallback."""
+    """Download full text through Jina Reader, with a direct-text fallback.
+
+    Jina failures are retried with backoff before falling back to a direct
+    request against the original URL: for arXiv sources that fallback hits
+    arxiv.org directly, and arXiv's courtesy rate limit (1 req/3s) means a
+    single transient Jina blip (429/5xx) should not immediately shift traffic
+    onto arxiv.org under high-frequency queue draining.
+    """
     headers = {
         "User-Agent": "EvoScientist/0.2 paper-experience-worker",
         "Accept": "text/markdown,text/plain;q=0.9,*/*;q=0.1",
@@ -202,11 +212,27 @@ async def download_paper_text(url: str, *, timeout: float = 90.0) -> str:
         reader_url = (
             url if url.startswith("https://r.jina.ai/") else f"https://r.jina.ai/{url}"
         )
-        try:
-            reader = await client.get(reader_url, headers=jina_headers)
-            reader.raise_for_status()
-            text = reader.text.strip()
-        except httpx.HTTPError as reader_error:
+        reader_error: httpx.HTTPError | None = None
+        text = ""
+        for delay in (*_JINA_RETRY_DELAYS_S, None):
+            try:
+                reader = await client.get(reader_url, headers=jina_headers)
+                reader.raise_for_status()
+                text = reader.text.strip()
+                reader_error = None
+                break
+            except httpx.HTTPError as exc:
+                reader_error = exc
+                status = (
+                    exc.response.status_code
+                    if isinstance(exc, httpx.HTTPStatusError)
+                    else None
+                )
+                retryable = status is None or status == 429 or status >= 500
+                if not retryable or delay is None:
+                    break
+                await asyncio.sleep(delay)
+        if reader_error is not None:
             response = await client.get(url)
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").casefold()
