@@ -22,6 +22,7 @@ from .steps import (
     _step_auxiliary_enable,
     _step_base_url,
     _step_deepxiv_token,
+    _step_jina_key,
     _step_langgraph_dev_port,
     _step_mcp_servers,
     _step_minimax_region,
@@ -358,7 +359,7 @@ _SECTION_LABELS: list[tuple[str, str]] = [
     ("model", "Model + reasoning effort"),
     ("auxiliary_model", "Auxiliary model (optional)"),
     ("tavily", "Tavily search key"),
-    ("paper_apis", "Semantic Scholar / DeepXiv keys (optional)"),
+    ("paper_apis", "Semantic Scholar / DeepXiv / Jina Reader keys (optional)"),
     ("workspace", "Workspace mode"),
     ("thinking", "Thinking panel"),
     ("skills", "Skills"),
@@ -382,6 +383,7 @@ _FLAG_TO_SECTIONS: dict[str, frozenset[str]] = {
     "tavily_key": frozenset({"tavily"}),
     "s2_key": frozenset({"paper_apis"}),
     "deepxiv_token": frozenset({"paper_apis"}),
+    "jina_key": frozenset({"paper_apis"}),
     "workspace_mode": frozenset({"workspace"}),
     "show_thinking": frozenset({"thinking"}),
 }
@@ -930,6 +932,40 @@ def run_onboard(
                         config.deepxiv_api_token = new_deepxiv_token
                     elif not config.deepxiv_api_token:
                         _print_step_skipped("DeepXiv Token", "not set")
+
+                preset_jina = _preset("jina_key")
+                if preset_jina is not None:
+                    if not skip_validation:
+                        from .validators import validate_jina_key
+
+                        console.print(
+                            "  [dim]Validating preset Jina Reader key...[/dim]", end=""
+                        )
+                        valid, msg = validate_jina_key(preset_jina)
+                        if valid:
+                            console.print(f"\r  [green]✓ {msg}[/green]      ")
+                        else:
+                            console.print(f"\r  [red]✗ {msg}[/red]      ")
+                            raise RuntimeError(
+                                f"--jina-key rejected by validator: {msg}. "
+                                "Pass --skip-validation to override."
+                            )
+                    config.jina_api_key = preset_jina
+                    console.print(
+                        f"  [green]✓ Jina Reader key: ***{preset_jina[-4:]}[/green]"
+                        "   [dim](--jina-key)[/dim]"
+                    )
+                elif strict:
+                    if config.jina_api_key:
+                        _print_step_skipped("Jina Reader Key", "kept current")
+                    else:
+                        _print_step_skipped("Jina Reader Key", "not set")
+                else:
+                    new_jina_key = _step_jina_key(config, skip_validation)
+                    if new_jina_key is not None:
+                        config.jina_api_key = new_jina_key
+                    elif not config.jina_api_key:
+                        _print_step_skipped("Jina Reader Key", "not set")
                 _autosave(config)
 
             if "workspace" in sections_to_run:
