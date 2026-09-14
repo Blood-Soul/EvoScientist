@@ -39,7 +39,12 @@ from .style import (
     _print_step_skipped,
     console,
 )
-from .validators import validate_deepxiv_token, validate_s2_key, validate_tavily_key
+from .validators import (
+    validate_deepxiv_token,
+    validate_jina_key,
+    validate_s2_key,
+    validate_tavily_key,
+)
 
 
 def _step_ui_backend(config: EvoScientistConfig) -> str:
@@ -967,6 +972,38 @@ def _step_deepxiv_token(
         skip_validation,
         placeholder=FormattedText(
             [("fg:#858585", " (optional, arXiv search fallback)")]
+        ),
+    )
+
+
+def _step_jina_key(
+    config: EvoScientistConfig,
+    skip_validation: bool = False,
+) -> str | None:
+    """Step: Enter Jina Reader API key, used for paper full-text fetch
+    (higher rate limits — the free tier works without a key, optional).
+
+    Args:
+        config: Current configuration.
+        skip_validation: Skip API key validation.
+
+    Returns:
+        New API key or None if unchanged.
+    """
+    current = config.jina_api_key or os.environ.get("JINA_API_KEY", "")
+
+    hint = f"Current: ***{current[-4:]}" if current else "Not set"
+    prompt_text = (
+        f"Jina Reader API key for paper full-text fetch ({hint}, Enter to keep):"
+    )
+
+    return _prompt_and_validate_api_key(
+        prompt_text,
+        current,
+        validate_jina_key,
+        skip_validation,
+        placeholder=FormattedText(
+            [("fg:#858585", " (optional, free tier works without a key)")]
         ),
     )
 
