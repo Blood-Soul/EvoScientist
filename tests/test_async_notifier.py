@@ -588,6 +588,7 @@ def _reset_notifier_state(an_mod):
     _drain_all(an_mod)
     an_mod._active_watchers.clear()
     an_mod._watcher_by_thread.clear()
+    an_mod._reader_enqueued_task_ids.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -1013,4 +1014,267 @@ def test_active_watchers_grace_filters_by_thread():
 
     async_notifier._active_watchers.clear()
     assert async_notifier._has_relevant_active_watchers("threadA") is False
+
+
+# ============================================================================
+# Slice 2.4a — state-based client reader (enqueue_completions_from_state)
+#
+# Backend-agnostic: the reader touches only the GraphGateway protocol
+# (get_state_values + get_run_status), so FakeGraphGateway exercises the same
+# path both real backends implement. The concrete per-backend get_run_status
+# reads are pinned in test_graph_gateway.py.
+# ============================================================================
+
+
+def _running_registry(agent_name: str = "writing-agent"):
+    return {
+        "async_tasks": {
+            "task-1": {
+                "status": "running",
+                "run_id": "run-1",
+                "agent_name": agent_name,
+            }
+        }
+    }
+
+
+async def test_reader_enqueues_completion_from_state():
+    gateway = FakeGraphGateway(
+        state_values=_running_registry(),
+        run_statuses={"run-1": "success"},
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    drained = drain_notifications("cli-tid")
+    assert len(drained) == 1
+    n = drained[0]
+    assert n.task_id == "task-1"
+    assert n.agent_name == "writing-agent"
+    assert n.status == "success"
+    assert n.origin_cli_thread_id == "cli-tid"
+
+
+async def test_reader_no_op_while_task_running():
+    gateway = FakeGraphGateway(
+        state_values=_running_registry(),
+        run_statuses={"run-1": "running"},
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    assert drain_notifications("cli-tid") == []
+
+
+async def test_reader_dedupes_completion_across_polls():
+    gateway = FakeGraphGateway(
+        state_values=_running_registry(),
+        run_statuses={"run-1": "success"},
+    )
+    target = GraphTarget(local_graph=MagicMock())
+
+    await async_notifier.enqueue_completions_from_state(gateway, target, "cli-tid")
+    await async_notifier.enqueue_completions_from_state(gateway, target, "cli-tid")
+
+    # One enqueue total; the seen-set short-circuits the second poll before it
+    # even issues a live status read.
+    assert len(drain_notifications("cli-tid")) == 1
+    assert gateway.run_status_calls == [("task-1", "run-1")]
+
+
+async def test_reader_surfaces_revision_completion_after_update():
+    """update_async_task rotates run_id on the same task_id (the revision
+    re-dispatches with multitask_strategy="interrupt"). The reader keys dedup
+    on (task_id, run_id), so the revision's completion surfaces even when the
+    original run's completion already notified — one notification per run."""
+    registry = {
+        "async_tasks": {
+            "task-1": {
+                "status": "running",
+                "run_id": "run-1",
+                "agent_name": "writing-agent",
+            }
+        }
+    }
+    gateway = FakeGraphGateway(
+        state_values=registry,
+        run_statuses={"run-1": "success", "run-2": "success"},
+    )
+    target = GraphTarget(local_graph=MagicMock())
+
+    # run-1 completes and surfaces.
+    await async_notifier.enqueue_completions_from_state(gateway, target, "cli-tid")
+    assert len(drain_notifications("cli-tid")) == 1
+
+    # update_async_task after run-1 completed: new run_id on the SAME task_id,
+    # registry entry back to running.
+    registry["async_tasks"]["task-1"]["run_id"] = "run-2"
+    registry["async_tasks"]["task-1"]["status"] = "running"
+    await async_notifier.enqueue_completions_from_state(gateway, target, "cli-tid")
+
+    # The revision's completion surfaces — not suppressed by run-1's notify.
+    drained = drain_notifications("cli-tid")
+    assert len(drained) == 1
+    assert drained[0].task_id == "task-1"
+    assert drained[0].status == "success"
+
+    # And it notifies exactly once: the next poll of the same run is deduped.
+    await async_notifier.enqueue_completions_from_state(gateway, target, "cli-tid")
+    assert drain_notifications("cli-tid") == []
+
+
+async def test_reader_skips_task_already_terminal_in_state():
+    gateway = FakeGraphGateway(
+        state_values={
+            "async_tasks": {
+                "task-1": {
+                    "status": "success",
+                    "run_id": "run-1",
+                    "agent_name": "x",
+                }
+            }
+        },
+        run_statuses={"run-1": "success"},
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    assert drain_notifications("cli-tid") == []
+    # Terminal-in-state means the agent already saw it — no live read at all.
+    assert gateway.run_status_calls == []
+
+
+async def test_reader_skips_cancelled_task_in_state():
+    """An agent-initiated cancel writes ``cancelled`` into state; that is a
+    terminal writeback like any other, so the reader must not poll the run and
+    surface a spurious ``interrupted`` for something the agent cancelled on
+    purpose."""
+    gateway = FakeGraphGateway(
+        state_values={
+            "async_tasks": {
+                "task-1": {
+                    "status": "cancelled",
+                    "run_id": "run-1",
+                    "agent_name": "x",
+                }
+            }
+        },
+        run_statuses={"run-1": "interrupted"},  # would notify if polled
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    assert drain_notifications("cli-tid") == []
+    assert gateway.run_status_calls == []
+
+
+async def test_reader_drops_interrupted_when_run_rotated_mid_poll():
+    """A poll landing in the rotation window reads the old ``run_id`` and gets
+    ``interrupted``. A fresh state read then shows the new ``run_id``, marking a
+    rotation, not a completion — the ``interrupted`` is dropped."""
+
+    class _RotatingGateway(FakeGraphGateway):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._reads = 0
+
+        async def get_state_values(self, target, thread_id):
+            self._reads += 1
+            values = await super().get_state_values(target, thread_id)
+            # The re-read inside _run_was_rotated (second call) sees the new
+            # run_id that update_async_task committed after interrupting run-1.
+            if self._reads >= 2:
+                values["async_tasks"]["task-1"]["run_id"] = "run-2"
+            return values
+
+    gateway = _RotatingGateway(
+        state_values=_running_registry(),
+        run_statuses={"run-1": "interrupted"},
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    assert drain_notifications("cli-tid") == []
+    assert gateway.run_status_calls == [("task-1", "run-1")]
+
+
+async def test_reader_notifies_genuine_interrupt():
+    """A genuine interrupt (same ``run_id`` on the confirming re-read) still
+    surfaces — the rotation guard must not suppress real interruptions."""
+    gateway = FakeGraphGateway(
+        state_values=_running_registry(),
+        run_statuses={"run-1": "interrupted"},
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    drained = drain_notifications("cli-tid")
+    assert len(drained) == 1
+    assert drained[0].status == "interrupted"
+
+
+async def test_reader_notification_carries_task_description():
+    """The launch-time description rides in state so a completion notification
+    can name which task finished when several are in flight."""
+    registry = {
+        "async_tasks": {
+            "task-1": {
+                "status": "running",
+                "run_id": "run-1",
+                "agent_name": "writing-agent",
+                "description": "Draft the related-work section",
+            }
+        }
+    }
+    gateway = FakeGraphGateway(
+        state_values=registry,
+        run_statuses={"run-1": "success"},
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    drained = drain_notifications("cli-tid")
+    assert len(drained) == 1
+    assert drained[0].prompt == "Draft the related-work section"
+
+
+async def test_reader_best_effort_on_status_read_error():
+    gateway = FakeGraphGateway(
+        state_values=_running_registry(),
+        run_status_error=RuntimeError("server down"),
+    )
+
+    # Must not raise, and nothing is enqueued — the task is retried next poll.
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    assert drain_notifications("cli-tid") == []
+
+
+async def test_reader_skips_task_without_run_id():
+    gateway = FakeGraphGateway(
+        state_values={"async_tasks": {"task-1": {"status": "running"}}},
+    )
+
+    await async_notifier.enqueue_completions_from_state(
+        gateway, GraphTarget(local_graph=MagicMock()), "cli-tid"
+    )
+
+    assert drain_notifications("cli-tid") == []
+    assert gateway.run_status_calls == []
     assert async_notifier._has_relevant_active_watchers(None) is False

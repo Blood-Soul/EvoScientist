@@ -21,10 +21,16 @@ from typing import TYPE_CHECKING, Final, TypeAlias, TypedDict
 if TYPE_CHECKING:
     from ..gateway import GraphGateway, GraphTarget
 
-TERMINAL_STATUSES: Final = frozenset({"success", "error", "timeout", "interrupted"})
-"""Aligned with langgraph_sdk.schema.RunStatus terminal values.
+TERMINAL_STATUSES: Final = frozenset(
+    {"cancelled", "success", "error", "timeout", "interrupted"}
+)
+"""Terminal statuses that need no further polling.
 
-Cancel operations transition runs into ``interrupted`` (not ``cancelled``).
+Checked against both a langgraph run status and a deepagents task status. A
+langgraph run cancel surfaces as ``interrupted``, but deepagents'
+``cancel_async_task`` writes ``cancelled`` into the task's own
+``async_tasks[*].status`` — so both must count as terminal, or a cancelled task
+gets polled and reported as a spurious ``interrupted``.
 """
 
 # How many times the watcher will re-join the SSE stream when it closes
@@ -38,6 +44,14 @@ class AsyncTaskState(TypedDict, total=False):
     status: str
     last_checked_at: str
     last_updated_at: str
+    # Registry fields carried by the deepagents ``async_tasks`` channel; the
+    # state-based reader needs these to look up and label a task's live run.
+    agent_name: str
+    run_id: str
+    # Task description captured at launch (``_build_task_envelope``) so the
+    # completion notification can name which task finished when several are in
+    # flight; the removed watcher carried this from the launch call directly.
+    description: str
 
 
 AsyncTasksState: TypeAlias = dict[str, AsyncTaskState]
@@ -215,6 +229,99 @@ async def read_async_tasks_from_gateway(
     except Exception:
         return {}
     return values.get("async_tasks", {})
+
+
+# (task_id, run_id) pairs the reader has already enqueued a completion for.
+# The persisted ``async_tasks[*].status`` lags the live run (it only advances
+# when the agent calls ``check_async_task``), so without this a fast reader
+# would re-enqueue the same completion every poll until the agent checks.
+# Keyed on the run, not the task: ``update_async_task`` rotates ``run_id`` on
+# the same ``task_id`` (the revision re-dispatches with
+# ``multitask_strategy="interrupt"``), and the revision's completion must
+# surface even when the original run's completion already notified — one
+# enqueue per run, so poll re-enqueue noise stays deduped while a revision
+# still notifies exactly once. Combined with the terminal-in-state skip
+# below, one completion yields exactly one enqueue.
+_reader_enqueued_task_ids: set[tuple[str, str]] = set()
+
+
+async def _run_was_rotated(
+    gateway: GraphGateway,
+    target: GraphTarget,
+    thread_id: str,
+    task_id: str,
+    run_id: str,
+) -> bool:
+    """True when the task's current ``run_id`` in state no longer matches ``run_id``.
+
+    ``update_async_task`` interrupts the old run before it commits the record
+    with the new ``run_id``. A poll that lands in that window reads the old
+    ``run_id``, polls it, and gets ``interrupted`` for a task the user asked to
+    keep going. A changed ``run_id`` on a fresh read means a rotation, not a
+    completion, so the ``interrupted`` should be dropped.
+    """
+    registry = await read_async_tasks_from_gateway(gateway, target, thread_id)
+    current = (registry or {}).get(task_id, {}).get("run_id")
+    return bool(current) and current != run_id
+
+
+async def enqueue_completions_from_state(
+    gateway: GraphGateway,
+    target: GraphTarget,
+    thread_id: str,
+) -> None:
+    """State-based counterpart to the in-process watcher.
+
+    Read the ``async_tasks`` registry through the gateway and, for each task not
+    already known terminal, ask the gateway for the live run status. Newly
+    terminal tasks are enqueued onto the same consumer queue the watcher feeds,
+    so ``consume_notifications`` handles dedup/batching/injection unchanged.
+    Both reads go through the gateway, so it behaves identically on either
+    backend.
+
+    Intended cadence: call once per turn boundary (after a turn / on stream
+    close), not on the fast queue-poll tick — it issues one ``get_run_status``
+    per active task. Best-effort throughout: a failed status read leaves the
+    task for the next poll (treated as not-yet-terminal), mirroring
+    ``read_async_tasks_from_gateway``.
+    """
+    registry = await read_async_tasks_from_gateway(gateway, target, thread_id)
+    for task_id, task in registry.items():
+        if task.get("status") in TERMINAL_STATUSES:
+            # Already terminal in state → the agent saw it via a check-tool
+            # writeback; nothing for the reader to surface.
+            continue
+        run_id = task.get("run_id")
+        if not run_id:
+            continue
+        run_key = (task_id, run_id)
+        if run_key in _reader_enqueued_task_ids:
+            continue
+        # task_id == the sub-agent thread_id (deepagents keys the registry by it).
+        try:
+            status = await gateway.get_run_status(target, task_id, run_id)
+        except Exception:
+            continue  # server unavailable / transient — retry next poll
+        if status not in TERMINAL_STATUSES:
+            continue
+        if status == "interrupted" and await _run_was_rotated(
+            gateway, target, thread_id, task_id, run_id
+        ):
+            # A revision rotated the run mid-poll; the interrupt is the old run
+            # being replaced, not a completion. The new run's completion
+            # surfaces under its own run_key on a later poll.
+            continue
+        enqueue_task_notification(
+            AsyncTaskNotification(
+                task_id=task_id,
+                agent_name=task.get("agent_name", ""),
+                status=status,
+                received_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                prompt=str(task.get("description", "")),
+                origin_cli_thread_id=thread_id,
+            )
+        )
+        _reader_enqueued_task_ids.add(run_key)
 
 
 async def watch_run_and_notify(
