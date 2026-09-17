@@ -719,12 +719,12 @@ channel_enabled: "telegram,slack,feishu,qq"
         </a>
       </td>
       <td align="center">
-        <a href="https://go0day.github.io/">
-          <img src="https://go0day.github.io/authors/admin/avatar_hu_ee1051aceae96124.png"
+        <a href="https://www.linkedin.com/in/qianru-meng-410311100/">
+          <img src="https://media.licdn.com/dms/image/v2/D5603AQG1mEbWDSoUbw/profile-displayphoto-shrink_400_400/B56ZsFaQWsHIAo-/0/1765322328104?e=1791417600&v=beta&t=SaQs5BM3h0WtCorTO1JXcR8xHb4GQCXrbBG1Unj__wg"
                width="100" height="100"
                style="object-fit: cover; border-radius: 20%;" alt="Yuyue Zhao"/>
           <br />
-          <sub><b>Yuyue Zhao</b></sub>
+          <sub><b>Qianru Meng</b></sub>
         </a>
       </td>
       <td align="center">
@@ -751,7 +751,7 @@ channel_enabled: "telegram,slack,feishu,qq"
 
 #### Contributors
 
-Jan Piotrowski, Wiktor Cupiał, Jakub Kaliski, Jakub Filipiuk, Xinhao Yi, Shuyu Guo, Andreas Sauter, Wenxiang Hu, Jacopo Urbani, Zaiqiao Meng, Jun Luo, Lun Zhou
+Jakub Kaliski, Jakub Filipiuk, Yuyue Zhao, Jan Piotrowski, Wiktor Cupiał, Xinhao Yi, Shuyu Guo, Andreas Sauter, Wenxiang Hu, Jacopo Urbani, Zaiqiao Meng, Jun Luo, Lun Zhou
 
 > <a href="https://xiaoyi.huawei.com/chat/research"><img src="https://raw.githubusercontent.com/EvoScientist/EvoScientist/main/.github/assets/xiaoyi-deepresearch.webp" height="16" alt="Xiaoyi DeepResearch" align="center" /></a> [*Xiaoyi DeepResearch*](https://xiaoyi.huawei.com/chat/research) *Team* 及更广泛的开源社区共同为本项目做出贡献。
 
