@@ -888,6 +888,7 @@ async def test_langgraph_server_gateway_streams_root_protocol_events():
                 "configurable": {
                     "model": "live-model",
                     "model_provider": "live-provider",
+                    "hitl_suppressed": False,
                     "thread_id": "abc12345",
                 },
                 "recursion_limit": 4242,
@@ -963,6 +964,7 @@ async def test_langgraph_server_gateway_forwards_configurable_extra():
                 "configurable": {
                     "model": "live-model",
                     "model_provider": "live-provider",
+                    "hitl_suppressed": False,
                     "active_teams": ["code-agent"],
                     "custom_key": "custom_value",
                     "thread_id": "abc12345",
@@ -1223,13 +1225,82 @@ async def test_resolve_per_run_config_extras_win_over_per_run_overrides():
 
 
 def test_resolve_per_run_config_default_shape_is_extras_only():
-    """Without per-run overrides the config shape is the pre-channel one:
-    only caller extras + thread_id. Pure assembly - there is no config
+    """Without per-run overrides the shape is the always-written suppression
+    key + caller extras + thread_id. Pure assembly - there is no config
     parameter to consult at all."""
     from EvoScientist.gateway.types import resolve_per_run_config
 
     run_config = resolve_per_run_config("t1", {"active_teams": ["a"]})
-    assert run_config == {"configurable": {"active_teams": ["a"], "thread_id": "t1"}}
+    assert run_config == {
+        "configurable": {
+            "hitl_suppressed": False,
+            "active_teams": ["a"],
+            "thread_id": "t1",
+        }
+    }
+
+
+def test_resolve_per_run_config_hitl_suppression_local():
+    """An unattended (auto_mode) run injects hitl_suppressed so the
+    always-armed graph disarms the interrupt for THIS run."""
+    from EvoScientist.gateway.types import resolve_per_run_config
+
+    run_config = resolve_per_run_config("t1", None, hitl_suppressed=True)
+    assert run_config["configurable"]["hitl_suppressed"] is True
+
+
+def test_resolve_per_run_config_hitl_suppression_server():
+    from EvoScientist.gateway.types import resolve_per_run_config
+
+    run_config = resolve_per_run_config(
+        "t1", None, per_run_overrides={"model": "m"}, hitl_suppressed=True
+    )
+    assert run_config["configurable"]["hitl_suppressed"] is True
+    assert run_config["configurable"]["model"] == "m"
+
+
+def test_resolve_per_run_config_attended_run_writes_false():
+    """Every gateway run writes the key; an attended run writes it False, so a
+    gateway run's arming is fixed by its own config and never falls back to the
+    serving process's auto_approve on an absent key."""
+    from EvoScientist.gateway.types import resolve_per_run_config
+
+    run_config = resolve_per_run_config("t1", None, hitl_suppressed=False)
+    assert run_config["configurable"]["hitl_suppressed"] is False
+
+
+def test_gateway_assembled_config_is_authoritative_for_is_hitl_suppressed(monkeypatch):
+    """Composition: the config resolve_per_run_config assembles, read back by
+    is_hitl_suppressed, ignores the serving process's auto_approve. A suppressed
+    run reads True and an attended run reads False even when the server itself
+    was launched auto-approving — the server-path leak this closes."""
+    import EvoScientist.EvoScientist as evo_mod
+    from EvoScientist.backends import is_hitl_suppressed
+    from EvoScientist.gateway.types import resolve_per_run_config
+
+    # Serving process is auto-approving; without the always-written key this
+    # would leak into every keyless run via the fallback.
+    monkeypatch.setattr(
+        evo_mod,
+        "_ensure_config",
+        lambda config=None: SimpleNamespace(auto_approve=True),
+    )
+
+    suppressed = resolve_per_run_config("t1", None, hitl_suppressed=True)
+    assert is_hitl_suppressed(suppressed) is True
+
+    attended = resolve_per_run_config("t1", None, hitl_suppressed=False)
+    assert is_hitl_suppressed(attended) is False
+
+
+def test_resolve_per_run_config_caller_extra_overrides_suppression():
+    """An explicit per-run configurable_extra beats the derived value."""
+    from EvoScientist.gateway.types import resolve_per_run_config
+
+    run_config = resolve_per_run_config(
+        "t1", {"hitl_suppressed": False}, hitl_suppressed=True
+    )
+    assert run_config["configurable"]["hitl_suppressed"] is False
 
 
 async def test_server_gateway_resolves_per_run_overrides_from_live_session_config():
@@ -1277,6 +1348,29 @@ async def test_server_gateway_forwards_valid_recursion_limit_per_run():
 
     (start,) = stream.run.starts
     assert start["config"]["recursion_limit"] == 100
+
+
+async def test_server_gateway_suppresses_hitl_for_auto_mode_session():
+    """The gateway derives the run's HITL suppression from the live session
+    config's auto_mode and forwards it per run."""
+    cfg = SimpleNamespace(model="m", provider="p", auto_mode=True)
+    stream = FakeLangGraphThreadStream("abc12345", events=[])
+    threads = FakeLangGraphThreadsClient(
+        threads=[{"thread_id": "abc12345", "metadata": {"graph_id": "EvoScientist"}}],
+        states={"abc12345": {"values": {}}},
+        streams={"abc12345": stream},
+    )
+    gateway = LangGraphServerGateway(
+        LangGraphServerThreadStore(client=FakeLangGraphClient(threads))
+    )
+    with patch("EvoScientist.EvoScientist._ensure_config", return_value=cfg):
+        async for _event in gateway.stream_events(
+            RunRequest(message="hi", thread_id="abc12345")
+        ):
+            pass
+
+    (start,) = stream.run.starts
+    assert start["config"]["configurable"]["hitl_suppressed"] is True
 
 
 async def test_langgraph_server_gateway_warns_on_pre_run_state_fetch_failure(

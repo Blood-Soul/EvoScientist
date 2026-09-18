@@ -2276,6 +2276,42 @@ def run_textual_interactive(
                                     )
                                 continue
 
+                            # Config-rule fast path (shared with CLI display):
+                            # an allow-listed / auto-approvable command resolves
+                            # without mounting the widget, closing the
+                            # shell_allow_list gap on the attended TUI. Returns
+                            # None when a human decision is genuinely needed.
+                            from ..channels.interaction import (
+                                config_policy_snapshot,
+                            )
+
+                            # Keep the rejections so a human "approve all" on the
+                            # widget cannot override a policy REJECT in a mixed
+                            # batch (parity with the Rich CLI resolver).
+                            _cfg_decisions, _cfg_rejections = config_policy_snapshot(
+                                action_reqs
+                            )
+                            if _cfg_decisions is not None:
+                                # A config-level rejection (e.g. auto_approve
+                                # refusing a dangerous command) must be visible
+                                # before the silent resume - otherwise the
+                                # spinner just turns into a rejection with no
+                                # indication of who rejected it or why.
+                                for _d in _cfg_decisions:
+                                    if _d.get("type") == "reject":
+                                        self._append_system(
+                                            f"Auto-rejected: {_d.get('message', '')}",
+                                            style="yellow",
+                                        )
+                                        break
+                                from ..backends import build_hitl_resume
+
+                                _stream_input = build_hitl_resume(
+                                    interrupt_id, _cfg_decisions
+                                )
+                                _hitl_resuming = True
+                                break  # re-enter outer HITL loop with resume
+
                             # Interactive TUI: mount approval widget
                             # Disable main prompt so it can't steal focus
                             _prompt = self.query_one("#prompt", ChatTextArea)
@@ -2291,10 +2327,17 @@ def run_textual_interactive(
                                 if decided_event.auto_approve_session:
                                     self._hitl_auto_approve = True
                                 from ..backends import build_hitl_resume
-
-                                _stream_input = build_hitl_resume(
-                                    interrupt_id, decided_event.decisions
+                                from ..channels.interaction import (
+                                    decisions_after_human_approval,
                                 )
+
+                                _human = decided_event.decisions
+                                if all(_d.get("type") == "approve" for _d in _human):
+                                    # An approve-all keeps the policy's REJECTs.
+                                    _human = decisions_after_human_approval(
+                                        action_reqs, _cfg_rejections
+                                    )
+                                _stream_input = build_hitl_resume(interrupt_id, _human)
                                 _hitl_resuming = True
                                 break  # re-enter outer HITL loop with resume
                             else:
