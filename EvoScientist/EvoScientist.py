@@ -699,8 +699,19 @@ def _build_paper_tools(*, cfg, workspace_dir):
             project_id=project_id,
             max_selected=getattr(cfg, "memory_experience_policy_max_selected", 4),
         )
+        # Always registered: `tool_registry` is what a subagent's YAML `tools:`
+        # list resolves against, and research/planner both grant it.
         tool_registry[policy_tool.name] = policy_tool
-        base_tools.append(policy_tool)
+        # `base_tools` is the main agent's own set, and that is where the pull
+        # path is weakest -- the main agent has to notice it is deciding, recall
+        # the tool, and phrase the query, while the tool selector may have
+        # filtered the tool out of the request entirely. The coach middleware
+        # does that judgement on every step instead, so handing the main agent
+        # the tool as well would only buy a second, worse-phrased route to the
+        # same pipeline. With the coach off, the tool is the only route and the
+        # main agent keeps it.
+        if not getattr(cfg, "memory_experience_coach_enabled", True):
+            base_tools.append(policy_tool)
 
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
@@ -944,6 +955,7 @@ def _get_default_middleware(
         create_active_team_middleware,
         create_code_interpreter_middleware,
         create_context_editing_middleware,
+        create_experience_coach_middleware,
         create_memory_lifecycle_middleware,
         create_memory_middleware,
         create_runtime_context_middleware,
@@ -1001,6 +1013,14 @@ def _get_default_middleware(
         enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
         enable_experience_search=memory_controls.experience_search_enabled,
         enable_experience_policy=memory_controls.experience_policy_enabled,
+        # Must mirror the condition that appends the coach middleware below: the
+        # two blocks describe mutually exclusive routes, so an agent told that
+        # guidance arrives on its own has to be an agent the coach is actually
+        # running for, and an agent told to call `apply_experience` has to be one
+        # that holds it.
+        enable_experience_coach=(
+            memory_controls.experience_coach_enabled and not for_async_subagent
+        ),
         memory_scheduler=memory_scheduler,
         # First-contact intro: main agent only, and never in unattended runs.
         enable_profile_bootstrap=not for_async_subagent and not bool(cfg.auto_mode),
@@ -1053,6 +1073,26 @@ def _get_default_middleware(
     mw.append(create_runtime_context_middleware())
     if memory_controls.memory_enabled:
         mw.append(memory_middleware)
+    # After memory: the coach's guidance is about the step in front of the agent,
+    # so it must land after the memory instructions that teach the stores it
+    # draws on. Main agent only -- a subagent that needs the reuse layer is
+    # granted `apply_experience` in its YAML and pulls deliberately, and running
+    # a per-step gate inside every subagent would multiply the auxiliary calls by
+    # the size of the fan-out for a decision the subagent was handed already.
+    if (
+        memory_controls.experience_policy_enabled
+        and memory_controls.experience_coach_enabled
+        and not for_async_subagent
+    ):
+        mw.append(
+            create_experience_coach_middleware(
+                memory_dir=memory_dir,
+                project_id=memory_middleware.project_id,
+                model=tool_selector_model,
+                max_selected=memory_controls.experience_policy_max_selected,
+                recent_messages=memory_controls.experience_coach_recent_messages,
+            )
+        )
     if memory_controls.worker_needed(worker_target):
         mw.append(
             create_memory_lifecycle_middleware(

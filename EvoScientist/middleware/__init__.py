@@ -12,6 +12,10 @@ from .ask_user import (
     Choice,
     Question,
 )
+from .coach import (
+    ExperienceCoachMiddleware,
+    create_experience_coach_middleware,
+)
 from .code_interpreter import create_code_interpreter_middleware
 from .configurable_model import ConfigurableModelMiddleware
 from .context_editing import (
@@ -51,6 +55,7 @@ __all__ = [
     "ErrorNormalizationMiddleware",
     "EvoMemoryLifecycleMiddleware",
     "EvoMemoryMiddleware",
+    "ExperienceCoachMiddleware",
     "ModelFallbackMiddleware",
     "Question",
     "RuntimeContextMiddleware",
@@ -61,6 +66,7 @@ __all__ = [
     "create_active_team_middleware",
     "create_code_interpreter_middleware",
     "create_context_editing_middleware",
+    "create_experience_coach_middleware",
     "create_memory_lifecycle_middleware",
     "create_memory_middleware",
     "create_runtime_context_middleware",

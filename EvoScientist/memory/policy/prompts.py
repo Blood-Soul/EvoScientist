@@ -15,6 +15,7 @@ from pathlib import Path
 
 RERANK_PROMPT_FILENAME = "policy_rerank.md"
 WRITER_PROMPT_FILENAME = "policy_write.md"
+GATE_PROMPT_FILENAME = "policy_gate.md"
 
 
 def _prompt_dir_candidates() -> list[Path]:
@@ -55,9 +56,16 @@ async def load_writer_prompt() -> str:
     return await asyncio.to_thread(load_policy_prompt, WRITER_PROMPT_FILENAME)
 
 
+async def load_gate_prompt() -> str:
+    """Load the coach gate prompt off the event loop."""
+    return await asyncio.to_thread(load_policy_prompt, GATE_PROMPT_FILENAME)
+
+
 __all__ = [
+    "GATE_PROMPT_FILENAME",
     "RERANK_PROMPT_FILENAME",
     "WRITER_PROMPT_FILENAME",
+    "load_gate_prompt",
     "load_policy_prompt",
     "load_rerank_prompt",
     "load_writer_prompt",

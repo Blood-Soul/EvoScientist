@@ -372,6 +372,22 @@ class EvoScientistConfig:
     # and surfaces conflicts between papers; fewer keeps the policy tight and
     # the synthesis call small.
     memory_experience_policy_max_selected: int = 4
+    # Experience coach. `apply_experience` only fires when the agent thinks to
+    # call it and phrases its own query; the coach instead judges every step on
+    # the auxiliary model -- does stored experience bear on the action about to
+    # be taken -- and when it does, derives the retrieval facets itself and
+    # injects the resulting guidance into that one model call. The injection is
+    # per-call and never written to state, so it does not grow the trajectory or
+    # invalidate the prompt cache. Costs one auxiliary call per step that is not
+    # short-circuited in code, plus two more when the gate opens. Disabling
+    # leaves the pull path (`apply_experience`, still granted to the research and
+    # planner subagents) as the only route into the reuse layer.
+    memory_experience_coach_enabled: bool = True
+    # How much of the trajectory tail the coach's gate reads. The gate names the
+    # decision immediately ahead, so it needs the originating request plus the
+    # last few steps; paying for the whole trajectory on the auxiliary model buys
+    # context the gate does not use.
+    memory_experience_coach_recent_messages: int = 6
 
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
@@ -616,6 +632,22 @@ class EvoScientistConfig:
             )
             self.memory_experience_policy_max_selected = 4
 
+        # Zero recent messages would leave the gate judging on the originating
+        # request alone, blind to everything the run has already done; an
+        # unbounded value would put the whole trajectory on the auxiliary model
+        # every step, which is the cost the coach exists to avoid.
+        recent = self.memory_experience_coach_recent_messages
+        if (
+            not isinstance(recent, int)
+            or isinstance(recent, bool)
+            or not 1 <= recent <= 30
+        ):
+            logging.getLogger(__name__).warning(
+                "Invalid memory_experience_coach_recent_messages %r; falling back to 6.",
+                recent,
+            )
+            self.memory_experience_coach_recent_messages = 6
+
         # shell_allow_list is typed as a comma-separated string, but a YAML list
         # spelling (``shell_allow_list: [ls, cat]``) survives here as a list.
         # The policy resolver calls ``.split`` on it, so normalise to CSV once at
@@ -668,6 +700,8 @@ class MemoryControls:
     experience_search_enabled: bool = True
     experience_policy_enabled: bool = True
     experience_policy_max_selected: int = 4
+    experience_coach_enabled: bool = True
+    experience_coach_recent_messages: int = 6
 
     @classmethod
     def from_config(cls, config: EvoScientistConfig) -> MemoryControls:
@@ -680,6 +714,10 @@ class MemoryControls:
             experience_search_enabled=config.memory_experience_search_enabled,
             experience_policy_enabled=config.memory_experience_policy_enabled,
             experience_policy_max_selected=config.memory_experience_policy_max_selected,
+            experience_coach_enabled=config.memory_experience_coach_enabled,
+            experience_coach_recent_messages=(
+                config.memory_experience_coach_recent_messages
+            ),
         )
 
     @property
@@ -1046,6 +1084,10 @@ _ENV_MAPPINGS = {
     "memory_experience_policy_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_ENABLED",
     "memory_experience_policy_max_selected": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_MAX_SELECTED"
+    ),
+    "memory_experience_coach_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED",
+    "memory_experience_coach_recent_messages": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES"
     ),
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }

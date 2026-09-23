@@ -38,7 +38,7 @@ idea 的论文"，它构造出来的 query 是
 | `list_experience` | `E-*` 论文经验 | 我根本不知道库里有什么、库里怎么措辞 |
 | `search_observations` | `O-*` 操作记忆 | 过程性：这件事该怎么做、失败了怎么办 |
 | `read_memory` | 两者 | 按稳定 ID 读完整记录（`O-`/`E-` 前缀本身就是无歧义的路由） |
-| `apply_experience` | `E-*` | 要**做决策**而不是补充上下文：把来源写死的值改绑到当前任务 |
+| `apply_experience` | `E-*` | 要**做决策**而不是补充上下文：把来源写死的值改绑到当前任务。只授予子 agent；主 agent 走 coach 推送，不持有此工具 |
 
 `search_experience` 的参数是 `topic` / `method` / `task` 三个主题面，加
 `discipline` / `domain` / `level` 三个精确过滤。**它不接受 `memory_type` 和 `scope`**——
@@ -54,6 +54,12 @@ idea 的论文"，它构造出来的 query 是
 （discipline → domain → records）绕开了措辞问题。每一层都分页并报告总数，所以库长到多大
 都是可走完的，而不是被静默截断——这是明确按"生产环境会有庞大数量"来设计的，不依赖当前库
 很小这个事实。
+
+后记（2026-09）：上面"分别检索再融合"有一个当时没注意到的退化分支——**只有一个面命中时
+RRF 会短路，退回目录顺序**。`apply_experience` 正好落在里面：agent 手写的那一句话实际
+只能填 `topic`。push 侧的 coach（见
+[经验复用层](experience-policy.zh-CN.md) 第 11.4 节）由 gate 同时产出 `topic` 和
+`method`，融合才真的发生。
 
 ## 3. 学科词表：跨学科不只是 CS
 
@@ -102,6 +108,18 @@ idea 的论文"，它构造出来的 query 是
 自己重述。用字符而不是 token 算覆盖率，因为"长 query 只活下来一个 token"正是最该报告的
 情况。措辞良好的英文 query 不会触发。
 
+**后记（2026-09）：上面这个例子已经不再退化了。** 主线上的
+`fix(memory): improve multilingual observation search tokenization`（#485，2026-09-17，
+晚于本次改动）给 `_tokens()` 加了 CJK **二元组**分词，所以
+`如何利用摘要完成idea的构建` 现在切成 `['如何','何利','利用','用摘','摘要','要完','完成','idea','的构','构建']`，
+覆盖率 1.47，`degenerate_facets()` 正确地不再报警——中文 query 现在真的被搜了，不是只
+剩一个 `idea`。
+
+这一节描述的机制没坏，坏的是钉着旧行为的那一条断言：
+`tests/test_paper_experience_memory.py::test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently`
+仍然期望 `searched_as: ['idea']`，于是在干净树上就是红的。要修的是测试（换一个在二元组
+分词下仍然退化的例子，例如纯符号或极短混排 query），不是检测器。
+
 ## 6. 经验复用层没有被破坏
 
 拆检索时最大的风险是把 `apply_experience`（"把过去旧的轨迹经验复用迁移到新的场景下"）
@@ -110,6 +128,10 @@ idea 的论文"，它构造出来的 query 是
 
 - `gather_candidates()` 对真实 query 返回 8 条完整记录，字段完好；
 - ID 方案改成内容寻址后仍然可用（见下）。
+
+2026-09 在这层之上加了 push 侧入口（coach middleware），同样没有动这个内核：
+`gather_candidates()` 现在多接一个 `method` 面，`derive_policy` 之后的每一步都不变，
+push 与 pull 共享同一份策略缓存。
 
 ### ID 从位置寻址改成内容寻址
 
@@ -221,10 +243,10 @@ target 命中 100%）。但**这只是一个跑通信号，不是测量结果**�
 
 ```bash
 .venv/bin/python -m pytest tests/ -q --ignore=tests/test_backends.py
-# 3543 passed, 12 skipped
+# 3926 passed, 27 skipped, 1 failed（数字含 2026-09 的 push 侧改动）
 ```
 
-与这次改动直接相关的四个文件（117 项）：
+与这次改动直接相关的四个文件（117 项），以及 push 侧新增的一个文件：
 
 | 文件 | 项数 | 覆盖 |
 | --- | --- | --- |
@@ -232,9 +254,15 @@ target 命中 100%）。但**这只是一个跑通信号，不是测量结果**�
 | `tests/test_experience_policy.py` | 45 | schema 校验与容错、`transferable_core` 兜底、缓存键稳定性、`derive_policy` 全流程、调试追踪、抽取侧向后兼容 |
 | `tests/test_backfill_experience_fields.py` | 19 | dry-run 不调模型不落盘、只有两个字段变化、幂等（重跑 0 次模型调用）、`--overwrite`、薄 statement 跳过、单条失败不带走同文件其他记录、全失败文件逐字节不变、`--limit` 跨遍可组合、`--backup`、写一半崩溃、空 core 保留兜底、binding 必须是名字 |
 | `tests/test_policy_ab_harness.py` | 17 | 词边界匹配、评分器判定、桩模型端到端、单格失败隔离、**actor 模型默认值从配置解析**（3 项在改前失败） |
+| `tests/test_experience_coach.py` | 67 | （2026-09）gate 输出解析与严格的 `need` 读法、无 `topic` 降级、指导渲染、三个代码层短路、per-call 注入不改动原 `messages`、coach 失败对 agent 回合隐形、push/pull 两条路径的说明与工具授权互斥 |
 
-已知无关失败：`tests/test_backends.py` 的 8 项在干净树上同样失败（本机 PATH 只有
-`python3` 没有 `python`），与本次改动无关，用 `--ignore` 排除。
+已知无关失败两处，都在干净树上同样失败：
+
+- `tests/test_backends.py` 的 8 项——本机 PATH 只有 `python3` 没有 `python`，用
+  `--ignore` 排除；
+- `tests/test_paper_experience_memory.py::test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently`
+  ——断言过时了，不是功能坏了：#485 给分词器加了 CJK 二元组，那句中文 query 已经不再
+  退化（见第 5 节后记）。要换一个在新分词下仍然退化的例子。
 
 ## 11. 遗留
 
@@ -248,3 +276,11 @@ target 命中 100%）。但**这只是一个跑通信号，不是测量结果**�
   明确放弃，所以非拉丁语系 query 目前只能靠 `list_experience` 绕。
 - **`utility` 字段仍未接入**：策略被采纳后的实际效果没有回写到置信度，"这条用过效果好"
   不会影响后续重排。
+- **一条测试断言过时**：#485 的 CJK 二元组分词让第 5 节的示例 query 不再退化，
+  `test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently` 因此在干净树上
+  就是红的。检测器是对的，要换的是示例。顺带一个真问题：二元组让中文 query 有了召回，
+  但那是**字面二元组**匹配，第 5 节"非拉丁语系只能靠 `list_experience` 绕"这句结论
+  应该按现状重新量一次。
+- **coach 的 gate 没有实测命中率**（2026-09）：`need=true` 的比例、其中产出非空指导的
+  比例，只能从 trace 的 `gate`/`coach_inject` 事件人工数。A/B 脚本测的是 pull 路径的
+  隔离流水线，不覆盖 gate。

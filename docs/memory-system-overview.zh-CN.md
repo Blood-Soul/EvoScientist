@@ -14,7 +14,8 @@
 2. **论文原文**（`C-*`）：把下载到手的论文全文持久化、切块，供检索取证。
 
 以及一层**复用转换**：agent 要拿经验去做决策时，不直接读原始记录（会照抄论文
-自己的取值），而是先把经验改写成绑定当前任务的策略。
+自己的取值），而是先把经验改写成绑定当前任务的策略。这层转换现在由系统在**每一步
+主动判断并推送**（coach），不再等 agent 自己想起来调工具。
 
 ## 1. 全貌
 
@@ -33,9 +34,13 @@
 
 agent 运行时，三个库各有各的检索入口：
     search_observations  ──► O-*（agent 自己的操作记忆）
-    search_experience / list_experience / apply_experience  ──► E-*（论文经验）
+    search_experience / list_experience  ──► E-*（论文经验，定位记录）
     search_paper_text / read_paper  ──► C-*（论文原文分块）
     read_memory  ──► 按 ID 统一读 O-*/E-*
+
+复用转换有两条方向相反的入口，共用同一条流水线和同一份缓存：
+    push（主 agent）：每一步 coach middleware 判断 → 推送指导（见第 6 节）
+    pull（子 agent）：apply_experience 工具，被调用时才运行
 ```
 
 触发经验抽取有两条路径，走的是同一套下载/抽取/存储代码：
@@ -158,7 +163,7 @@ ID 构造方式：
 | `list_experience` | `E-*` | 不知道库里有什么、不知道怎么措辞 | `facet=discipline\|domain\|records`，逐层过滤+分页 |
 | `search_paper_text` | `C-*` | 要核验原文措辞、具体数字、超出经验粒度的细节 | `query`/`mode`（ranked\|regex）/`paper_id`/`limit` |
 | `read_paper` | `C-*` | 展开一个定位结果 | `chunk_id`+`expand=chunk\|section\|full` 或 `paper_id`+`expand=full` |
-| `apply_experience` | `E-*` | 要**做决策**（见第 6 节） | `task`/`state`/`max_selected`/`refresh` |
+| `apply_experience` | `E-*` | 要**做决策**（见第 6 节）。只授予子 agent；主 agent 走 coach 推送，不持有此工具 | `task`/`state`/`max_selected`/`refresh` |
 | `read_memory` | `O-*`/`E-*` | 按稳定 ID 读完整记录 | ID 的 `O-`/`E-` 前缀本身就是无歧义路由 |
 
 `search_experience` 的三个主题面（`topic`/`method`/`task`）**分别检索再用 RRF
@@ -180,11 +185,12 @@ ID 构造方式：
 经验或操作记忆的排序——否则一篇论文几十个 chunk 会淹没高信号的 `E-*`/`O-*` 记录。
 有专门测试守着这条边界（`test_chunks_never_appear_in_experience_search`）。
 
-**中文/非拉丁语系查询的诚实边界**：排序器的分词是 `[a-z0-9_]+`，中文 query 只
-剩下恰好包含的拉丁片段（如 `如何利用摘要完成idea的构建` 只剩 `idea` 一个 token，
-匹配库里大部分记录）。`degenerate_facets()` 按**字符**覆盖率检测这种退化，低于
-`0.4` 就在响应里加 `query_warning`，写明"实际只搜了什么"，并指向 `list_experience`。
-它**不做翻译或查询扩展**，只报告事实。
+**非拉丁语系查询的诚实边界**：ASCII query 分词是 `[a-z0-9_]+`；含 CJK 时走
+**二元组**切分（主线 #485 加的），所以 `如何利用摘要完成idea的构建` 现在切出 10 个
+二元组而不是只剩 `idea`。`degenerate_facets()` 按**字符**覆盖率检测残留的退化情况，
+低于 `0.4` 就在响应里加 `query_warning`，写明"实际只搜了什么"，并指向
+`list_experience`。它**不做翻译或查询扩展**，只报告事实。二元组是字面匹配，不是语义
+匹配，中文召回的真实质量还没量过。
 
 ### system prompt 里的索引块
 
@@ -202,7 +208,7 @@ memory worker（只写 observation）不注入后两块的说明——它拿不�
 详见 [经验检索独立化改造](experience-retrieval-split.zh-CN.md) 第 2、5 节、
 [论文原文 RAG 链路方案](rag-plan.zh-CN.md) 第 6 节。
 
-## 6. 经验怎么被"用"：从照抄到重新推导（`apply_experience`）
+## 6. 经验怎么被"用"：从照抄到重新推导
 
 **问题**：直接把 `read_memory` 读到的 `E-*` 记录塞给 agent，agent 会照抄论文里
 的具体取值。实测案例：任务是"在自有 4 万条医患对话上微调 Llama-3-8B"，检索到一
@@ -239,12 +245,76 @@ agent 不再直接读原始记录，读的是**针对当前任务重写过的策
 区别"正确复用"和"要修的 bug"：**"该调度在 ImageNet 上验证过，你的任务换成
 CIFAR-10"** 是正确复用；**"在 ImageNet 上训练"** 是没重绑定，是 bug。
 
-详见 [经验复用层](experience-policy.zh-CN.md) 第 1、2 节。
+### 6.1 push 与 pull：谁决定"现在该复用经验"
+
+上面那条流水线解决的是"经验以什么形态进上下文"。还剩一个问题：**谁来决定这条
+流水线什么时候跑**。
+
+`apply_experience` 是 **pull**：agent 自己要想起有这个工具、自己判断当下需不需要
+经验、自己把 query 写出来。三处都会漏：
+
+1. query 的上限就是 agent 恰好写出的那一句话，而它用的是**自己处境的词汇**，不是
+   论文摘要的词汇——纯词法检索下这直接决定命中与否；
+2. 这个工具不在 always-include 名单里，工具数超过阈值时 tool selector 可以把它整个
+   过滤掉，复用层于是**静默停止运行**，没有任何信号；
+3. 最根本的一条：agent 常常意识不到自己正在做一个决策。
+
+**coach** 是反方向：系统在每一步替 agent 问这两个问题。
+
+```
+每个 model 调用前
+    │
+    ├─ 代码层短路（零模型调用）：库为空 / 上一步只是纯读工具 / facets 与上次相同
+    │
+    ├─ 一次 gate 调用（辅助模型）：need? + topic/method/task/state
+    │     need=false ──► 什么都不注入，直接继续（这是多数情况下的正常答案）
+    │
+    └─ need=true ──► derive_policy(同一条流水线) ──► 渲染成指导文本
+                          └─ 作为一条临时 HumanMessage 追加到 messages 末尾
+                             （仅本次调用，不落 state）
+```
+
+三件事是刻意这么设计的：
+
+- **流水线一行没改。** gate 只产出检索面和任务串，检索/重排/合成/缓存仍是
+  `derive_policy`。`apply_experience` 仍注册在 tool registry 里供子 agent 调用，
+  所以 push 和 pull 共享一份实现、一份缓存。
+- **注入是 per-call 的，绝不落 state。** 只有返回的 `ModelResponse` 会写回 state，
+  所以下一步看到的轨迹与本步**逐字节相同**，prompt cache 不失效。任何"把指导写进
+  历史"或"把旧指导压成一行"的方案都会改写历史，使编辑点之后的全部 cache token 失效，
+  而且是每步都失效。
+- **多数步骤必须零成本。** 三个短路都在代码层，不花模型调用。单步最坏成本：短路 0、
+  gate 说不要 1、重排选不出 2、完整命中且未命中策略缓存 3。
+
+gate 产出的 `method` 面还顺手修了一个旧缺陷：RRF 融合在只有一个面时会短路，退化成
+目录顺序。pull 路径只有 agent 写的那一句话（只能填 `topic`），gate 则同时给出
+`topic` 和 `method`——**"改写 query"本身就是 coach 的一部分收益**。
+
+注入的是**指导**，不是原始记录：策略本身已经是绑定目标任务的重写，把它渲染成文本
+不多花任何模型调用，也没有信息损失。原始记录在这条路径上从不进入主 agent 上下文，
+需要审计时用 `read_memory` 按 ID 调阅。
+
+### 6.2 两条路径互斥，说明也必须互斥
+
+一个 agent 只能被告知一条路径：
+
+| agent | 持有 `apply_experience` | 被 coach 推送 | 注入的说明块 |
+| --- | --- | --- | --- |
+| 主 agent | 否 | 是 | `EXPERIENCE_COACH_INSTRUCTIONS`（指导会自己来、各段怎么读、它是建议而非命令） |
+| `research-agent` / `planner-agent` | 是（YAML 授权） | 否 | `EXPERIENCE_POLICY_INSTRUCTIONS`（逐字段教怎么调工具） |
+| memory worker | 否 | 否 | 两块都不注入 |
+
+说明互斥不是洁癖：给被 coach 的 agent 注入工具教程，等于让它去调一个不存在的工具；
+给持有工具的子 agent 注入 push 说明，等于承诺一批永远不会到达的指导。子 agent 不上
+coach 是因为**每个子 agent 内部再跑一遍逐步 gate，会把辅助模型调用数乘上扇出宽度**，
+而子 agent 是带着明确任务被派出去的，pull 在那里恰好够用。
+
+详见 [经验复用层](experience-policy.zh-CN.md) 第 1、2、11 节。
 
 ## 7. 模型分工、成本与降级
 
-**模型分工**：中间过程（重排、合成）都走辅助模型，不产出面向用户的散文；策略是
-一个结构化对象，acting agent 读完它，再由**主模型**写出面向用户的回答。
+**模型分工**：中间过程（coach 的 gate、重排、合成）都走辅助模型，不产出面向用户的
+散文；策略是一个结构化对象，acting agent 读完它，再由**主模型**写出面向用户的回答。
 
 **成本控制**：
 - 两级筛选——重排阶段只读约 200–300 字符的紧凑描述符，完整 2500 字符
@@ -253,6 +323,12 @@ CIFAR-10"** 是正确复用；**"在 ImageNet 上训练"** 是没重绑定，是
   并重新合成——因为写手是逐字读任务的；
 - 按需调用——`apply_experience` 不并入 `search_experience`，前者转换记录、后者
   定位记录，工具描述要求"真正做决策时才调用"。
+- coach 侧多出一次 gate 调用，用三个代码层短路和"facets 未变则复用上次指导"把它
+  压回去；`need=false` 被明确写成一等答案，不是失败。
+
+**辅助模型必须真的配一个便宜的**：`auxiliary_model` / `auxiliary_provider` 默认为
+空字符串，即**回落到主模型**。没配的话 gate 和重排/合成都跑在主模型上，coach 的
+成本论证不成立。
 
 **降级行为**：复用是对实时检索的增强，不是前置条件，任何一环失败都不终止调用方
 的回合。
@@ -264,6 +340,10 @@ CIFAR-10"** 是正确复用；**"在 ImageNet 上训练"** 是没重绑定，是
 | 重排选不出任何记录 | `status="no_reusable_memory"` |
 | 合成输出无法解析 | 抛 `PolicyOutputError`，工具层捕获返回 `status="error"` + 提示 |
 | 缓存写失败 | 记 warning，不影响本次返回 |
+| gate 输出无法解析 | 判为 `need=false`（**关闭**），原因记入 trace。绝不能以"看不懂"为由开启后面两次调用 |
+| gate 要检索但没给 `topic` | 降级为 `need=false`——空 topic 的词法检索返回的是目录顺序，不是召回 |
+| gate 调用或 `derive_policy` 抛异常 | coach 静默跳过，注入空串，agent 回合照常进行 |
+| 策略渲染为空（`no_candidates` / 无缺口的 `decline`） | 什么都不注入，比告诉 agent"记忆没意见"更省也更不误导 |
 
 原文全文持久化同样"永不抛异常"：开关关闭、写盘失败都降级为"这篇没有全文"，不
 让抽取任务失败——**全文是经验抽取的补充，不是它的前提**。
@@ -274,6 +354,8 @@ CIFAR-10"** 是正确复用；**"在 ImageNet 上训练"** 是没重绑定，是
 | --- | --- | --- |
 | `memory_experience_policy_enabled` | `true` | `EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_ENABLED` |
 | `memory_experience_policy_max_selected` | `4`（钳制 [1,6]） | `EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_MAX_SELECTED` |
+| `memory_experience_coach_enabled` | `true` | `EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED` |
+| `memory_experience_coach_recent_messages` | `6`（钳制 [1,30]） | `EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES` |
 | `memory_paper_fulltext_enabled` | `true` | `EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED` |
 | `memory_paper_chunk_max_chars` | `2000` | `EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS` |
 | `memory_paper_chunk_overlap_chars` | `200` | `EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS` |
@@ -282,9 +364,20 @@ CIFAR-10"** 是正确复用；**"在 ImageNet 上训练"** 是没重绑定，是
 记录；磁盘上已缓存的策略不动。开关必须同时管住**工具注册**和**说明注入**（
 `middleware/memory.py`），否则关掉后 agent 会被告知去调一个不存在的工具。
 
+关掉 `memory_experience_coach_enabled` 则回到纯 pull：coach middleware 不进栈，
+`apply_experience` **重新出现在主 agent 的 base_tools 里**，说明块也换回工具教程。
+tool registry 里的那份注册**始终保留**——子 agent 的 YAML `tools:` 列表是按名字对
+registry 解析的。这三处（middleware、base_tools、说明块）必须同向，测试
+`TestRouteExclusivity` / `TestAgentWiring` 守着这条一致性。
+
+`memory_experience_coach_recent_messages` 是 gate 读取的轨迹尾部长度。钳制下界是
+1——`0` 会让 gate 看不到这次运行做过什么；上界是 30——无上界等于每步把整条轨迹
+送上辅助模型，正好抵消掉用辅助模型的理由。
+
 工具授权：`apply_experience`/`search_experience`/`list_experience`/
 `search_paper_text`/`read_paper` 只授予 `research-agent` 和 `planner-agent`
-（YAML 里的 `tools:` 列表）；memory worker 恒为不启用（它只写观察）。
+（YAML 里的 `tools:` 列表）；memory worker 恒为不启用（它只写观察）。主 agent 默认
+只在 coach 关闭时才持有 `apply_experience`。
 
 ## 9. 代码地图
 
@@ -306,8 +399,10 @@ EvoScientist/memory/
     select.py            gather_candidates（检索）+ rerank_candidates（重排）
     synthesize.py         synthesize_policy（合成）+ 容错解析
     store.py               策略缓存
-    pipeline.py            derive_policy：唯一对外入口
-    trace.py                开发期调试日志
+    pipeline.py            derive_policy：流水线唯一对外入口
+    gate.py                 push 侧的 gate：need? + 三个检索面（decide_experience_need）
+    suggest.py               render_suggestion：把策略渲染成注入用的指导文本
+    trace.py                  开发期调试日志
   observations/index.py      三块字符预算的 system prompt 索引拼装
   agents/paper_experience_worker.py   后台 worker（LangGraph graph）
 EvoScientist/tools/
@@ -316,10 +411,12 @@ EvoScientist/tools/
   paper_rag.py               search_paper_text / read_paper
   paper_experience_active.py  extract_paper_experiences（前台）
   paper_experience_queue.py    enqueue_paper_experiences（后台入队）
+EvoScientist/middleware/coach.py   ExperienceCoachMiddleware：逐步判断 + per-call 注入
 EvoScientist/langgraph_dev/paper_inspector.py   /debug/papers WebUI 页面
 prompt/
   l1_extract.md / l2_inductive.md   抽取提示词
   policy_rerank.md / policy_write.md   复用层的重排/合成提示词
+  policy_gate.md                        coach 的 gate 提示词
 scripts/
   backfill_experience_fields.py    存量记录补齐 transferable_core/bindings
   policy_ab.py                       复用层 A/B 验证（独立，未接入 CI）
@@ -336,11 +433,21 @@ scripts/
   不变，需要 `refresh=true` 手动重合成。
 - 11 条记录仍停留在 `discipline=other`（来自 `domain_arxiv=null` 的 4 篇论文）；
   模型侧 `discipline` 字段只在未来抽取时生效，存量需重抽或专门 backfill。
-- 词法检索的召回弱是刻意接受的取舍，没有被消除：中文/非拉丁语系查询目前只能靠
-  `list_experience` 绕过；若要上向量检索，`memory/papers/retrieval.py` 和
-  `memory/experiences/retrieval.py` 是各自唯一的改动点。
+- 词法检索的召回弱是刻意接受的取舍，没有被消除：若要上向量检索，
+  `memory/papers/retrieval.py` 和 `memory/experiences/retrieval.py` 是各自唯一的改动点。
+- 中文查询的现状需要重新量一次：主线 #485（2026-09-17）给 `_tokens()` 加了 CJK 二元组
+  分词，中文 query 现在有字面二元组召回，不再只剩恰好含有的拉丁片段。因此第 5 节"只能靠
+  `list_experience` 绕"这句结论已经过时，而
+  `test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently` 还钉着旧行为，
+  在干净树上就是红的（要换示例，不是修检测器）。
+- **coach 的 gate 命中率没有实测**：现在是"每步都触发"的最朴素策略，`need=true` 的
+  比例、其中真正产出非空指导的比例、以及 gate 是否有系统性偏"要"，都只有 trace 里的
+  `coach_skip`/`coach_reuse`/`coach_inject` 事件可查，没有汇总统计。
+- prompt cache 命中情况仍不可见：trace 没有记 `cache_read_input_tokens` /
+  `cache_creation_input_tokens`，"注入不落 state 所以 cache 不失效"目前是代码层面的
+  论证（只有 `ModelResponse` 写回 state），不是测出来的数字。
 
 详见三份分文档各自的"遗留"章节：
 [论文原文 RAG 方案](rag-plan.zh-CN.md) 第 9 节、
-[经验复用层](experience-policy.zh-CN.md) 第 11 节、
+[经验复用层](experience-policy.zh-CN.md) 第 12 节、
 [经验检索独立化改造](experience-retrieval-split.zh-CN.md) 第 11 节。
