@@ -44,6 +44,7 @@ async def derive_policy(
     project_id: str,
     task: str,
     state: str = "",
+    method: str = "",
     retrieve_limit: int = DEFAULT_RETRIEVE_LIMIT,
     max_selected: int = DEFAULT_MAX_SELECTED,
     model: Any | None = None,
@@ -57,6 +58,13 @@ async def derive_policy(
     a normal outcome, reported as ``status="no_candidates"`` rather than an
     error -- a project with no relevant experience should fall through to live
     search, not stall.
+
+    ``method`` is the second retrieval facet. It is optional because the pull
+    path (``apply_experience``) has only the one sentence the agent wrote, but
+    supplying it is what makes RRF fusion do its job: with a single facet the
+    fusion short-circuits and a low-information token can rank the whole library.
+    The push-side gate derives both facets, which is the point of deriving the
+    query instead of accepting it.
     """
     call_id = uuid.uuid4().hex[:12]
     await emit_trace_async(
@@ -66,6 +74,7 @@ async def derive_policy(
         project_id=project_id,
         task=task.strip(),
         state=state,
+        method=method,
         max_selected=max_selected,
         refresh=refresh,
     )
@@ -79,6 +88,7 @@ async def derive_policy(
         memory_dir=memory_dir,
         project_id=project_id,
         task=task,
+        method=method,
         retrieve_limit=retrieve_limit,
         call_id=call_id,
     )
@@ -183,6 +193,7 @@ async def _gather(
     memory_dir: str | Path,
     project_id: str,
     task: str,
+    method: str,
     retrieve_limit: int,
     call_id: str,
 ) -> list[dict[str, Any]]:
@@ -191,6 +202,7 @@ async def _gather(
         memory_dir=memory_dir,
         project_id=project_id,
         query=task,
+        method=method,
         limit=retrieve_limit,
         call_id=call_id,
     )
