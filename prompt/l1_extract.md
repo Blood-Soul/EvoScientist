@@ -78,14 +78,18 @@ or two records, while a rich empirical paper should stay near six or fewer.
 
 - `domain`: concise lowercase research domain.
 - `task`: specific capability or task, finer than the domain.
-- `trigger_context`: 1-2 sentences naming the obstacle, difficulty, or open
-  question that made this practice necessary. Write it the way someone would
-  describe the situation *before* knowing the resolution -- the symptom, not the
-  remedy. Say "single-stage detectors miss small objects when the feature stride
-  is large", not "adding an FPN improves small-object recall". Do not name the
-  paper's own solution here. This field exists because a later agent searches
-  with the problem it currently faces, not with the conclusion it has yet to
-  reach; indexing only on outcome wording makes such records unreachable.
+- `trigger_context`: one sentence, **at most 25 words**, naming the obstacle,
+  difficulty, or open question that made this practice necessary. Write it the
+  way someone would describe the situation *before* knowing the resolution --
+  the symptom, not the remedy. Say "single-stage detectors miss small objects
+  when the feature stride is large", not "adding an FPN improves small-object
+  recall". Do not name the paper's own solution here. This field exists because
+  a later agent searches with the problem it currently faces, not with the
+  conclusion it has yet to reach; indexing only on outcome wording makes such
+  records unreachable. It is a retrieval key, not a description: it is indexed
+  in a length-capped high-weight field, so every word spent restating the
+  setting or the motivation pushes out a word that another record's key needs.
+  Name the problem and stop.
 - `statement`: one clean, self-contained paragraph of at least 350 words. It
   must include the problem, procedure, conditions, concrete environment,
   outcomes, and boundaries. Do not write citations, source pointers, or “the
