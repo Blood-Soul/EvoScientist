@@ -9,6 +9,7 @@ Return only a JSON object with this shape:
   "discipline": "cs",
   "domain": "agent_planning",
   "task": "specific capability",
+  "trigger_context": "The open question or difficulty this generalization answers, in pre-solution wording.",
   "statement": "A clean, self-contained inductive experience.",
   "claim_type": "conditional",
   "applicable_when": ["generalized setting"],
@@ -19,17 +20,24 @@ Return only a JSON object with this shape:
   "rationale": "Author-stated reason, or null.",
   "rationale_depth": "deep",
   "evidence": [{"section": "discussion", "quote": "verbatim quote"}],
+  "evidence_scope": {
+    "datasets": ["HumanEval", "MBPP"],
+    "models": ["GPT-4"],
+    "has_ablation": true,
+    "has_baseline_comparison": true,
+    "verification_strength": "multi-setting-ablated"
+  },
   "transferable_core": "The claim with every source-specific value stripped.",
   "bindings": [{"name": "GPT-4", "kind": "model"}]
 }]}
 ```
 
-Every experience MUST contain these 12 fields:
+Every experience MUST contain these 14 fields:
 
 ```text
-domain, task, statement, claim_type, applicable_when,
+domain, task, trigger_context, statement, claim_type, applicable_when,
 not_applicable_when, scope, action, effect, rationale,
-rationale_depth, evidence
+rationale_depth, evidence, evidence_scope
 ```
 
 Three additional **optional** fields support downstream retrieval and reuse:
@@ -75,6 +83,18 @@ Extract only genuine claims; zero is valid and the soft cap is about six.
 
 - `domain`: concise lowercase research domain.
 - `task`: capability or task to which the claim applies.
+- `trigger_context`: one sentence, **at most 25 words**, naming the open
+  question, difficulty, or contested choice this generalization answers. Write
+  it the way someone would describe the situation *before* knowing the answer --
+  the problem, not the conclusion. Say "it is unclear whether longer reasoning
+  chains help on tasks with short answers", not "chain-of-thought degrades
+  performance on short-answer tasks". Do not name the paper's own finding here.
+  This field exists because a later agent searches with the problem it currently
+  faces, not with the conclusion it has yet to reach; indexing only on outcome
+  wording makes such records unreachable. It is a retrieval key, not a
+  description: it is indexed in a length-capped high-weight field, so every word
+  spent restating the setting or the motivation pushes out a word that another
+  record's key needs. Name the question and stop.
 - `statement`: one clean, self-contained paragraph of at least 350 words. State
   the finding directly and include conditions, boundaries, evidence pattern,
   representative numbers, and a causal mechanism only when the paper states
@@ -90,6 +110,26 @@ Extract only genuine claims; zero is valid and the soft cap is about six.
   `abstract`, `introduction`, `method`, `experiment`, `results`, `discussion`,
   or `conclusion`. `quote` must be verbatim, at least 150 characters, and cover
   the claim plus its supporting finding. Do not invent evidence.
+- `evidence_scope`: how widely this specific claim was actually tested *in this
+  paper*. An object with five keys:
+  - `datasets`: array of every dataset this claim was evaluated on. Empty array
+    if none is identifiable.
+  - `models`: array of every model/backbone this claim was evaluated with.
+  - `has_ablation`: `true` only when the paper isolates this claim's own
+    variable (removes or varies it while holding the rest fixed). A paper with
+    an ablation table that does not cover *this* claim is `false`.
+  - `has_baseline_comparison`: `true` when the claim is supported against an
+    external baseline, not only against the paper's own variants.
+  - `verification_strength`: exactly one of `single-setting` (one dataset and
+    one model, no ablation), `multi-setting` (more than one dataset or model,
+    no ablation isolating this claim), `ablated` (this claim's variable is
+    isolated, but within one setting), or `multi-setting-ablated` (both).
+
+  Report only what the paper actually did for *this* claim. Do not inherit the
+  paper's overall experimental scope: a broadly evaluated paper can still
+  support an individual claim with a single observation. A generalization stated
+  in the discussion but tested in one setting is `single-setting`, however
+  broadly it is phrased. Understating here is far less harmful than overstating.
 
 The two optional fields exist because a later agent must reuse these records on
 a task with *different* datasets, models, and scales. Recording which values are

@@ -29,6 +29,14 @@ _REFERENCES_HEADING_RE = re.compile(
 
 PROMPT_FILENAMES = {"l1": "l1_extract.md", "l2": "l2_inductive.md"}
 
+# Not keyed by `ExperienceLevel`: this prompt induces L2 records from a paper's
+# own already-extracted L1 records rather than reading `paper_text`, so it
+# does not fit the level->prompt map above. Its output is still stored under
+# level "l2" (see `run_experience_extraction`); only prompt *selection* needs a
+# third key. Loading it is best-effort — see `load_experience_prompts`.
+INDUCTION_PROMPT_KEY = "l2_induced"
+INDUCTION_PROMPT_FILENAME = "l2_induced_from_l1.md"
+
 
 class ExperienceOutputError(ValueError):
     """Raised when extraction output does not match the existing prompt schema."""
@@ -44,6 +52,28 @@ _COMMON_LLM_KEYS = {
     "action",
     "effect",
     "evidence",
+}
+
+# Added after ~2000 papers were extracted under the 12-field prompts, so they are
+# validated when present but not required: re-extracting the existing corpus is
+# not free, and the scorer distinguishes a field a record's prompt never asked
+# for from one the model failed to produce. Promote to required only once the
+# corpus is uniformly re-extracted.
+#
+# `trigger_context`: the obstacle in pre-solution wording, indexed so a later
+#   agent searching with the problem it faces can reach a record whose other
+#   fields are all phrased as conclusions.
+# `evidence_scope`: how widely this claim was actually tested in its own paper.
+#   Separates "observed once on a toy dataset" from "ablated across five
+#   benchmarks" -- the peer-reviewed experimental coverage that substitutes for
+#   the rerun this domain cannot perform.
+_LATE_ADDED_LLM_KEYS = {"trigger_context", "evidence_scope"}
+
+_VERIFICATION_STRENGTHS = {
+    "single-setting",
+    "multi-setting",
+    "ablated",
+    "multi-setting-ablated",
 }
 _L1_LLM_KEYS = _COMMON_LLM_KEYS | {"practice_trace"}
 _L2_LLM_KEYS = _COMMON_LLM_KEYS | {"claim_type", "rationale", "rationale_depth"}
@@ -65,7 +95,10 @@ _L2_LLM_KEYS = _COMMON_LLM_KEYS | {"claim_type", "rationale", "rationale_depth"}
 #   is the better source: `domain_arxiv` is caller-supplied at enqueue time and
 #   absent for anything that did not come from arXiv, which is most of the
 #   non-CS literature this library is meant to hold.
-_OPTIONAL_LLM_KEYS = {"transferable_core", "bindings", "discipline"}
+# `source_l1_ids`: only produced by the L1->L2 induction prompt, never by
+#   direct L1/L2 extraction. Marks an L2 record as induced from this paper's
+#   own L1 records rather than read from `paper_text` directly.
+_OPTIONAL_LLM_KEYS = {"transferable_core", "bindings", "discipline", "source_l1_ids"}
 
 _BINDING_KINDS = {
     "dataset",
@@ -99,6 +132,33 @@ def _validate_bindings(value: Any, *, level: ExperienceLevel) -> None:
             )
 
 
+def _validate_evidence_scope(value: Any, *, level: ExperienceLevel) -> None:
+    """Validate the evidence_scope object when the model supplies it."""
+    if not isinstance(value, Mapping):
+        raise ExperienceOutputError(
+            f"{level.upper()} evidence_scope must be an object"
+        )
+    for field in ("datasets", "models"):
+        entries = value.get(field)
+        if not isinstance(entries, list) or not all(
+            isinstance(entry, str) for entry in entries
+        ):
+            raise ExperienceOutputError(
+                f"{level.upper()} evidence_scope {field} must be an array of strings"
+            )
+    for field in ("has_ablation", "has_baseline_comparison"):
+        if not isinstance(value.get(field), bool):
+            raise ExperienceOutputError(
+                f"{level.upper()} evidence_scope {field} must be a boolean"
+            )
+    strength = value.get("verification_strength")
+    if strength not in _VERIFICATION_STRENGTHS:
+        raise ExperienceOutputError(
+            f"{level.upper()} evidence_scope verification_strength {strength!r} "
+            f"is not one of {', '.join(sorted(_VERIFICATION_STRENGTHS))}"
+        )
+
+
 def _validate_llm_experience(
     item: Mapping[str, Any], *, level: ExperienceLevel
 ) -> None:
@@ -106,13 +166,31 @@ def _validate_llm_experience(
     required = _L1_LLM_KEYS if level == "l1" else _L2_LLM_KEYS
     keys = set(item)
     missing = sorted(required - keys)
-    extra = sorted(keys - required - _OPTIONAL_LLM_KEYS)
+    extra = sorted(keys - required - _OPTIONAL_LLM_KEYS - _LATE_ADDED_LLM_KEYS)
     if missing or extra:
         raise ExperienceOutputError(
             f"{level.upper()} experience keys mismatch; missing={missing}, extra={extra}"
         )
     if "bindings" in item:
         _validate_bindings(item["bindings"], level=level)
+    if "evidence_scope" in item:
+        _validate_evidence_scope(item["evidence_scope"], level=level)
+    if "trigger_context" in item and not (
+        isinstance(item["trigger_context"], str) and item["trigger_context"].strip()
+    ):
+        raise ExperienceOutputError(
+            f"{level.upper()} trigger_context must be a non-empty string"
+        )
+    if "source_l1_ids" in item:
+        ids = item["source_l1_ids"]
+        if (
+            not isinstance(ids, list)
+            or not ids
+            or not all(isinstance(entry, str) and entry.strip() for entry in ids)
+        ):
+            raise ExperienceOutputError(
+                f"{level.upper()} source_l1_ids must be a non-empty array of strings"
+            )
     if "transferable_core" in item and not isinstance(item["transferable_core"], str):
         raise ExperienceOutputError(
             f"{level.upper()} transferable_core must be a string"
@@ -173,14 +251,25 @@ def _prompt_dir_candidates() -> list[Path]:
     return candidates
 
 
-def load_experience_prompts() -> dict[ExperienceLevel, str]:
-    """Load the existing L1/L2 prompts without changing their schemas."""
+def load_experience_prompts() -> dict[str, str]:
+    """Load the existing L1/L2 prompts without changing their schemas.
+
+    Also loads the L1->L2 induction prompt under `INDUCTION_PROMPT_KEY` when a
+    matching file sits alongside l1/l2 in the same directory. That file is
+    optional: its absence never raises, since the induction step itself
+    degrades gracefully when its prompt is missing (see
+    `run_experience_extraction`).
+    """
     for directory in _prompt_dir_candidates():
         paths = {level: directory / name for level, name in PROMPT_FILENAMES.items()}
         if all(path.is_file() for path in paths.values()):
-            return {
+            loaded = {
                 level: path.read_text(encoding="utf-8") for level, path in paths.items()
             }
+            induction_path = directory / INDUCTION_PROMPT_FILENAME
+            if induction_path.is_file():
+                loaded[INDUCTION_PROMPT_KEY] = induction_path.read_text(encoding="utf-8")
+            return loaded
     searched = ", ".join(str(path) for path in _prompt_dir_candidates())
     raise FileNotFoundError(f"Experience prompts not found; searched: {searched}")
 
@@ -371,15 +460,50 @@ def parse_experience_json(
     return payload
 
 
+async def _induce_l2_from_l1(
+    *,
+    paper_id: str,
+    l1_experiences: list[dict[str, Any]],
+    prompt: str,
+    model: Any,
+    domain_arxiv: str | None,
+) -> list[dict[str, Any]]:
+    """Run the L1->L2 induction prompt and return its normalized L2 records.
+
+    Failures here are logged and swallowed rather than raised: induction is an
+    additional, coexisting path (per the approved design) alongside direct L2
+    extraction, so it must never take down extraction for a paper that already
+    produced valid direct L1/L2 output.
+    """
+    response = await model.ainvoke(
+        [
+            SystemMessage(content=prompt),
+            HumanMessage(
+                content=f"[paper_id] {paper_id}\n\n"
+                + json.dumps(l1_experiences, ensure_ascii=False)
+            ),
+        ]
+    )
+    result = parse_experience_json(
+        format_message_content(response).strip(),
+        level="l2",
+        paper_id=paper_id,
+        domain_arxiv=domain_arxiv,
+    )
+    return result["experiences"]
+
+
 async def run_experience_extraction(
     *,
     paper_id: str,
     paper_text: str,
-    prompts: Mapping[ExperienceLevel, str] | None = None,
+    prompts: Mapping[str, str] | None = None,
     model: Any | None = None,
     domain_arxiv: str | None = None,
 ) -> dict[ExperienceLevel, dict[str, Any]]:
-    """Invoke the existing L1 and L2 prompts concurrently."""
+    """Invoke the existing L1 and L2 prompts concurrently, then, when the L1->L2
+    induction prompt is available, induce additional L2 records from this
+    paper's own L1 output and merge them into the L2 result."""
     if model is None:
         from ...EvoScientist import _ensure_auxiliary_chat_model
 
@@ -413,8 +537,29 @@ async def run_experience_extraction(
         raise ExperienceOutputError(
             "Experience extraction failed (" + "; ".join(failures) + ")"
         )
-    return {
+    output = {
         level: result
         for level, result in zip(levels, results, strict=True)
         if isinstance(result, dict)
     }
+
+    induction_prompt = loaded.get(INDUCTION_PROMPT_KEY)
+    l1_experiences = output.get("l1", {}).get("experiences", [])
+    if induction_prompt and l1_experiences:
+        try:
+            induced = await _induce_l2_from_l1(
+                paper_id=paper_id,
+                l1_experiences=l1_experiences,
+                prompt=induction_prompt,
+                model=model,
+                domain_arxiv=domain_arxiv,
+            )
+        except Exception as exc:  # noqa: BLE001 - degrade, never block direct output
+            print(
+                f"[extraction] L1->L2 induction skipped for {paper_id!r}: {exc}",
+                file=sys.stderr,
+            )
+        else:
+            output["l2"]["experiences"].extend(induced)
+
+    return output

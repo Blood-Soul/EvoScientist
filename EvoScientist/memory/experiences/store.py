@@ -291,6 +291,15 @@ def _experience_id(
     return f"E-{_sha256(f'{project_id}:{paper_key}:{level}:{index}')[:16]}"
 
 
+# Character budgets for the ranking summary. The overall cap is what the
+# retrieval layer weights at triple the body; the per-segment caps keep one
+# long field from evicting another, since `domain`/`task` alone run 70-100
+# characters and either descriptive field can run past 200 on its own.
+_SUMMARY_BUDGET = 320
+_TRIGGER_BUDGET = 110
+_TAIL_BUDGET = 130
+
+
 def _facet(item: Mapping[str, Any], key: str) -> str | None:
     """Read one free-text facet off a record, normalized, or None."""
     value = item.get(key)
@@ -314,8 +323,20 @@ def _summary(item: Mapping[str, Any], *, title: str, level: ExperienceLevel) -> 
     tail because it is the paper-agnostic rephrasing: it keeps the causal claim
     and drops the dataset and model names that make a record match queries
     about the source paper rather than about the technique.
+
+    ``trigger_context`` is carried alongside that tail rather than instead of
+    it, and both are capped individually. The two are not interchangeable: the
+    tail is the record's answer, while the trigger is the problem in
+    pre-solution wording -- the only text here a searcher holding just a
+    symptom can match. Appending it without a cap would not work either,
+    because the overall budget is already tight enough that a long trigger
+    would evict the tail entirely, trading one retrieval key for the other.
+    Records predating the field are unaffected: the trigger segment is simply
+    absent.
     """
     facets = [value for key in ("domain", "task") if (value := _facet(item, key))]
+    if trigger := _facet(item, "trigger_context"):
+        facets.append(trigger[:_TRIGGER_BUDGET])
     candidates = (
         item.get("transferable_core"),
         item.get("statement"),
@@ -325,11 +346,11 @@ def _summary(item: Mapping[str, Any], *, title: str, level: ExperienceLevel) -> 
     )
     for value in candidates:
         if isinstance(value, str) and value.strip():
-            facets.append(" ".join(value.split()))
+            facets.append(" ".join(value.split())[:_TAIL_BUDGET])
             break
     if not facets:
         return f"{level.upper()} experience from {title or 'paper'}"
-    return " · ".join(facets)[:240]
+    return " · ".join(facets)[:_SUMMARY_BUDGET]
 
 
 def _experience_text(
