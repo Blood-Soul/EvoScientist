@@ -1232,3 +1232,45 @@ class TestDotenvIsolation:
 
         assert config.langgraph_dev_port == 6606
         assert os.environ["EVOSCIENTIST_LANGGRAPH_DEV_PORT"] == "6606"
+
+
+class TestExperienceCoachConfig:
+    """The coach's own knobs, and the tool/instruction routing they drive."""
+
+    def test_defaults(self):
+        config = EvoScientistConfig()
+        assert config.memory_experience_coach_enabled is True
+        assert config.memory_experience_coach_recent_messages == 6
+
+    @pytest.mark.parametrize("bad", [0, -1, 31, 100, True, False, "6", 6.0, None])
+    def test_recent_messages_is_clamped(self, bad):
+        """Zero blinds the gate; unbounded puts the whole trajectory on the aux model."""
+        config = EvoScientistConfig(memory_experience_coach_recent_messages=bad)
+        assert config.memory_experience_coach_recent_messages == 6
+
+    @pytest.mark.parametrize("good", [1, 6, 12, 30])
+    def test_valid_recent_messages_survive(self, good):
+        config = EvoScientistConfig(memory_experience_coach_recent_messages=good)
+        assert config.memory_experience_coach_recent_messages == good
+
+    def test_memory_controls_carry_the_coach_settings(self):
+        controls = MemoryControls.from_config(
+            EvoScientistConfig(
+                memory_experience_coach_enabled=False,
+                memory_experience_coach_recent_messages=10,
+            )
+        )
+        assert controls.experience_coach_enabled is False
+        assert controls.experience_coach_recent_messages == 10
+
+    def test_env_vars_are_mapped(self):
+        from EvoScientist.config.settings import _ENV_MAPPINGS
+
+        assert (
+            _ENV_MAPPINGS["memory_experience_coach_enabled"]
+            == "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED"
+        )
+        assert (
+            _ENV_MAPPINGS["memory_experience_coach_recent_messages"]
+            == "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES"
+        )

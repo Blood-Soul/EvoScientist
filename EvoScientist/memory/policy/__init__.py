@@ -13,8 +13,17 @@ synthesize → cache. The tool at ``tools/experience_policy.py`` wraps it.
 
 from __future__ import annotations
 
+from .gate import (
+    DEFAULT_RECENT_MESSAGES,
+    GateOutputError,
+    decide_experience_need,
+    normalize_gate,
+    parse_gate_json,
+    render_library,
+    render_recent,
+)
 from .pipeline import derive_policy
-from .prompts import load_rerank_prompt, load_writer_prompt
+from .prompts import load_gate_prompt, load_rerank_prompt, load_writer_prompt
 from .schema import BINDING_KINDS, VERDICTS, PolicyOutputError, normalize_policy
 from .select import (
     DEFAULT_MAX_SELECTED,
@@ -24,22 +33,34 @@ from .select import (
     transferable_core,
 )
 from .store import STORE_VERSION, load_cached_policy, store_policy
+from .suggest import SUGGESTION_CLOSE, SUGGESTION_OPEN, render_suggestion
 from .synthesize import parse_policy_json, synthesize_policy
 
 __all__ = [
     "BINDING_KINDS",
     "DEFAULT_MAX_SELECTED",
+    "DEFAULT_RECENT_MESSAGES",
     "DEFAULT_RETRIEVE_LIMIT",
     "STORE_VERSION",
+    "SUGGESTION_CLOSE",
+    "SUGGESTION_OPEN",
     "VERDICTS",
+    "GateOutputError",
     "PolicyOutputError",
+    "decide_experience_need",
     "derive_policy",
     "gather_candidates",
     "load_cached_policy",
+    "load_gate_prompt",
     "load_rerank_prompt",
     "load_writer_prompt",
+    "normalize_gate",
     "normalize_policy",
+    "parse_gate_json",
     "parse_policy_json",
+    "render_library",
+    "render_recent",
+    "render_suggestion",
     "rerank_candidates",
     "store_policy",
     "synthesize_policy",

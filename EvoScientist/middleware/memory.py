@@ -87,8 +87,7 @@ not by which tool you used last:
 - "What is known about this subject?" — experience extracted from published
   papers (`E-*`): methods, measured results, evaluation protocols,
   subject-matter findings. `search_experience`, or `list_experience` to browse
-  when you do not know the library's vocabulary. When you are making a decision
-  rather than gathering context, `apply_experience`.
+  when you do not know the library's vocabulary.
 - "What exactly did that paper say?" — stored paper full text (`C-*`): the
   numbers, settings, and wording behind an experience record.
   `search_paper_text`, then `read_paper`.
@@ -158,10 +157,11 @@ vocabulary rather than an empty library:
 - There is no `memory_type` and no `scope` on this store. Those filter
   observations only.
 
-`read_memory` with an `E-*` ID reads one full record. Prefer `apply_experience`
-when you are making a decision: a raw record carries the source's fixed
+`read_memory` with an `E-*` ID reads one full record. Read records to gather
+context, not to lift a plan out of one: a record carries the source's fixed
 datasets, models, and thresholds alongside its transferable procedure, and
-reading it into a plan is how those values get copied.
+reading it straight into a decision is how those values get copied. The reuse
+guidance below covers that case.
 """
 
 PAPER_FULLTEXT_INSTRUCTIONS = """
@@ -234,6 +234,42 @@ would be worse than proceeding without. `no_candidates` and
 `read_memory` on an `E-*` ID stays available for auditing the evidence behind a
 specific policy line, and `search_paper_text` gives the paper's own wording.
 Use them to check a policy, not to replace it.
+"""
+
+EXPERIENCE_COACH_INSTRUCTIONS = """
+Experience reuse is pushed to you, not called by you. There is no
+`apply_experience` tool in this session.
+
+Before a step where stored paper experience could change what you do, an
+`<experience_guidance>` block appears in the conversation. It is derived for
+that one decision from the `E-*` records that matched it, and it is rewritten
+for your task rather than quoted: an `E-*` record is a source-bound account of
+what one paper's authors did on their datasets, at their scale, with their
+numbers, and reading one into a decision as-is gets those values copied. What
+you receive has already had that separated out:
+- `What transfers to this step` — the action and validation pattern that still
+  holds.
+- `Values you must re-derive here rather than copy` — the source-specific
+  values. A `source-side value` is provenance and a plausibility anchor, never
+  your answer; ground each one in this project the way the line says to.
+- `This only holds if` / `What does not transfer` — the limits, so you neither
+  misapply the procedure nor over-extend it.
+- `Papers disagree here` — resolve it on the stated condition. Do not average
+  two findings.
+- `Verify before treating this as settled` — checks to clear before you call
+  the task done.
+- `Memory does not cover these` — send those parts to live search or
+  `search_paper_text` rather than assuming they were handled.
+
+The guidance is advisory and it is one input among several. It was derived from
+the library alone, so it does not know what you have observed in this project;
+where the two disagree, what you have verified here wins. Most steps get no
+block at all, which means stored experience had no bearing on them -- not that
+the library is empty or that you should go looking for a substitute.
+
+`read_memory` on an `E-*` ID audits the evidence behind a specific line, and
+`search_paper_text` gives the paper's own wording. Use them to check a piece of
+guidance, not to replace it.
 """
 
 OBSERVATION_MEMORY_WRITE_INSTRUCTIONS = """
@@ -605,6 +641,7 @@ class EvoMemoryMiddleware(AgentMiddleware):
         enable_paper_fulltext: bool = True,
         enable_experience_search: bool = True,
         enable_experience_policy: bool = True,
+        enable_experience_coach: bool = False,
         memory_scheduler: MemoryScheduler | None = None,
         enable_profile_bootstrap: bool = False,
     ) -> None:
@@ -643,6 +680,13 @@ class EvoMemoryMiddleware(AgentMiddleware):
         )
         self._enable_experience_policy = (
             enable_observation_memory and enable_experience_policy
+        )
+        # Which side of the reuse layer this agent sees. The coach pushes
+        # guidance and the tool is withheld, so the two blocks are mutually
+        # exclusive: injecting both would tell the agent to call a tool it does
+        # not have while guidance is already arriving on its own.
+        self._enable_experience_coach = (
+            self._enable_experience_policy and enable_experience_coach
         )
         self.tools = []
         if enable_observation_memory:
@@ -949,7 +993,9 @@ class EvoMemoryMiddleware(AgentMiddleware):
             instructions += EXPERIENCE_SEARCH_INSTRUCTIONS
         if self._enable_paper_fulltext:
             instructions += PAPER_FULLTEXT_INSTRUCTIONS
-        if self._enable_experience_policy:
+        if self._enable_experience_coach:
+            instructions += EXPERIENCE_COACH_INSTRUCTIONS
+        elif self._enable_experience_policy:
             instructions += EXPERIENCE_POLICY_INSTRUCTIONS
         if not self._enable_observation_tool:
             return instructions
@@ -1108,6 +1154,7 @@ def create_memory_middleware(
     enable_paper_fulltext: bool = True,
     enable_experience_search: bool = True,
     enable_experience_policy: bool = True,
+    enable_experience_coach: bool = False,
     memory_scheduler: MemoryScheduler | None = None,
     enable_profile_bootstrap: bool = False,
 ) -> EvoMemoryMiddleware:
@@ -1128,6 +1175,7 @@ def create_memory_middleware(
         enable_paper_fulltext=enable_paper_fulltext,
         enable_experience_search=enable_experience_search,
         enable_experience_policy=enable_experience_policy,
+        enable_experience_coach=enable_experience_coach,
         memory_scheduler=memory_scheduler,
         enable_profile_bootstrap=enable_profile_bootstrap,
     )
