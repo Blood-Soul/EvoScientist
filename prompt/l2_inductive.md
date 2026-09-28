@@ -83,15 +83,18 @@ Extract only genuine claims; zero is valid and the soft cap is about six.
 
 - `domain`: concise lowercase research domain.
 - `task`: capability or task to which the claim applies.
-- `trigger_context`: 1-2 sentences naming the open question, difficulty, or
-  contested choice this generalization answers. Write it the way someone would
-  describe the situation *before* knowing the answer -- the problem, not the
-  conclusion. Say "it is unclear whether longer reasoning chains help on tasks
-  with short answers", not "chain-of-thought degrades performance on short-answer
-  tasks". Do not name the paper's own finding here. This field exists because a
-  later agent searches with the problem it currently faces, not with the
-  conclusion it has yet to reach; indexing only on outcome wording makes such
-  records unreachable.
+- `trigger_context`: one sentence, **at most 25 words**, naming the open
+  question, difficulty, or contested choice this generalization answers. Write
+  it the way someone would describe the situation *before* knowing the answer --
+  the problem, not the conclusion. Say "it is unclear whether longer reasoning
+  chains help on tasks with short answers", not "chain-of-thought degrades
+  performance on short-answer tasks". Do not name the paper's own finding here.
+  This field exists because a later agent searches with the problem it currently
+  faces, not with the conclusion it has yet to reach; indexing only on outcome
+  wording makes such records unreachable. It is a retrieval key, not a
+  description: it is indexed in a length-capped high-weight field, so every word
+  spent restating the setting or the motivation pushes out a word that another
+  record's key needs. Name the question and stop.
 - `statement`: one clean, self-contained paragraph of at least 350 words. State
   the finding directly and include conditions, boundaries, evidence pattern,
   representative numbers, and a causal mechanism only when the paper states

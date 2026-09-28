@@ -127,10 +127,13 @@ injects and maintains those fields. Do not output prose or Markdown fences.
   list produces spurious exclusions when the record is matched against a new
   task.
 
-- `trigger_context`: name the open question that the contributing L1 records
-  *jointly* raise but none answers alone. This is the problem the induced claim
-  resolves, phrased before its resolution is known. Do not restate a single L1
-  record's own trigger.
+- `trigger_context`: one sentence, **at most 25 words**, naming the open
+  question that the contributing L1 records *jointly* raise but none answers
+  alone. This is the problem the induced claim resolves, phrased before its
+  resolution is known. Do not restate a single L1 record's own trigger. It is a
+  retrieval key, not a description: it is indexed in a length-capped high-weight
+  field, so every word spent restating the setting pushes out a word that
+  another record's key needs. Name the question and stop.
 
 - `evidence_scope`: merge the contributing L1 records' own `evidence_scope`
   values -- union the `datasets` and `models` arrays, and set `has_ablation` /
