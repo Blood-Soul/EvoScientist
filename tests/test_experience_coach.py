@@ -10,6 +10,7 @@ trajectory the next step would otherwise read from cache.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +31,7 @@ from EvoScientist.memory.policy.suggest import (
     render_suggestion,
 )
 from EvoScientist.middleware.coach import ExperienceCoachMiddleware
+from EvoScientist.paths import Workspace
 
 
 class TestGateParsing:
@@ -584,7 +586,9 @@ class TestRouteExclusivity:
         from EvoScientist.middleware.memory import create_memory_middleware
 
         return create_memory_middleware(
-            memory_dir="/tmp/does-not-need-to-exist", **kwargs
+            memory_dir="/tmp/does-not-need-to-exist",
+            workspace_dir="/tmp/does-not-need-to-exist",
+            **kwargs,
         )._observation_memory_instructions()
 
     def _blocks(self, text: str) -> tuple[bool, bool]:
@@ -649,7 +653,8 @@ class TestAgentWiring:
             for key, value in over.items():
                 setattr(cfg, key, value)
             middleware = evo._get_default_middleware(
-                for_async_subagent=over.pop("_async_subagent", False)
+                workspace=Workspace(Path.cwd()),
+                for_async_subagent=over.pop("_async_subagent", False),
             )
         finally:
             for key, value in saved.items():
@@ -668,7 +673,9 @@ class TestAgentWiring:
         """A per-step gate inside every subagent multiplies aux calls by the fan-out."""
         from EvoScientist import EvoScientist as evo
 
-        middleware = evo._get_default_middleware(for_async_subagent=True)
+        middleware = evo._get_default_middleware(
+            workspace=Workspace(Path.cwd()), for_async_subagent=True
+        )
         memory = next(
             m for m in middleware if type(m).__name__ == "EvoMemoryMiddleware"
         )
@@ -688,12 +695,16 @@ class TestAgentWiring:
         saved = cfg.memory_experience_coach_enabled
         try:
             cfg.memory_experience_coach_enabled = True
-            registry, base = evo._build_paper_tools(cfg=cfg, workspace_dir=None)
+            registry, base = evo._build_paper_tools(
+                cfg=cfg, workspace=Workspace(Path.cwd()), work_dir=Path.cwd()
+            )
             assert "apply_experience" in registry
             assert not any(t.name == "apply_experience" for t in base)
 
             cfg.memory_experience_coach_enabled = False
-            registry, base = evo._build_paper_tools(cfg=cfg, workspace_dir=None)
+            registry, base = evo._build_paper_tools(
+                cfg=cfg, workspace=Workspace(Path.cwd()), work_dir=Path.cwd()
+            )
             assert "apply_experience" in registry
             assert any(t.name == "apply_experience" for t in base)
         finally:

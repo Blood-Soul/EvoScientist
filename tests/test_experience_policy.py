@@ -555,7 +555,9 @@ class TestInstructionGating:
         from EvoScientist.middleware.memory import create_memory_middleware
 
         middleware = create_memory_middleware(
-            memory_dir="/tmp/does-not-need-to-exist", **kwargs
+            memory_dir="/tmp/does-not-need-to-exist",
+            workspace_dir="/tmp/does-not-need-to-exist",
+            **kwargs,
         )
         return middleware._observation_memory_instructions()
 

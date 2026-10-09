@@ -27,7 +27,7 @@ def _prompt_dir_candidates() -> list[Path]:
         candidates.append(Path(configured).expanduser())
     candidates.extend(
         [
-            paths.WORKSPACE_ROOT / "prompt",
+            paths.process_workspace().root / "prompt",
             Path(__file__).resolve().parents[3] / "prompt",
             Path(sys.prefix) / "share" / "evoscientist" / "prompt",
         ]
