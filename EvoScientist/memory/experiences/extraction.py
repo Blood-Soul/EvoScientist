@@ -135,9 +135,7 @@ def _validate_bindings(value: Any, *, level: ExperienceLevel) -> None:
 def _validate_evidence_scope(value: Any, *, level: ExperienceLevel) -> None:
     """Validate the evidence_scope object when the model supplies it."""
     if not isinstance(value, Mapping):
-        raise ExperienceOutputError(
-            f"{level.upper()} evidence_scope must be an object"
-        )
+        raise ExperienceOutputError(f"{level.upper()} evidence_scope must be an object")
     for field in ("datasets", "models"):
         entries = value.get(field)
         if not isinstance(entries, list) or not all(
@@ -268,7 +266,9 @@ def load_experience_prompts() -> dict[str, str]:
             }
             induction_path = directory / INDUCTION_PROMPT_FILENAME
             if induction_path.is_file():
-                loaded[INDUCTION_PROMPT_KEY] = induction_path.read_text(encoding="utf-8")
+                loaded[INDUCTION_PROMPT_KEY] = induction_path.read_text(
+                    encoding="utf-8"
+                )
             return loaded
     searched = ", ".join(str(path) for path in _prompt_dir_candidates())
     raise FileNotFoundError(f"Experience prompts not found; searched: {searched}")
@@ -554,7 +554,7 @@ async def run_experience_extraction(
                 model=model,
                 domain_arxiv=domain_arxiv,
             )
-        except Exception as exc:  # noqa: BLE001 - degrade, never block direct output
+        except Exception as exc:  # degrade, never block direct output
             print(
                 f"[extraction] L1->L2 induction skipped for {paper_id!r}: {exc}",
                 file=sys.stderr,

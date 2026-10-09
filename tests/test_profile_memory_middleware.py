@@ -19,6 +19,7 @@ from EvoScientist.memory.observations import (
     list_observation_documents,
     record_observation_file,
 )
+from EvoScientist.memory.observations.index import _OBSERVATION_BUDGET_FRACTION
 from EvoScientist.paths import Workspace
 
 
@@ -372,8 +373,12 @@ def test_observation_index_lists_newest_first_and_drops_the_oldest(
     full = build_observation_index_context(
         memory_dir=memories, project_id=project_id, max_inline_chars=100_000
     )
+    # The observation block only gets its share of the inline budget; size the
+    # total so that share falls just short of the full observation block.
     truncated = build_observation_index_context(
-        memory_dir=memories, project_id=project_id, max_inline_chars=len(full) - 1
+        memory_dir=memories,
+        project_id=project_id,
+        max_inline_chars=int((len(full) - 1) / _OBSERVATION_BUDGET_FRACTION),
     )
 
     assert full.index("newest observation") < full.index("middle observation")
