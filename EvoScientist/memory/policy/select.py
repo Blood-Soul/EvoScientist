@@ -99,6 +99,7 @@ def gather_candidates(
     memory_dir: str | Path,
     project_id: str,
     query: str,
+    topic: str = "",
     method: str = "",
     discipline: str = "",
     domain: str = "",
@@ -117,12 +118,19 @@ def gather_candidates(
     passed through rather than folded into `query` so that a caller narrowing by
     structure ("materials-science records only") does not have that constraint
     competing for lexical weight against the subject-matter terms.
+
+    ``topic`` is the subject facet in a paper's own vocabulary, which the push
+    gate writes and the pull path does not have. When it is given, ``query``
+    (the concrete decision sentence) is searched as the separate ``task``
+    facet; when it is not, ``query`` stands in as the topic, as before.
     """
+    topic = topic.strip()
     hits = search_experience_records(
         memory_dir=memory_dir,
         project_id=project_id,
-        topic=query,
+        topic=topic or query,
         method=method,
+        task=query if topic else "",
         discipline=discipline,
         domain=domain,
         level=level,
@@ -156,6 +164,8 @@ def gather_candidates(
         call_id=call_id,
         project_id=project_id,
         query=query,
+        topic=topic,
+        method=method,
         candidate_ids=[item["id"] for item in candidates],
         descriptors={item["id"]: item["descriptor"] for item in candidates},
     )

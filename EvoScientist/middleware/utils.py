@@ -112,6 +112,33 @@ def disable_streaming(model: BaseChatModel) -> BaseChatModel:
     return model.model_copy(update={"disable_streaming": True})
 
 
+def quiet_model(model: BaseChatModel) -> BaseChatModel:
+    """Return a copy of ``model`` whose calls never reach the agent's stream.
+
+    Helper calls made from inside a graph node -- a middleware's model hook or
+    a tool body -- are seen by langgraph's messages handlers like the agent's
+    own call, and their output is emitted as ``text`` events into the
+    transcript and the run's final answer. The ``nostream`` tag is what those
+    handlers check (``pregel/_messages.py``, ``pregel/_tools.py``);
+    ``disable_streaming`` keeps the provider from streaming a reply nobody
+    reads token by token. Existing tags are kept, and an already-quiet model
+    is returned as is, so callers can apply this without tracking whether a
+    caller upstream already did. Anything that is not a ``BaseChatModel``
+    (test stubs exposing only ``ainvoke``) never reaches those handlers and is
+    returned unchanged.
+    """
+    from langgraph.constants import TAG_NOSTREAM
+
+    if not isinstance(model, BaseChatModel):
+        return model
+    tags = list(model.tags or [])
+    if TAG_NOSTREAM in tags and model.disable_streaming is True:
+        return model
+    if TAG_NOSTREAM not in tags:
+        tags.append(TAG_NOSTREAM)
+    return model.model_copy(update={"disable_streaming": True, "tags": tags})
+
+
 def append_to_system_message(
     system_message: SystemMessage | None, text: str
 ) -> SystemMessage:

@@ -693,3 +693,139 @@ class TestExtractionBackwardCompatibility:
         assert stored["transferable_core"] == "core text"
         assert stored["bindings"][0]["name"] == "ImageNet"
         assert stored["id"].startswith("l1_")
+
+
+class TestPipelineModelIsQuiet:
+    """`apply_experience` runs inside a tool node; its aux calls must not stream out.
+
+    Regression: an untagged aux model's rerank and policy JSON was emitted by
+    langgraph's messages handler as the agent's own ``text`` events.
+    """
+
+    @staticmethod
+    def _fake() -> Any:
+        from langchain_core.language_models.fake_chat_models import (
+            FakeListChatModel,
+        )
+
+        return FakeListChatModel(
+            responses=[
+                json.dumps({"selected": [], "reason": "stub"}),
+                json.dumps({"verdict": "adapt", "procedure": ["do it"]}),
+            ]
+        )
+
+    @staticmethod
+    async def _streamed_text(tool: Any) -> str:
+        from typing import TypedDict
+
+        from langgraph.graph import END, START, StateGraph
+
+        class State(TypedDict):
+            out: str
+
+        async def node(state: State) -> State:
+            return {"out": await tool.ainvoke({"task": "chunking strategy"})}
+
+        graph = StateGraph(State)
+        graph.add_node("tools", node)
+        graph.add_edge(START, "tools")
+        graph.add_edge("tools", END)
+        chunks = [
+            chunk.content
+            async for chunk, _ in graph.compile().astream(
+                {"out": ""}, stream_mode="messages"
+            )
+        ]
+        return "".join(str(c) for c in chunks)
+
+    @pytest.mark.asyncio
+    async def test_apply_experience_emits_nothing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from EvoScientist.tools import create_apply_experience_tool
+
+        _seed_one_experience(tmp_path)
+        model = self._fake()
+        monkeypatch.setattr(
+            "EvoScientist.EvoScientist._ensure_auxiliary_chat_model", lambda: model
+        )
+        tool = create_apply_experience_tool(memory_dir=tmp_path, project_id="proj")
+        streamed = await self._streamed_text(tool)
+        assert '"verdict"' not in streamed
+        assert '"selected"' not in streamed
+
+    def test_quiet_model_is_idempotent_and_skips_stubs(self) -> None:
+        from langgraph.constants import TAG_NOSTREAM
+
+        from EvoScientist.middleware.utils import quiet_model
+
+        quiet = quiet_model(self._fake())
+        assert quiet_model(quiet) is quiet
+        assert quiet.tags.count(TAG_NOSTREAM) == 1
+        stub = _StubModel()
+        assert quiet_model(stub) is stub
+
+
+class TestCandidateFacets:
+    """Which strings reach which retrieval facet."""
+
+    @staticmethod
+    def _spy(monkeypatch) -> list[dict[str, Any]]:
+        calls: list[dict[str, Any]] = []
+
+        def fake_search(**kwargs: Any) -> list[Any]:
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.select.search_experience_records", fake_search
+        )
+        return calls
+
+    def test_gate_topic_is_its_own_facet(self, tmp_path: Path, monkeypatch) -> None:
+        """Regression: the gate's paper-vocabulary topic never reached retrieval."""
+        from EvoScientist.memory.policy.select import gather_candidates
+
+        calls = self._spy(monkeypatch)
+        gather_candidates(
+            memory_dir=tmp_path,
+            project_id="proj",
+            query="pick a learning rate for a 40k-example corpus",
+            topic="parameter-efficient fine-tuning",
+            method="LoRA rank",
+        )
+        assert calls[0]["topic"] == "parameter-efficient fine-tuning"
+        assert calls[0]["method"] == "LoRA rank"
+        assert calls[0]["task"] == "pick a learning rate for a 40k-example corpus"
+
+    def test_without_topic_the_query_stands_in(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The pull path has one sentence; it keeps searching as the topic."""
+        from EvoScientist.memory.policy.select import gather_candidates
+
+        calls = self._spy(monkeypatch)
+        gather_candidates(
+            memory_dir=tmp_path, project_id="proj", query="chunking strategy"
+        )
+        assert calls[0]["topic"] == "chunking strategy"
+        assert calls[0]["task"] == ""
+
+    @pytest.mark.asyncio
+    async def test_derive_policy_forwards_topic(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from EvoScientist.memory.policy import derive_policy
+
+        calls = self._spy(monkeypatch)
+        report = await derive_policy(
+            memory_dir=tmp_path,
+            project_id="proj",
+            task="choose a retrieval chunk size",
+            topic="dense retrieval chunking",
+            model=_StubModel(),
+        )
+        assert report["status"] == "no_candidates"
+        assert calls[0]["topic"] == "dense retrieval chunking"
+        assert calls[0]["task"] == "choose a retrieval chunk size"
