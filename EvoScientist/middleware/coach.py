@@ -212,6 +212,11 @@ class ExperienceCoachMiddleware(AgentMiddleware):
             from ..EvoScientist import _ensure_auxiliary_chat_model
 
             self._model = _ensure_auxiliary_chat_model()
+        # The gate, rerank and synthesis calls run inside the main agent's model
+        # node; untagged, their JSON is streamed out as the agent's own text.
+        from .utils import quiet_model
+
+        self._model = quiet_model(self._model)
         return self._model
 
     async def _trace(self, event: str, **fields: Any) -> None:
@@ -276,6 +281,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
                 project_id=self._project_id,
                 task=decision["task"],
                 state=decision["state"],
+                topic=decision["topic"],
                 method=decision["method"],
                 max_selected=self._max_selected,
                 model=self._resolve_model(),

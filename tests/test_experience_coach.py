@@ -502,6 +502,7 @@ class TestCoachFlow:
         assert SUGGESTION_OPEN in suggestion
         assert "warm up" in suggestion
         # The gate's facets are what reach retrieval, not the agent's own wording.
+        assert derive.await_args.kwargs["topic"] == "fine-tuning"
         assert derive.await_args.kwargs["method"] == "AdamW"
         assert derive.await_args.kwargs["task"] == "pick a learning rate"
         assert coach.interventions[-1]["selected"] == ["E-1"]
@@ -709,3 +710,69 @@ class TestAgentWiring:
             assert any(t.name == "apply_experience" for t in base)
         finally:
             cfg.memory_experience_coach_enabled = saved
+
+
+class TestCoachModelIsQuiet:
+    """The coach's aux calls run inside the agent's model node; none may stream out.
+
+    Regression: without the ``nostream`` tag, langgraph's messages handler emitted
+    the gate/rerank/policy JSON as the agent's own ``text`` events, so it landed
+    in the transcript and in the run's final answer.
+    """
+
+    @staticmethod
+    async def _streamed_text(model: Any) -> str:
+        from typing import TypedDict
+
+        from langgraph.graph import END, START, StateGraph
+
+        class State(TypedDict):
+            out: str
+
+        async def node(state: State) -> State:
+            reply = await model.ainvoke([HumanMessage(content="Decide now.")])
+            return {"out": reply.content}
+
+        graph = StateGraph(State)
+        graph.add_node("model", node)
+        graph.add_edge(START, "model")
+        graph.add_edge("model", END)
+        app = graph.compile()
+        chunks = [
+            chunk.content
+            async for chunk, _ in app.astream({"out": ""}, stream_mode="messages")
+        ]
+        return "".join(str(c) for c in chunks)
+
+    @staticmethod
+    def _fake() -> Any:
+        from langchain_core.language_models.fake_chat_models import (
+            FakeListChatModel,
+        )
+
+        return FakeListChatModel(responses=['{"need": false, "reason": "x"}'])
+
+    @pytest.mark.asyncio
+    async def test_untagged_model_would_leak(self) -> None:
+        """Control: proves the harness actually sees a leak when there is one."""
+        assert '"need"' in await self._streamed_text(self._fake())
+
+    @pytest.mark.asyncio
+    async def test_resolved_model_emits_nothing(self, tmp_path) -> None:
+        coach = ExperienceCoachMiddleware(
+            memory_dir=tmp_path, project_id="proj", model=self._fake()
+        )
+        assert await self._streamed_text(coach._resolve_model()) == ""
+
+    def test_tagging_is_applied_once_and_keeps_existing_tags(self, tmp_path) -> None:
+        from langgraph.constants import TAG_NOSTREAM
+
+        base = self._fake().model_copy(update={"tags": ["keep"]})
+        coach = ExperienceCoachMiddleware(
+            memory_dir=tmp_path, project_id="proj", model=base
+        )
+        model = coach._resolve_model()
+        assert coach._resolve_model() is model
+        assert model.tags == ["keep", TAG_NOSTREAM]
+        assert model.disable_streaming is True
+        assert base.tags == ["keep"]
