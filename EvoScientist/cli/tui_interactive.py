@@ -107,16 +107,16 @@ def _shorten_path(path: str) -> str:
     return _sp(path)
 
 
-def _agent_python_notices() -> list[str]:
-    """The missing-python hint and the server-python warning, when they apply.
+def _agent_shell_notices() -> list[str]:
+    """The agent shell's setup hint and the server drift warning, when they apply.
 
     Both also go to the terminal or the log, which Textual hides while the
     app runs, so the TUI shows them as notifications.
     """
+    from ..agent_shell import setup_hint
     from ..langgraph_dev import manager as lg_manager
-    from ..setup.research_env import missing_python_hint
 
-    notices = [missing_python_hint(), lg_manager.AGENT_PYTHON_DRIFT]
+    notices = [setup_hint(), lg_manager.AGENT_SHELL_DRIFT]
     return [n for n in notices if n is not None]
 
 
@@ -1114,7 +1114,7 @@ def run_textual_interactive(
                 self._check_for_updates, exclusive=True, group="update-check"
             )
             self.run_worker(
-                self._check_agent_python, exclusive=True, group="agent-python"
+                self._check_agent_shell, exclusive=True, group="agent-shell"
             )
 
             # Auto-start channels — needs the agent, so defer to after load
@@ -1163,15 +1163,15 @@ def run_textual_interactive(
             except Exception:
                 _channel_logger.debug("Background update check failed", exc_info=True)
 
-        async def _check_agent_python(self) -> None:
-            """Notify the notices from :func:`_agent_python_notices`."""
+        async def _check_agent_shell(self) -> None:
+            """Notify the notices from :func:`_agent_shell_notices`."""
             try:
-                notices = await asyncio.to_thread(_agent_python_notices)
+                notices = await asyncio.to_thread(_agent_shell_notices)
                 for message in notices:
                     # Paths may contain "[", which markup would eat.
                     self.notify(message, severity="warning", timeout=20, markup=False)
             except Exception:
-                _channel_logger.debug("Agent python check failed", exc_info=True)
+                _channel_logger.debug("Agent shell check failed", exc_info=True)
 
         # ── Channel integration ────────────────────────────────
 
@@ -1686,7 +1686,16 @@ def run_textual_interactive(
 
             # 1. Mount user message + loading spinner
             if not skip_user_message:
-                await container.mount(UserMessage(display_text or user_text))
+                shown = display_text or user_text
+                await container.mount(UserMessage(shown))
+                if shown.lstrip().startswith("/"):
+                    from ..commands.skill_slash import skill_slash_names
+                    from ..message_meta import skill_label
+
+                    for name in skill_slash_names(shown, self._dirs.workspace):
+                        await container.mount(
+                            SystemMessage(skill_label(name), msg_style="dim")
+                        )
             # Mount file warnings after user message so they appear in the
             # correct position (between user input and model response).
             for w in file_warnings or []:
@@ -1922,13 +1931,14 @@ def run_textual_interactive(
                     thinking_w = None
                     summarization_w = None
                 _hitl_round += 1
+                events = None
                 try:
                     _anchor_engaged = False
                     _active_teams = list(self._channel_runtime.active_teams)
                     _configurable_extra = (
                         {"active_teams": _active_teams} if _active_teams else None
                     )
-                    async for event in iter_with_stream_cancel(
+                    events = iter_with_stream_cancel(
                         graph_gateway.stream_events(
                             RunRequest(
                                 message=_stream_input,
@@ -1944,7 +1954,8 @@ def run_textual_interactive(
                             )
                         ),
                         cancel_scope,
-                    ):
+                    )
+                    async for event in events:
                         if is_stream_cancel_requested(cancel_scope):
                             response = await _mark_cancelled_response()
                             break
@@ -2562,6 +2573,12 @@ def run_textual_interactive(
                         self._append_system(f"Error: {exc}", style="red")
                     response = f"Error: {exc}"
                 finally:
+                    # A HITL or ask_user event leaves the loop early. Close the
+                    # iterator here, in the turn task and its ContextVar
+                    # context, instead of leaving cleanup to the event loop's
+                    # async-generator finalizer (issue #595).
+                    if events is not None:
+                        await events.aclose()
                     # Clean up loading widget if it wasn't removed yet
                     if not loading_removed:
                         try:
@@ -3009,7 +3026,7 @@ def run_textual_interactive(
                 self._render_queue_indicator()
                 return
 
-            if text.startswith("/"):
+            if text.startswith("/") and not self._names_skill(text):
                 self._hide_completions()
                 # Launch as independent task to free the message pump.
                 # Commands like /resume mount interactive widgets that need
@@ -3444,6 +3461,12 @@ def run_textual_interactive(
 
         # ── Slash commands ─────────────────────────────────────
 
+        def _names_skill(self, text: str) -> bool:
+            """True for ``/skill-name`` input that should reach the agent."""
+            from ..commands.skill_slash import skill_slash_names
+
+            return bool(skill_slash_names(text, self._dirs.workspace))
+
         async def _handle_command(self, command: str) -> None:
             # Echo the command so the user sees what they ran
             self._append_system(command.strip(), style="cyan")
@@ -3516,6 +3539,8 @@ def run_textual_interactive(
             if not messages:
                 return
 
+            from ..message_meta import is_pinned_skill, pinned_skill_name, skill_label
+
             HISTORY_WINDOW = 50
             container = self.query_one("#chat", VerticalScroll)
 
@@ -3542,6 +3567,12 @@ def run_textual_interactive(
                 content = getattr(message, "content", "") or ""
 
                 if msg_type == "human":
+                    if is_pinned_skill(message):
+                        name = pinned_skill_name(message) or "unknown"
+                        await container.mount(
+                            SystemMessage(skill_label(name), msg_style="dim")
+                        )
+                        continue
                     if isinstance(content, list):
                         parts = [
                             block.get("text", "")

@@ -37,6 +37,7 @@ from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool
 from langgraph.constants import TAG_NOSTREAM
 
+from ..message_meta import is_pinned_skill
 from .events import NO_OP_SINK, MiddlewareEventSink
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,14 @@ def _available_always_include(
     return sorted(candidates & available_names)
 
 
+def _without_pinned_skills(request: ModelRequest) -> ModelRequest:
+    """Hide pinned skill bodies: the selector queries the last human message."""
+    messages = [m for m in request.messages if not is_pinned_skill(m)]
+    if len(messages) == len(request.messages):
+        return request
+    return request.override(messages=messages)
+
+
 class _ConditionalToolSelectorMiddleware(AgentMiddleware):
     """Wraps LLMToolSelectorMiddleware with a tool-count threshold.
 
@@ -271,6 +280,7 @@ class _ConditionalToolSelectorMiddleware(AgentMiddleware):
 
         total = len(request.tools)
         self._events.on_tool_selection_started(total)
+        selector_request = _without_pinned_skills(request)
 
         # Track whether handler was called — if so, any exception is from
         # the downstream model, not the selector, and must propagate.
@@ -292,19 +302,23 @@ class _ConditionalToolSelectorMiddleware(AgentMiddleware):
             if selected:
                 logger.debug("Selected tools: %s", selected)
             _end_selection()
+            if selector_request is not request:
+                req = req.override(messages=request.messages)
             return handler(req)
 
         try:
             selector = self._build_selector(request)
             try:
-                return selector.wrap_model_call(request, _handler_after_selection)
+                return selector.wrap_model_call(
+                    selector_request, _handler_after_selection
+                )
             except Exception as exc:
                 if _handler_called or not self._switch_to_auto_tool_choice(
                     exc, selector
                 ):
                     raise
                 return self._build_selector(request).wrap_model_call(
-                    request, _handler_after_selection
+                    selector_request, _handler_after_selection
                 )
         except Exception as exc:
             if _handler_called:
@@ -331,6 +345,7 @@ class _ConditionalToolSelectorMiddleware(AgentMiddleware):
 
         total = len(request.tools)
         self._events.on_tool_selection_started(total)
+        selector_request = _without_pinned_skills(request)
 
         _handler_called = False
         _selection_open = True
@@ -349,13 +364,15 @@ class _ConditionalToolSelectorMiddleware(AgentMiddleware):
             if selected:
                 logger.debug("Selected tools: %s", selected)
             _end_selection()
+            if selector_request is not request:
+                req = req.override(messages=request.messages)
             return await handler(req)
 
         try:
             selector = self._build_selector(request)
             try:
                 return await selector.awrap_model_call(
-                    request, _handler_after_selection
+                    selector_request, _handler_after_selection
                 )
             except Exception as exc:
                 if _handler_called or not self._switch_to_auto_tool_choice(
@@ -363,7 +380,7 @@ class _ConditionalToolSelectorMiddleware(AgentMiddleware):
                 ):
                     raise
                 return await self._build_selector(request).awrap_model_call(
-                    request, _handler_after_selection
+                    selector_request, _handler_after_selection
                 )
         except Exception as exc:
             if _handler_called:

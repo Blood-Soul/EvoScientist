@@ -28,6 +28,7 @@ from langchain.agents.middleware import (
 )
 
 from . import paths as _paths_mod
+from .agent_shell import uses_bash
 from .config import (
     MemoryControls,
     MemoryObservationTarget,
@@ -312,6 +313,7 @@ def _configured_system_prompt(cfg, work_dir: str | Path) -> str:
     return get_system_prompt(
         dangerous=cfg.dangerous_mode,
         cwd=real_cwd,
+        bash_on_windows=uses_bash(),
     )
 
 
@@ -1035,6 +1037,8 @@ def _get_default_middleware(
         ContextOverflowMapperMiddleware,
         ErrorNormalizationMiddleware,
         ModelFallbackMiddleware,
+        SkillPinMiddleware,
+        SkillsReloadMiddleware,
         ToolErrorHandlerMiddleware,
         ToolHistoryRepairMiddleware,
         create_active_team_middleware,
@@ -1227,6 +1231,12 @@ def _get_default_middleware(
                 media_dir=_run_media_dir(workspace, work_dir),
             )
         )
+
+    # Main agent only: sync sub-agents never inherit skills_metadata, so each
+    # task call rescans anyway; /skill-name input only comes from the user.
+    if not for_async_subagent:
+        mw.append(SkillPinMiddleware())
+        mw.append(SkillsReloadMiddleware())
 
     # SummarizationMiddleware with per-run context limits (#466): deepagents
     # installs its own (frozen on the construction model's window) inside the
