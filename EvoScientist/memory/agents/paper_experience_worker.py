@@ -13,6 +13,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from ...paths import Workspace
 from ..experiences import (
+    TaskContext,
     claim_next_task,
     complete_task,
     download_paper_text,
@@ -33,9 +34,17 @@ class PaperExperienceWorkerState(TypedDict, total=False):
 
 
 async def drain_paper_experience_queue(
-    *, memory_dir: str | Path, project_id: str, model: Any | None = None
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+    model: Any | None = None,
+    task_context: TaskContext | None = None,
 ) -> dict[str, int]:
-    """Drain all currently pending tasks for one project."""
+    """Drain all currently pending tasks for one project.
+
+    `task_context` biases what the extraction prompts select for; unset leaves
+    the queue draining bench-blind, as before.
+    """
     lock_path = queue_worker_lock_path(memory_dir, project_id)
     # The LangGraph dev event loop rejects synchronous filesystem operations.
     # Queue persistence deliberately uses normal file APIs, so keep that work
@@ -78,6 +87,7 @@ async def drain_paper_experience_queue(
                     prompts=prompts,
                     model=model,
                     domain_arxiv=task.domain_arxiv,
+                    task_context=task_context,
                 )
                 await asyncio.to_thread(
                     store_paper_experiences,
@@ -107,6 +117,7 @@ def build_paper_experience_worker_graph(
     *,
     workspace: Workspace,
     memory_dir: str | Path | None = None,
+    task_context: TaskContext | None = None,
 ) -> CompiledStateGraph:
     """Build a one-node graph suitable for LangGraph background dispatch."""
     paths = resolve_memory_agent_paths(workspace=workspace, memory_dir=memory_dir)
@@ -119,7 +130,9 @@ def build_paper_experience_worker_graph(
         if not project_id:
             raise ValueError("evomemory_project_id is required")
         return await drain_paper_experience_queue(
-            memory_dir=paths.memory_dir, project_id=project_id
+            memory_dir=paths.memory_dir,
+            project_id=project_id,
+            task_context=task_context,
         )
 
     graph = StateGraph(PaperExperienceWorkerState)

@@ -31,6 +31,7 @@ from ...utils import format_message_content
 from ..experiences.retrieval import search_experience_records
 from ..experiences.store import list_experience_documents
 from ..types import ExperienceLevel, ObservationSearchMode
+from .graph_context import graph_candidates, graph_enabled
 from .prompts import load_rerank_prompt
 from .trace import emit_trace, emit_trace_async
 
@@ -140,6 +141,25 @@ def gather_candidates(
     ranked_ids = [hit["observation_id"] for hit in hits][:limit]
     if not ranked_ids:
         return []
+    graph_context = graph_candidates(
+        memory_dir=memory_dir,
+        project_id=project_id,
+        ranked_ids=ranked_ids,
+        limit=limit,
+        discipline=discipline,
+        domain=domain,
+        level=level,
+    )
+    if graph_enabled():
+        emit_trace(
+            memory_dir,
+            "graph_retrieve",
+            call_id=call_id,
+            lexical_ids=ranked_ids,
+            **{k: v for k, v in graph_context.items() if k != "edges"},
+            edge_count=len(graph_context["edges"]),
+        )
+    ranked_ids = graph_context["ids"]
     bodies = {
         document.observation_id: document.text
         for document in list_experience_documents(
@@ -151,13 +171,30 @@ def gather_candidates(
         record = _experience_record(bodies.get(experience_id, ""))
         if record is None:
             continue
-        candidates.append(
-            {
-                "id": experience_id,
-                "record": record,
-                "descriptor": _descriptor(record),
-            }
-        )
+        candidate = {
+            "id": experience_id,
+            "record": record,
+            "descriptor": _descriptor(record),
+        }
+        if graph_context.get("fingerprint"):
+            edges = [
+                e
+                for e in graph_context["edges"]
+                if experience_id in (e["from"], e["to"])
+            ]
+            candidate.update(
+                graph_edges=edges,
+                graph_fingerprint=graph_context["fingerprint"],
+                graph_neighbor=experience_id in graph_context["expanded_ids"],
+            )
+            candidate["descriptor"] += (
+                " | stored relations (unreviewed/source pointers): "
+                + "; ".join(
+                    f"{e['from']} {e['relation']} {e['to']}: {e.get('claim', '')[:100]}"
+                    for e in edges[:3]
+                )
+            )
+        candidates.append(candidate)
     emit_trace(
         memory_dir,
         "retrieve",

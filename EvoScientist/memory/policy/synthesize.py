@@ -17,6 +17,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
+from .graph_context import render_relations
 from .schema import PolicyOutputError, normalize_policy
 from .trace import emit_trace_async
 
@@ -35,7 +36,7 @@ def _render_records(selected: Sequence[Mapping[str, Any]]) -> str:
         if len(text) > MAX_RECORD_CHARS:
             text = text[:MAX_RECORD_CHARS] + "\n... [record truncated]"
         blocks.append(text)
-    return "\n\n".join(blocks)
+    return "\n\n".join(blocks) + render_relations(list(selected))
 
 
 def parse_policy_json(raw_output: str) -> dict[str, Any]:

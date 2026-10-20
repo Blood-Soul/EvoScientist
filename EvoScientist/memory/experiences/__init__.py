@@ -2,6 +2,7 @@
 
 from .extraction import (
     ExperienceOutputError,
+    build_extraction_message,
     download_paper_text,
     load_experience_prompts,
     parse_experience_json,
@@ -33,6 +34,11 @@ from .store import (
     refresh_experience_catalog,
     store_paper_experiences,
 )
+from .task_context import (
+    TASK_CONTEXT_BLOCK_LABEL,
+    TaskContext,
+    TaskContextError,
+)
 from .taxonomy import (
     DISCIPLINES,
     FALLBACK_DISCIPLINE,
@@ -44,9 +50,13 @@ __all__ = [
     "DISCIPLINES",
     "EXPERIENCE_CATALOG_FILENAME",
     "FALLBACK_DISCIPLINE",
+    "TASK_CONTEXT_BLOCK_LABEL",
     "ExperienceOutputError",
     "PaperExperienceTask",
+    "TaskContext",
+    "TaskContextError",
     "browse_experience_facets",
+    "build_extraction_message",
     "claim_next_task",
     "complete_task",
     "download_paper_text",

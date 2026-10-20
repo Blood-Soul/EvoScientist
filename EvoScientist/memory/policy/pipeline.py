@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .graph_context import graph_cache_context, selected_relations
 from .prompts import load_rerank_prompt, load_writer_prompt
 from .select import (
     DEFAULT_MAX_SELECTED,
@@ -150,12 +151,26 @@ async def derive_policy(
         return report
 
     selected_ids = [item["id"] for item in selected]
+    context_hash = graph_cache_context(selected, state)
+    if context_hash:
+        await emit_trace_async(
+            memory_dir,
+            "graph_selected",
+            call_id=call_id,
+            selected_ids=selected_ids,
+            graph_neighbor_ids=[
+                item["id"] for item in selected if item.get("graph_neighbor")
+            ],
+            relations=selected_relations(selected),
+            context_hash=context_hash,
+        )
     if not refresh:
         cached = await _load_cached(
             memory_dir=memory_dir,
             project_id=project_id,
             task=task,
             selected_ids=selected_ids,
+            context_hash=context_hash,
         )
         if cached is not None:
             report = {
@@ -187,6 +202,7 @@ async def derive_policy(
         selected_ids=selected_ids,
         policy=policy,
         model_name=_model_name(model),
+        context_hash=context_hash,
     )
     report = {
         "status": "ok",
@@ -225,7 +241,12 @@ async def _gather(
 
 
 async def _load_cached(
-    *, memory_dir: str | Path, project_id: str, task: str, selected_ids: list[str]
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+    task: str,
+    selected_ids: list[str],
+    context_hash: str = "",
 ) -> dict[str, Any] | None:
     return await asyncio.to_thread(
         load_cached_policy,
@@ -233,6 +254,7 @@ async def _load_cached(
         project_id=project_id,
         task=task,
         selected_ids=selected_ids,
+        context_hash=context_hash,
     )
 
 
@@ -244,6 +266,7 @@ async def _store(
     selected_ids: list[str],
     policy: dict[str, Any],
     model_name: str,
+    context_hash: str = "",
 ) -> None:
     """Persist the policy; a cache write failure must not fail the tool."""
     try:
@@ -255,6 +278,7 @@ async def _store(
             selected_ids=selected_ids,
             policy=policy,
             model_name=model_name,
+            context_hash=context_hash,
         )
     except OSError:
         logger.warning("Failed to cache derived reuse policy", exc_info=True)

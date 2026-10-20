@@ -26,10 +26,16 @@ STORE_VERSION = 1
 POLICY_DIR = "policies/projects"
 
 
-def _policy_cache_key(*, task: str, selected_ids: Sequence[str]) -> str:
+def _policy_cache_key(
+    *, task: str, selected_ids: Sequence[str], context_hash: str = ""
+) -> str:
     """Stable hash of the synthesis inputs."""
     canonical = json.dumps(
-        {"task": task.strip(), "selected": sorted(selected_ids)},
+        {
+            "task": task.strip(),
+            "selected": sorted(selected_ids),
+            **({"context": context_hash} if context_hash else {}),
+        },
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -48,9 +54,12 @@ def load_cached_policy(
     project_id: str,
     task: str,
     selected_ids: Sequence[str],
+    context_hash: str = "",
 ) -> dict[str, Any] | None:
     """Read one cached policy if it exists and matches the current inputs."""
-    key = _policy_cache_key(task=task, selected_ids=selected_ids)
+    key = _policy_cache_key(
+        task=task, selected_ids=selected_ids, context_hash=context_hash
+    )
     path = _policy_path(memory_dir=memory_dir, project_id=project_id, key=key)
     stored = read_json(path)
     if stored is None or stored.get("store_version") != STORE_VERSION:
@@ -66,9 +75,12 @@ def store_policy(
     selected_ids: Sequence[str],
     policy: Mapping[str, Any],
     model_name: str,
+    context_hash: str = "",
 ) -> Path:
     """Persist one synthesis result, indexed by its stable cache key."""
-    key = _policy_cache_key(task=task, selected_ids=selected_ids)
+    key = _policy_cache_key(
+        task=task, selected_ids=selected_ids, context_hash=context_hash
+    )
     path = _policy_path(memory_dir=memory_dir, project_id=project_id, key=key)
     atomic_write_json(
         path,
@@ -78,6 +90,7 @@ def store_policy(
             "project_id": project_id,
             "task": task.strip(),
             "selected_ids": sorted(selected_ids),
+            "context_hash": context_hash,
             "policy": dict(policy),
             "synthesized_at": datetime.now(UTC).isoformat(),
             "synthesized_by": model_name,

@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from ..memory.experiences.retrieval import (
     browse_experience_facets,
     degenerate_facets,
+    related_experience_records,
     search_experience_records,
 )
 from ..memory.experiences.taxonomy import DISCIPLINES
@@ -113,6 +114,16 @@ class SearchExperienceArgs(BaseModel):
         le=20,
         description="Maximum number of experience records to return.",
     )
+    include_related: bool = Field(
+        default=False,
+        description=("Also expand one hop in the project's optional experience graph. "
+                     "Edges can be unreviewed proposals, not established facts."),
+    )
+    related_types: list[Literal[
+        "derived_from", "supports", "qualifies", "contradicts", "alternative_to",
+        "complements", "overlaps_with", "specializes", "depends_on", "fixed_by",
+    ]] = Field(default_factory=list, description="Optional relation types to expand; empty means all.")
+    related_limit: int = Field(default=4, ge=1, le=8, description="Maximum related records to return.")
     runtime: Annotated[object | None, InjectedToolArg] = None
 
 
@@ -176,11 +187,15 @@ def create_search_experience_tool(
         domain: str = "",
         level: ExperienceLevel | None = None,
         limit: int = 8,
+        include_related: bool = False,
+        related_types: list[str] | None = None,
+        related_limit: int = 4,
         runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
     ) -> str:
+        active_project = runtime_project_id(runtime, project_id)
         results = search_experience_records(
             memory_dir=memory_dir,
-            project_id=runtime_project_id(runtime, project_id),
+            project_id=active_project,
             topic=topic,
             method=method,
             task=task,
@@ -190,6 +205,13 @@ def create_search_experience_tool(
             limit=limit,
         )
         payload: dict[str, object] = {"results": results}
+        if include_related:
+            payload["graph"] = related_experience_records(
+                memory_dir=memory_dir, project_id=active_project,
+                ids=[result["observation_id"] for result in results],
+                discipline=discipline, domain=domain, level=level,
+                limit=related_limit, relations=set(related_types) if related_types else None,
+            )
         thin = degenerate_facets(topic, method, task)
         if thin:
             # Ranking is lexical over `[a-z0-9_]+`. A facet written in Chinese
@@ -245,7 +267,9 @@ def create_search_experience_tool(
             "first. Read a full record with `read_memory`, or -- when you are "
             "making a decision rather than gathering context -- prefer "
             "`apply_experience`, which rebinds the source's fixed values to "
-            "your task instead of leaving you to copy them."
+            "your task instead of leaving you to copy them. Use `include_related` "
+            "to inspect a bounded one-hop graph expansion where available. "
+            "Unreviewed relations are proposals and require checking."
         ),
         args_schema=SearchExperienceArgs,
         infer_schema=False,

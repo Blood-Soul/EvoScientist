@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Task context for task-oriented experience extraction",
+  "description": "Describes the downstream task an experience library is being built for. Deliberately bench-independent: no field names a dataset, metric implementation, or harness. Switching benchmarks means writing a different instance of this file, never editing extraction code. Passing no context at all restores bench-blind extraction.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task"],
+  "properties": {
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the downstream agent must produce, in task terms rather than dataset terms."
+    },
+    "objective": {
+      "type": "string",
+      "description": "The quantity the attempt is judged on."
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["minimize", "maximize"],
+      "description": "Which way is better on `objective`. Requires `objective`."
+    },
+    "data_characteristics": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Properties of the input that bear on method choice: scale, length, dimensionality, noise, available history. Used to decide applicability boundaries."
+    },
+    "reference_points": {
+      "type": "object",
+      "description": "Known values on the objective, as label -> value. Read by the extractor as a ceiling check: if a family of simple methods already reaches some value well short of the target, experience about tuning that family further is low value.",
+      "additionalProperties": true
+    },
+    "bottlenecks": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What currently limits performance, stated as an obstacle rather than a fix -- the same pre-solution wording the record schema's `trigger_context` uses."
+    },
+    "extraction_focus": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What this pass should bias toward. Separate from `bottlenecks` because a bottleneck is an observation while this is an instruction."
+    }
+  }
+}

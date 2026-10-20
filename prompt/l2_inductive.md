@@ -147,6 +147,24 @@ raise or lower it using independent supporting and contradicting papers.
 The user message begins with `[paper_id] <id>` followed by the full paper in
 Markdown. The paper ID is context only; do not repeat it in the output.
 
+### Optional `[task_context]` block
+
+A `[task_context]` fenced JSON object may appear between the paper ID and the
+paper. It describes a downstream task this library is being built for. When it
+is absent, extract as you otherwise would. When it is present, it decides which
+of the paper's defensible claims are worth inducing, and nothing else:
+
+- Prefer claims bearing on `task`, `bottlenecks` and `extraction_focus`.
+- Read `reference_points` as a ceiling check: a claim that refines a method
+  family already known to top out short of the target is low value.
+- Use `data_characteristics` when writing `scope` and `not_applicable_when`.
+
+The three gates are unchanged and are not relaxed by the task context. A claim
+relevant to the task but failing a gate is still rejected; returning fewer
+records is correct. The task context is never evidence — quotes come verbatim
+from the paper — and `transferable_core` stays written for reuse on a different
+task, not bound to this one.
+
 If no claim passes all three gates, return:
 
 ```json

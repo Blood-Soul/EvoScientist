@@ -24,6 +24,7 @@ already an unambiguous route.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,70 @@ def search_experience_records(
         merged["score"] = round(scores[hit["observation_id"]], 5)
         fused.append(merged)  # type: ignore[arg-type]
     return fused
+
+
+def related_experience_records(
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+    ids: list[str],
+    discipline: str = "",
+    domain: str = "",
+    level: ExperienceLevel | None = None,
+    limit: int = 4,
+    relations: set[str] | None = None,
+) -> dict[str, Any]:
+    """Expand a current sidecar, honoring the same project and search facets."""
+    from .graph import expand_graph, experience_graph_path, graph_is_current
+
+    path = experience_graph_path(memory_dir, project_id)
+    if not path.is_file():
+        return {
+            "related": [],
+            "warning": "No experience graph has been built for this project.",
+        }
+    try:
+        graph = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(graph, dict)
+            or graph.get("project_id") != project_id
+            or not graph_is_current(graph, memory_dir=memory_dir)
+        ):
+            return {
+                "related": [],
+                "warning": "Experience graph is stale, incompatible, or belongs to another project; rebuild it.",
+            }
+        allowed = {
+            document.observation_id
+            for document in _facet_documents(
+                memory_dir=memory_dir,
+                project_id=project_id,
+                discipline=discipline,
+                domain=domain,
+                level=level,
+            )
+        }
+        related = expand_graph(
+            graph, ids, limit=limit, relations=relations, allowed_ids=allowed
+        )
+        selected = set(ids) & allowed
+        internal_edges = [
+            edge
+            for edge in graph["edges"]
+            if edge["from"] in selected
+            and edge["to"] in selected
+            and (relations is None or edge["relation"] in relations)
+        ]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {
+            "related": [],
+            "warning": f"Experience graph could not be read: {type(exc).__name__}.",
+        }
+    return {
+        "related": related,
+        "internal_edges": internal_edges,
+        "note": "Relations are source pointers or unreviewed proposals; check conditions and underlying evidence before use.",
+    }
 
 
 def degenerate_facets(*facets: str) -> list[dict[str, Any]]:

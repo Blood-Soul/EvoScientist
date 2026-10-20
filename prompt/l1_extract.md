@@ -143,6 +143,35 @@ source-specific value; the record stays valid without them, but reuse degrades.
 The user message begins with `[paper_id] <id>` followed by the full paper in
 Markdown. The paper ID is context only; do not repeat it in the output.
 
+### Optional `[task_context]` block
+
+A `[task_context]` fenced JSON object may appear between the paper ID and the
+paper. It describes a downstream task this library is being built for. When it
+is absent, extract as you otherwise would. When it is present, it changes what
+you *select*, never what you are allowed to claim:
+
+- Prefer experience that bears on `task`, `bottlenecks` and
+  `extraction_focus`. The same paper supports many true practices; spend the
+  output budget on the ones this task could act on.
+- Read `reference_points` as a ceiling check. If a family of simple methods is
+  listed as already reaching some value well short of the target, experience
+  about tuning that family further is low value — prefer experience about what
+  would clear the gap.
+- Use `data_characteristics` to decide boundaries. A practice demonstrated at a
+  scale or sequence length far from the stated one belongs in
+  `not_applicable_when`, not in `applicable_when`.
+
+Three things the block must never do:
+
+- It must not become evidence. Every `evidence` quote still comes verbatim from
+  the paper. Never quote the task context.
+- It must not license a claim the paper does not support. If the paper says
+  nothing about the stated bottleneck, extract nothing about it; returning
+  fewer records is correct.
+- It must not narrow `transferable_core`. That field stays written for reuse on
+  a different task, with the source's own specifics stripped — the task context
+  is not a new set of specifics to bind to.
+
 If no genuine practical experience is supported, return:
 
 ```json

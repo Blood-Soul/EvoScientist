@@ -21,6 +21,15 @@ You do not see the paper's raw text. Your only source is these L1 records.
 Do not invent claims, conditions, or numbers that are not already present in
 them.
 
+A `[task_context]` fenced JSON object may appear before the records,
+describing a downstream task this library is being built for. When present, it
+decides which of the inducible patterns are worth returning — prefer those
+bearing on its `task`, `bottlenecks` and `extraction_focus`, and treat its
+`reference_points` as a ceiling check. It does not relax any gate below and it
+is not a source: everything you claim must still be traceable to the L1 records
+you were given. Quotes are copied from their `evidence` entries, never from the
+task context.
+
 ## What to do
 
 This is not a second, independent reading of the paper — it is induction

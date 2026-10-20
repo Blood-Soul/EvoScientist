@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field
 
 from ..memory.experiences import (
+    TaskContext,
     download_paper_text,
     load_experience_prompts,
     load_paper_experiences,
@@ -53,9 +54,17 @@ class ExtractPaperExperiencesArgs(BaseModel):
 
 
 def create_extract_paper_experiences_tool(
-    *, memory_dir: str | Path, project_id: str
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+    task_context: TaskContext | None = None,
 ) -> BaseTool:
-    """Build the immediate extraction tool backed by the shared project store."""
+    """Build the immediate extraction tool backed by the shared project store.
+
+    `task_context` is supplied by whoever builds the tool, not by the calling
+    agent: it describes the task the library is being built for, which is a
+    deployment decision. Left unset, extraction is bench-blind as before.
+    """
 
     async def _extract_paper_experiences(
         papers: list[ActivePaperItem],
@@ -153,6 +162,7 @@ def create_extract_paper_experiences_tool(
                     paper_text=paper_text,
                     prompts=active_prompts,
                     domain_arxiv=paper.domain_arxiv,
+                    task_context=task_context,
                 )
                 await asyncio.to_thread(
                     store_paper_experiences,

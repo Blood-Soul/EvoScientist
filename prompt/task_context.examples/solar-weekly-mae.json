@@ -1,0 +1,29 @@
+{
+  "task": "Produce a fixed-horizon point forecast for each of many short, independent univariate series, submitted as one batch with no feedback between series.",
+  "objective": "mean absolute error against held-out future values",
+  "direction": "minimize",
+  "data_characteristics": [
+    "137 independent series, no cross-series covariates and no exogenous features of any kind",
+    "42 to 47 observations of history per series; horizon is 5 steps",
+    "weekly aggregation of a physically driven quantity, so series carry a strong level and only weak within-window seasonality",
+    "series levels differ by orders of magnitude across the set",
+    "one shot: no validation feedback from the grader before the submission is final"
+  ],
+  "reference_points": {
+    "published state of the art": 576.35,
+    "best constant rule measurable on this split": 875.64,
+    "worst constant rule (last value carried forward)": 1729.41,
+    "benchmark-supplied worst reference": 34761.99
+  },
+  "bottlenecks": [
+    "The best achievable constant forecast still falls far short of the published result, so effort spent choosing among constant rules is capped well below the target.",
+    "With under 50 observations per series, fitted models overfit and are hard to validate, which pushes attempts toward degenerate flat forecasts.",
+    "Series-level heterogeneity means a single globally chosen rule is wrong for part of the set."
+  ],
+  "extraction_focus": [
+    "when a flat or last-value forecast is the wrong default despite short history, and what minimally beats it",
+    "how to decide per series whether to extrapolate level change rather than hold the level fixed",
+    "validating a forecasting choice on fewer than 50 observations without a held-out split",
+    "robust aggregation over a short window when the window contains outliers"
+  ]
+}

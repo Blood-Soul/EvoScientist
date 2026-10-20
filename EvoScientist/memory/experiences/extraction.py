@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
 from ..types import ExperienceLevel
+from .task_context import TaskContext
 from .taxonomy import DISCIPLINES, normalize_discipline
 
 # Matches a References/Bibliography heading line on its own (optionally numbered,
@@ -40,6 +41,26 @@ INDUCTION_PROMPT_FILENAME = "l2_induced_from_l1.md"
 
 class ExperienceOutputError(ValueError):
     """Raised when extraction output does not match the existing prompt schema."""
+
+
+def build_extraction_message(
+    *,
+    paper_id: str,
+    paper_text: str,
+    task_context: TaskContext | None = None,
+) -> str:
+    """Compose the human message for one extraction call.
+
+    With no `task_context` this returns exactly what the bench-blind path has
+    always sent, so the already-extracted corpus stays comparable. The context
+    block goes *before* the paper: the prompts instruct the model to read it as
+    a lens on the paper, and a block buried after tens of thousands of
+    characters of paper text is read as an afterthought.
+    """
+    header = f"[paper_id] {paper_id}"
+    if task_context is None:
+        return f"{header}\n\n{paper_text}"
+    return f"{header}\n\n{task_context.render()}\n\n{paper_text}"
 
 
 _COMMON_LLM_KEYS = {
@@ -467,6 +488,7 @@ async def _induce_l2_from_l1(
     prompt: str,
     model: Any,
     domain_arxiv: str | None,
+    task_context: TaskContext | None = None,
 ) -> list[dict[str, Any]]:
     """Run the L1->L2 induction prompt and return its normalized L2 records.
 
@@ -479,8 +501,12 @@ async def _induce_l2_from_l1(
         [
             SystemMessage(content=prompt),
             HumanMessage(
-                content=f"[paper_id] {paper_id}\n\n"
-                + json.dumps(l1_experiences, ensure_ascii=False)
+                content=build_extraction_message(
+                    paper_id=paper_id,
+                    # Induction reads this paper's own L1 records, not the paper.
+                    paper_text=json.dumps(l1_experiences, ensure_ascii=False),
+                    task_context=task_context,
+                )
             ),
         ]
     )
@@ -500,10 +526,15 @@ async def run_experience_extraction(
     prompts: Mapping[str, str] | None = None,
     model: Any | None = None,
     domain_arxiv: str | None = None,
+    task_context: TaskContext | None = None,
 ) -> dict[ExperienceLevel, dict[str, Any]]:
     """Invoke the existing L1 and L2 prompts concurrently, then, when the L1->L2
     induction prompt is available, induce additional L2 records from this
-    paper's own L1 output and merge them into the L2 result."""
+    paper's own L1 output and merge them into the L2 result.
+
+    `task_context`, when supplied, biases what the prompts select for: the same
+    paper carries different useful experience depending on the task downstream.
+    Omitting it reproduces the bench-blind call byte for byte."""
     if model is None:
         from ...EvoScientist import _ensure_auxiliary_chat_model
 
@@ -514,7 +545,13 @@ async def run_experience_extraction(
         response = await model.ainvoke(
             [
                 SystemMessage(content=loaded[level]),
-                HumanMessage(content=f"[paper_id] {paper_id}\n\n{paper_text}"),
+                HumanMessage(
+                    content=build_extraction_message(
+                        paper_id=paper_id,
+                        paper_text=paper_text,
+                        task_context=task_context,
+                    )
+                ),
             ]
         )
         return parse_experience_json(
@@ -553,6 +590,7 @@ async def run_experience_extraction(
                 prompt=induction_prompt,
                 model=model,
                 domain_arxiv=domain_arxiv,
+                task_context=task_context,
             )
         except Exception as exc:  # degrade, never block direct output
             print(
