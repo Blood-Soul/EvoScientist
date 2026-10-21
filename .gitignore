@@ -42,6 +42,7 @@ skills/*
 !skills/paper-navigator/**
 !skills/paper-experience/
 !skills/paper-experience/**
+skills/**/__pycache__/
 !EvoScientist/skills/
 memory/
 !EvoScientist/memory/
