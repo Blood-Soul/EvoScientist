@@ -29,10 +29,31 @@ def _run_git(args: list[str], cwd: Path) -> str | None:
     return value or None
 
 
+def _main_checkout_root(cwd: Path) -> str | None:
+    """Root of the main checkout that owns ``cwd``, seen through linked worktrees.
+
+    ``--show-toplevel`` gives a linked worktree its own root, so a project that
+    keeps one worktree per branch would get one memory partition per branch.
+    ``--git-common-dir`` is shared by the main checkout and all its worktrees;
+    its parent is the main checkout. Falls back to ``--show-toplevel`` for
+    layouts where the common dir is not a plain ``<root>/.git`` (submodules,
+    bare repos, ``GIT_DIR``), which keeps those ids unchanged.
+    """
+    common = _run_git(["rev-parse", "--git-common-dir"], cwd)
+    if common:
+        common_path = Path(common)
+        if not common_path.is_absolute():
+            common_path = cwd / common_path
+        common_path = common_path.resolve()
+        if common_path.name == ".git":
+            return str(common_path.parent)
+    return _run_git(["rev-parse", "--show-toplevel"], cwd)
+
+
 def resolve_project_id(workspace: str | Path) -> str:
     """Return the stable id used for this workspace's project memory."""
     root = Path(workspace).expanduser().resolve()
-    git_root = _run_git(["rev-parse", "--show-toplevel"], root)
+    git_root = _main_checkout_root(root)
     if git_root:
         git_root_path = Path(git_root).expanduser().resolve()
         remote = _run_git(["remote", "get-url", "origin"], git_root_path)
