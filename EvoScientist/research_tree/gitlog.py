@@ -385,8 +385,14 @@ def render_event(e: Event, *, compact: bool = False) -> str:
         facts.append(f"Δ {t['Delta']}")
     if t.get("Minutes"):
         facts.append(f"{t['Minutes']} min")
+    if t.get("Cluster"):
+        facts.append(f"family {t['Cluster']}")
+    if t.get("Based-On"):
+        facts.append(f"based on {t['Based-On']}")
     lines = [head, "- " + "; ".join(facts), f"- outcome: {e.outcome or 'pending'}"]
-    keys = ("Hypothesis", "Change", "Observation") if compact else NARRATIVE_KEYS
+    keys = (
+        ("Hypothesis", "Change", "Observation", "Next") if compact else NARRATIVE_KEYS
+    )
     for k in keys:
         if e.narrative.get(k):
             lines.append(f"- {k.lower()}: {e.narrative[k]}")

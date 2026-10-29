@@ -233,6 +233,13 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         rather than disruptive.
         """
         call_id = uuid.uuid4().hex[:12]
+        # One line per model request: the anchor that every other record of this step hangs on.
+        await self._trace(
+            "coach_step",
+            call_id=call_id,
+            n_messages=len(messages),
+            last_tools=sorted(self._last_tool_names(messages)),
+        )
         stats = await asyncio.to_thread(self._cached_stats)
         skip = self._skip_reason(messages, stats)
         if skip:
@@ -271,7 +278,11 @@ class ExperienceCoachMiddleware(AgentMiddleware):
             # aux calls before the policy cache is even consulted, and return the
             # guidance already in hand.
             await self._trace(
-                "coach_reuse", call_id=call_id, topic=facets[0], method=facets[1]
+                "coach_reuse",
+                call_id=call_id,
+                topic=facets[0],
+                method=facets[1],
+                suggestion=self._last_suggestion,
             )
             return self._last_suggestion
 
@@ -285,6 +296,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
                 method=decision["method"],
                 max_selected=self._max_selected,
                 model=self._resolve_model(),
+                call_id=call_id,
             )
         except Exception:
             logger.debug("Policy derivation failed; skipping coach", exc_info=True)

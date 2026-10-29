@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable, Iterator
@@ -41,6 +42,15 @@ from .gitlog import (
     render_trajectory,
 )
 from .judge import Judge, judge_from_env
+from .monitor import (
+    kill_processes_under,
+    log_event,
+    snapshot_node,
+    start_gpu_log,
+    start_ticker,
+    stop_gpu_log,
+    stop_ticker,
+)
 from .stats import Delta, complementarity, paired_delta, slice_table
 
 try:  # POSIX only; on other platforms calls are simply not serialised
@@ -55,6 +65,12 @@ CATEGORIES = ("method", "experiment", "ablation")
 INSIGHT_STATUS = ("open", "supported", "contradicted")
 PILOT_MINUTES = (3.0, 20.0)
 NODE_MAX_MINUTES = 180.0
+INSIGHT_EVERY = 3  # closed nodes after which the tools ask for an insight
+OVERRUN_GRACE_MINUTES = (
+    2.0  # past its budget a node keeps this long before its processes are stopped
+)
+WATCH_SECONDS = 30.0
+RELATED_NODES = 2  # other nodes (besides the parents) put into a sub-agent's brief
 
 
 class TreeError(RuntimeError):
@@ -126,6 +142,91 @@ class ResearchTree:
     def _events(self) -> dict[str, Event]:
         return {e.node: e for e in self.repo.events()}
 
+    def _log(self, st: dict, event: str, **data) -> None:
+        log_event(self.dir / "events.jsonl", st["started"], self.now(), event, **data)
+
+    def resume_monitor(self) -> None:
+        """Restart the GPU log after the agent process was restarted mid-run."""
+        try:
+            st = json.loads(self.state_path.read_text())
+        except (OSError, ValueError):
+            return
+        if not st.get("finalized"):
+            self._start_monitors()
+
+    def _start_monitors(self) -> None:
+        start_gpu_log(self.dir / "gpu.jsonl")
+        start_ticker(str(self.dir), self._tick, WATCH_SECONDS)
+
+    def _tick(self) -> bool:
+        if not self.state_path.exists():
+            return False  # the project is gone: end the ticker
+        try:
+            self.enforce_budgets()
+        except (TreeError, OSError, ValueError):
+            pass
+        return True
+
+    def enforce_budgets(self) -> list[str]:
+        """Stop the processes of nodes that ran past their budget plus a short grace.
+
+        A node's budget is a hard limit. The agent cannot be pre-empted, but
+        what it started in the node's directory (training, servers) can: with
+        those gone the sub-agent sees its commands fail and wraps up. The node
+        stays open until the agent closes it with tree_finish.
+        """
+        if not self.state_path.exists():
+            return []
+        st = json.loads(self.state_path.read_text())
+        if st.get("finalized"):
+            return []
+        late = [
+            nid
+            for nid, n in st["nodes"].items()
+            if n["status"] == "running"
+            and not n.get("timed_out")
+            and _minutes(self.now() - n["started"])
+            > n["budget_minutes"] + OVERRUN_GRACE_MINUTES
+        ]
+        killed = {
+            nid: kill_processes_under(self.repo.node_path(nid))
+            if self.repo.node_path(nid).is_dir()
+            else []
+            for nid in late
+        }
+        if late:
+            with self._edit() as st:
+                for nid in late:
+                    node = st["nodes"][nid]
+                    node["timed_out"] = True
+                    self._log(
+                        st,
+                        "node-timeout",
+                        node=nid,
+                        used=_minutes(self.now() - node["started"]),
+                        budget=node["budget_minutes"],
+                        killed=len(killed[nid]),
+                    )
+        return late
+
+    @staticmethod
+    def _closed(st: dict) -> int:
+        """Nodes that ended as a candidate (pilots are evidence, not candidates)."""
+        return sum(
+            1
+            for n in st["nodes"].values()
+            if n["kind"] != "pilot" and n["status"] != "running"
+        )
+
+    def _insight_nudge(self, st: dict) -> str:
+        since = self._closed(st) - st.get("insight_mark", 0)
+        if since < INSIGHT_EVERY:
+            return ""
+        return (
+            f"{since} nodes have closed since the last insight. Record what the sequence shows with "
+            "tree_insight: add a lesson, or confirm or contradict an existing one."
+        )
+
     # ----------------------------------------------------------------- init
 
     def init(
@@ -169,8 +270,70 @@ class ResearchTree:
                 eval_sha="",
                 nodes={},
                 insights=[],
+                survey=[],
+                insight_mark=0,
+                finalized=False,
             )
+            self._log(st, "init", deadline=deadline, shared=list(shared))
+            self._start_monitors()
             return "Research tree initialised.\n\n" + self._status(st)
+
+    # --------------------------------------------------------------- survey
+
+    def survey(self, clusters: list[dict]) -> str:
+        """Record the mechanism families found by the literature survey.
+
+        Calling it again with a known name replaces that family; new names are
+        added. Nodes name the family they belong to (`cluster`), so the status
+        can show which families were tried and which are still open.
+        """
+        if not clusters:
+            raise TreeError(
+                "clusters is empty: list 4-6 mechanism families, each a kind of approach that differs in what "
+                "it changes, not in a hyperparameter"
+            )
+        with self._edit() as st:
+            by = {c["name"]: c for c in st.get("survey", [])}
+            for c in clusters:
+                name, mechanism = (
+                    flatten(c.get("name"), 60),
+                    flatten(c.get("mechanism"), 400),
+                )
+                if not name or not mechanism:
+                    raise TreeError("every cluster needs a name and a mechanism")
+                sources = [
+                    flatten(
+                        f"{x.get('id', '')} {x.get('title', '')}"
+                        if isinstance(x, dict)
+                        else x,
+                        160,
+                    )
+                    for x in (c.get("sources") or [])
+                ]
+                by[name] = {
+                    "name": name,
+                    "mechanism": mechanism,
+                    "sources": [x for x in sources if x],
+                    "fit": flatten(c.get("fit"), 240),
+                    "risk": flatten(c.get("risk"), 240),
+                }
+            st["survey"] = list(by.values())
+            self._log(st, "survey", clusters=list(by))
+            return "Survey recorded.\n" + self._survey_text(st)
+
+    def _survey_text(self, st: dict) -> str:
+        used: dict[str, list[str]] = {}
+        for nid, n in sorted(st["nodes"].items(), key=lambda kv: node_number(kv[0])):
+            if n.get("cluster"):
+                used.setdefault(n["cluster"], []).append(nid)
+        return "\n".join(
+            f"  {c['name']}: {c['mechanism']}"
+            + (f" (fit: {c['fit']})" if c.get("fit") else "")
+            + (f" (risk: {c['risk']})" if c.get("risk") else "")
+            + (f" [sources: {'; '.join(c['sources'])}]" if c.get("sources") else "")
+            + f" -- tried in: {', '.join(used.get(c['name'], [])) or 'nothing yet'}"
+            for c in st.get("survey", [])
+        )
 
     # --------------------------------------------------------------- status
 
@@ -210,7 +373,16 @@ class ResearchTree:
                 used = _minutes(self.now() - n["started"])
                 lines.append(
                     f"Running: {n['id']} ({n['kind']}) {used}/{n['budget_minutes']:.0f} min"
-                    + (" OVER BUDGET" if used > n["budget_minutes"] else "")
+                    + (
+                        " OVER BUDGET"
+                        + (
+                            "; its processes were stopped, close it with tree_finish"
+                            if n.get("timed_out")
+                            else ""
+                        )
+                        if used > n["budget_minutes"]
+                        else ""
+                    )
                 )
         lines.append("Nodes:" if nodes else "Nodes: none yet")
         for n in sorted(nodes.values(), key=lambda x: node_number(x["id"])):
@@ -221,6 +393,8 @@ class ResearchTree:
                 f"{(e.outcome if e else 'in progress') or 'pending'} | from "
                 f"{','.join(n['parents']) or 'root'} | {n['title']}"
             )
+        if st.get("survey"):
+            lines += ["Mechanism families from the survey:", self._survey_text(st)]
         pairs = self._merge_candidates(st)
         if pairs:
             lines.append(
@@ -233,6 +407,9 @@ class ResearchTree:
                 f"  {i['id']} [{i['status']}] {i['text']} (evidence: {', '.join(i['evidence']) or '-'})"
                 for i in st["insights"]
             ]
+        nudge = self._insight_nudge(st)
+        if nudge:
+            lines.append(nudge)
         return "\n".join(lines)
 
     def _merge_candidates(self, st: dict, top: int = 3) -> list[tuple[str, str, float]]:
@@ -299,6 +476,12 @@ class ResearchTree:
         based_on: list[str] | tuple[str, ...] = (),
         minutes: float = 60.0,
         gpu: bool = True,
+        cluster: str = "",
+        component: str = "",
+        plan: str = "",
+        reuse: str = "",
+        avoid: str = "",
+        stop_condition: str = "",
     ) -> str:
         if kind not in KINDS:
             raise TreeError(f"kind must be one of {', '.join(KINDS)}")
@@ -340,6 +523,12 @@ class ResearchTree:
                     "based_on is required once there is history: cite the finished nodes or insights "
                     "(ids from tree_status) that this step builds on. If nothing in the history bears "
                     "on it, run a pilot first and cite that."
+                )
+            families = {c["name"] for c in st.get("survey", [])}
+            if cluster and cluster not in families:
+                raise TreeError(
+                    f"cluster {cluster!r} is not a surveyed family; known: "
+                    f"{', '.join(sorted(families)) or 'none (record the survey with tree_survey first)'}"
                 )
             unknown = [b for b in based_on if b not in known]
             if unknown:
@@ -387,7 +576,16 @@ class ResearchTree:
                 "started": self.now(),
                 "score": None,
                 "conflicts": conflicts,
+                "cluster": cluster or None,
+                "component": component.strip(),
+                "plan": plan.strip(),
+                "reuse": reuse.strip(),
+                "avoid": avoid.strip(),
+                "stop_condition": stop_condition.strip(),
             }
+            self._log(
+                st, "node-start", node=nid, kind=kind, parents=parents, minutes=budget
+            )
             deliver = (
                 "This is a pilot: it is not scored. Write what you observed in NODE_REPORT.md."
                 if kind == "pilot"
@@ -408,8 +606,138 @@ class ResearchTree:
                         else []
                     ),
                     f"When it is done, call tree_finish {nid}.",
+                    "",
+                    self._save_brief(nid, self._brief(st, nid, path, deliver)),
                 ]
             )
+
+    def _related(
+        self, nodes: dict, target: dict, events: dict[str, Event]
+    ) -> list[Event]:
+        """The other finished nodes closest in wording to the new one, oldest first."""
+
+        def words(t: str) -> set[str]:
+            return set(re.findall(r"[\w-]{3,}", t.lower()))
+
+        want = words(
+            " ".join(
+                str(target.get(x) or "")
+                for x in ("title", "hypothesis", "component", "plan")
+            )
+        )
+        skip = set(target["parents"])
+
+        def sim(e: Event) -> float:
+            w = words(" ".join([e.subject, *e.narrative.values()]))
+            return len(w & want) / (len(w | want) or 1)
+
+        pool = [e for e in events.values() if e.node not in skip and e.node in nodes]
+        ranked = [
+            e for e in sorted(pool, key=sim, reverse=True)[:RELATED_NODES] if sim(e) > 0
+        ]
+        return sorted(ranked, key=lambda e: node_number(e.node))
+
+    def _save_brief(self, nid: str, text: str) -> str:
+        """Keep the brief a sub-agent was handed, so the run can be replayed."""
+        try:
+            (self.dir / "briefs").mkdir(parents=True, exist_ok=True)
+            (self.dir / "briefs" / f"{nid}.md").write_text(text)
+        except OSError:
+            pass
+        return text
+
+    def _brief(self, st: dict, nid: str, path: Path, deliver: str) -> str:
+        """Everything a sub-agent needs for one node, ready to hand over as it is."""
+        node = st["nodes"][nid]
+        events = self._events()
+        parents = node["parents"]
+        related = self._related(st["nodes"], node, events)
+        shown = [events[p] for p in parents if p in events] + related
+        cited = set(node["based_on"]) | {e.node for e in shown}
+        insights = [
+            i
+            for i in st["insights"]
+            if i["id"] in node["based_on"] or cited & set(i["evidence"])
+        ]
+        origin = (
+            "It starts from the code of "
+            + ", ".join(parents)
+            + (" merged together." if len(parents) > 1 else ".")
+            if parents
+            else "It starts empty: build this step from scratch."
+        )
+        outputs_note = (
+            f" `outputs/` already holds {parents[0]}'s files (shared on disk): read and reuse them, but write "
+            "new files under new names instead of overwriting them."
+            if parents and (self.repo.node_path(parents[0]) / "outputs").is_dir()
+            else ""
+        )
+        left = node["budget_minutes"]
+        until = time.strftime("%H:%M", time.localtime(self.now() + left * 60))
+        blueprint = [
+            f"- {k}: {node[key]}"
+            for k, key in (
+                ("title", "title"),
+                ("kind", "kind"),
+                ("family", "cluster"),
+                ("component changed", "component"),
+                ("hypothesis", "hypothesis"),
+                ("what to build", "plan"),
+                ("reuse", "reuse"),
+                ("dead ends to avoid", "avoid"),
+                ("stop early when", "stop_condition"),
+            )
+            if node.get(key)
+        ]
+        found = (
+            "\n\n".join(render_event(e, compact=True) for e in shown)
+            or "(nothing yet: this is the first step)"
+        )
+        if insights:
+            found += "\n\nInsights that bear on it:\n" + "\n".join(
+                f"- {i['id']} [{i['status']}] {i['text']}" for i in insights
+            )
+        if node["conflicts"]:
+            found += (
+                "\n\nMerging the parents' code left conflicts in: "
+                + ", ".join(node["conflicts"])
+                + ". Resolve them first (keep what served each parent's result)."
+            )
+        rules = [
+            f"You have {left:.0f} minutes from now (until about {until}); after that anything still running in this "
+            "directory is stopped and the node is closed. Test on a "
+            "small slice first, start long training with `nohup <command> > outputs/train.log 2>&1 &` and check "
+            "its log with separate short commands. Write predictions as soon as you have a model, then "
+            "overwrite them if you improve.",
+            "Work only inside this directory. Do not modify `data/`. Put checkpoints and logs under "
+            f"`outputs/`.{outputs_note}",
+            "Test the hypothesis of this step; do not drift into a different idea. If the stop condition is "
+            "met, stop, write what you found, and finish.",
+            "The full record of the steps above is in git: `git log --all` and `git show node/<id>` work from "
+            "this directory. Read an ancestor's complete entry when the summary leaves a question open.",
+            "Before you finish, make sure no training process you started is still running (the node's "
+            "leftover processes are stopped when it is closed).",
+        ]
+        return "\n".join(
+            [
+                f"## Brief for the sub-agent (give it verbatim; its working directory is {path.relative_to(self.root)}/)",
+                "",
+                f"This directory is your copy of the project for one step of a longer research effort. {origin}",
+                "",
+                "### The step",
+                *blueprint,
+                "",
+                "### What earlier steps found",
+                found,
+                "",
+                "### Rules",
+                *[f"- {r}" for r in rules],
+                "",
+                "### What you must leave in this directory",
+                deliver,
+                "Your final reply is a short summary of the step.",
+            ]
+        )
 
     # --------------------------------------------------------------- finish
 
@@ -476,11 +804,16 @@ class ResearchTree:
             )
         direction = st["direction"]
         path = self.repo.node_path(nid)
+        # A job the sub-agent detached would keep the GPU after the node is closed.
+        killed = kill_processes_under(path) if path.is_dir() else []
         art = self.dir / "artifacts" / nid
         art.mkdir(parents=True, exist_ok=True)
         for name in (st["prediction_file"], st["deliverable"], "NODE_REPORT.md"):
             if (path / name).is_file():
                 shutil.copy2(path / name, art / name)
+        if path.is_dir():
+            snap = snapshot_node(path, art, skip=tuple(st["shared"]))
+            self._log(st, "node-snapshot", node=nid, **snap)
         pilot = node["kind"] == "pilot"
         if abandon_reason:
             res: dict = {"error": f"abandoned: {abandon_reason}"}
@@ -559,6 +892,7 @@ class ResearchTree:
             "Delta": "; ".join(f"vs {k} {d.text()}" for k, d in deltas.items()),
             "Slices": ", ".join(f"{k} {v['share']:.3f}" for k, v in slices.items()),
             "Source": source,
+            "Cluster": node.get("cluster") or "",
             "Based-On": ",".join(node["based_on"]),
             "Minutes": f"{minutes}/{node['budget_minutes']:.0f}",
             "Diffstat": diffstat,
@@ -568,7 +902,8 @@ class ResearchTree:
         }
         narrative = {
             "Hypothesis": node["hypothesis"],
-            "Source": source,
+            "Source": source
+            or (f"survey family {node['cluster']}" if node.get("cluster") else ""),
             "Change": change,
             "Observation": observation,
             "Next": next_step,
@@ -619,6 +954,23 @@ class ResearchTree:
                 "Unresolved merge conflicts were committed as they were: "
                 + ", ".join(unresolved)
             )
+        if killed:
+            out.append(
+                f"Stopped {len(killed)} process(es) the node left running in its directory."
+            )
+        self._log(
+            st,
+            "node-end",
+            node=nid,
+            status=status,
+            score=node["score"],
+            outcome=outcome,
+            champion=st["champion"],
+            killed=len(killed),
+        )
+        nudge = self._insight_nudge(st)
+        if nudge:
+            out.append(nudge)
         out.append(f"{self._remaining(st)} min left.")
         return " ".join(out)
 
@@ -649,6 +1001,8 @@ class ResearchTree:
                     found["text"] = flatten(text, 400)
                 found["status"] = status
                 found["evidence"] = sorted(set(found["evidence"]) | set(evidence))
+                st["insight_mark"] = self._closed(st)
+                self._log(st, "insight", id=insight_id, status=status)
                 return f"{insight_id} updated: [{found['status']}] {found['text']}"
             if not text.strip():
                 raise TreeError(
@@ -662,9 +1016,57 @@ class ResearchTree:
                 "evidence": sorted(set(evidence)),
             }
             st["insights"].append(new)
+            st["insight_mark"] = self._closed(st)
+            self._log(st, "insight", id=new["id"], status=status)
             return f"{new['id']} recorded: [{new['status']}] {new['text']}"
 
     # ------------------------------------------------------------- finalize
+
+    def _export(self, st: dict, events: dict[str, Event]) -> None:
+        """Write `.research/trajectory.json`: the whole record in one machine-readable file."""
+        nodes = []
+        for nid, n in sorted(st["nodes"].items(), key=lambda kv: node_number(kv[0])):
+            e = events.get(nid)
+            nodes.append(
+                {
+                    **n,
+                    "event": None
+                    if e is None
+                    else {
+                        "sha": e.sha,
+                        "subject": e.subject,
+                        "narrative": e.narrative,
+                        "trailers": e.trailers,
+                        "parents": e.parents,
+                        "outcome": e.outcome,
+                    },
+                    "brief": f"briefs/{nid}.md",
+                    "artifacts": f"artifacts/{nid}",
+                }
+            )
+        doc = {
+            "version": 1,
+            "root": str(self.root),
+            "started": st["started"],
+            "deadline": st["deadline"],
+            "metric": st["metric"],
+            "direction": st["direction"],
+            "champion": st["champion"],
+            "eval_sha": st["eval_sha"],
+            "survey": st.get("survey", []),
+            "insights": st["insights"],
+            "nodes": nodes,
+            "files": {
+                "state": "state.json",
+                "events": "events.jsonl",
+                "calls": "calls.jsonl",
+                "gpu": "gpu.jsonl",
+                "summary": "summary.json",
+            },
+        }
+        (self.dir / "trajectory.json").write_text(
+            json.dumps(doc, indent=1, ensure_ascii=False, default=str)
+        )
 
     def finalize(self) -> str:
         with self._edit() as st:
@@ -721,4 +1123,9 @@ class ResearchTree:
                 "minutes": _minutes(self.now() - st["started"]),
             }
             (self.dir / "summary.json").write_text(json.dumps(summary, indent=1))
+            self._export(st, events)
+            st["finalized"] = True
+            self._log(st, "finalize", champion=champ, nodes=len(events))
+            stop_gpu_log(self.dir / "gpu.jsonl")
+            stop_ticker(str(self.dir))
             return text

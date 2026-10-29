@@ -476,7 +476,9 @@ class EvoScientistConfig:
     # section to the system prompt: the agent runs an end-to-end research task as
     # a tree of git-backed nodes, reads the record before each decision, and the
     # tools write the facts (scores from a frozen judge, clock, parents). Off by
-    # default; the judge is reached through EVOSCIENTIST_TREE_JUDGE_URL.
+    # default. Scores come from a judge the agent cannot change: a service reached
+    # through EVOSCIENTIST_TREE_JUDGE_URL, or a scoring script named in
+    # EVOSCIENTIST_TREE_JUDGE_COMMAND (run as `<command> <predictions> [<deliverable>]`).
     research_tree_enabled: bool = False
 
     # Workspace Settings

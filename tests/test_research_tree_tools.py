@@ -15,6 +15,7 @@ from tests.test_research_tree import Clock, FakeJudge, accuracy_rows
 
 NAMES = [
     "tree_init",
+    "tree_survey",
     "tree_status",
     "tree_history",
     "tree_new",
@@ -40,9 +41,20 @@ def test_tool_set_and_schemas():
     made = create_research_tree_tools(Path("."))
     assert [t.name for t in made] == NAMES
     new = next(t for t in made if t.name == "tree_new")
-    assert {"kind", "title", "hypothesis", "based_on", "parents", "minutes"} <= set(
-        new.args
-    )
+    assert {
+        "kind",
+        "title",
+        "hypothesis",
+        "based_on",
+        "parents",
+        "minutes",
+        "plan",
+        "cluster",
+        "component",
+        "reuse",
+        "avoid",
+        "stop_condition",
+    } <= set(new.args)
 
 
 def test_refusals_are_text_not_exceptions(tools):
@@ -58,7 +70,9 @@ def test_refusals_are_text_not_exceptions(tools):
         .invoke({"budget_minutes": 300})
         .startswith("Research tree initialised")
     )
-    out = made["tree_new"].invoke({"kind": "bogus", "title": "t", "hypothesis": "h"})
+    out = made["tree_new"].invoke(
+        {"kind": "bogus", "title": "t", "hypothesis": "h", "plan": "p"}
+    )
     assert out.startswith("ERROR: kind must be one of")
 
 
@@ -66,7 +80,12 @@ def test_a_node_end_to_end_through_the_tools(tools):
     made, root, clock = tools
     made["tree_init"].invoke({"budget_minutes": 300})
     created = made["tree_new"].invoke(
-        {"kind": "explore", "title": "baseline", "hypothesis": "sets a floor"}
+        {
+            "kind": "explore",
+            "title": "baseline",
+            "hypothesis": "sets a floor",
+            "plan": "plain fine-tune",
+        }
     )
     nid = created.split()[1]
     (root / "nodes" / nid / "holdout_predictions.csv").write_text(accuracy_rows(240))
@@ -99,6 +118,7 @@ def test_prompt_section_only_when_enabled():
     assert RESEARCH_TREE.strip() in get_system_prompt(research_tree=True)
     for name in (
         "tree_init",
+        "tree_survey",
         "tree_status",
         "tree_history",
         "tree_new",
@@ -158,3 +178,72 @@ def test_tree_tools_survive_tool_selection():
     from EvoScientist.middleware.tool_selector import DEFAULT_ALWAYS_INCLUDE_TOOLS
 
     assert set(NAMES) <= DEFAULT_ALWAYS_INCLUDE_TOOLS
+
+
+def test_survey_then_a_node_in_a_family_through_the_tools(tools):
+    made, _, _ = tools
+    made["tree_init"].invoke({"budget_minutes": 300})
+    out = made["tree_survey"].invoke(
+        {
+            "clusters": [
+                {
+                    "name": "abstain",
+                    "mechanism": "calibrate a no-answer threshold",
+                    "sources": ["2101.1 P"],
+                }
+            ]
+        }
+    )
+    assert out.startswith("Survey recorded")
+    assert "abstain" in out
+    refused = made["tree_new"].invoke(
+        {
+            "kind": "explore",
+            "title": "t",
+            "hypothesis": "h",
+            "plan": "p",
+            "cluster": "other",
+        }
+    )
+    assert refused.startswith("ERROR: cluster 'other' is not a surveyed family")
+    created = made["tree_new"].invoke(
+        {
+            "kind": "explore",
+            "title": "baseline",
+            "hypothesis": "floor",
+            "plan": "plain",
+            "cluster": "abstain",
+        }
+    )
+    assert "## Brief for the sub-agent" in created
+    assert "family: abstain" in created
+    assert "tried in: n1" in made["tree_status"].invoke({})
+
+
+def test_every_tool_call_is_journaled_including_refusals(tools):
+    import json
+
+    made, root, _clock = tools
+    made["tree_status"].invoke({})  # refused: no tree yet
+    made["tree_init"].invoke({"budget_minutes": 300})
+    made["tree_new"].invoke(
+        {"kind": "bogus", "title": "t", "hypothesis": "h", "plan": "p"}
+    )
+    made["tree_survey"].invoke(
+        {"clusters": [{"name": "abstain", "mechanism": "calibrate a threshold"}]}
+    )
+    calls = [
+        json.loads(x)
+        for x in (root / ".research" / "calls.jsonl").read_text().splitlines()
+    ]
+    assert [c["tool"] for c in calls] == [
+        "tree_status",
+        "tree_init",
+        "tree_new",
+        "tree_survey",
+    ]
+    assert [c["ok"] for c in calls] == [False, True, False, True]
+    assert calls[2]["args"]["kind"] == "bogus"
+    assert calls[2]["result"].startswith("ERROR: kind must be one of")
+    assert calls[3]["args"]["clusters"][0]["name"] == "abstain"
+    assert all(isinstance(c["ts"], float) and c["seconds"] >= 0 for c in calls)

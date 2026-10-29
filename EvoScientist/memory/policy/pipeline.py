@@ -50,6 +50,7 @@ async def derive_policy(
     max_selected: int = DEFAULT_MAX_SELECTED,
     model: Any | None = None,
     refresh: bool = False,
+    call_id: str | None = None,
 ) -> dict[str, Any]:
     """Derive one target-bound reuse policy for ``task``.
 
@@ -72,7 +73,7 @@ async def derive_policy(
     facets, so the paper-vocabulary query the gate wrote actually reaches
     retrieval instead of only deciding whether the gate repeated itself.
     """
-    call_id = uuid.uuid4().hex[:12]
+    call_id = call_id or uuid.uuid4().hex[:12]
     await emit_trace_async(
         memory_dir,
         "request",

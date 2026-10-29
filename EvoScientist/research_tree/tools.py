@@ -7,6 +7,7 @@ the turn.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .gitlog import GitError
 from .judge import Judge
+from .monitor import _plain, journal_call
 from .tree import CATEGORIES, KINDS, ResearchTree, TreeError
 
 
@@ -36,6 +38,40 @@ class InitArgs(BaseModel):
     deliverable: str = Field(
         default="submission.csv",
         description="The task's deliverable file. The champion's copy is kept at the project root.",
+    )
+
+    shared: list[str] = Field(
+        default_factory=lambda: ["data", "models"],
+        description="Top-level files and directories every node should see (linked into each node's directory).",
+    )
+    min_node_minutes: float = Field(
+        default=20.0, description="Shortest node worth opening, in minutes."
+    )
+    reserve_minutes: float = Field(
+        default=15.0,
+        description="Minutes at the end kept for the deliverable; no new node starts inside them.",
+    )
+
+
+class ClusterArgs(BaseModel):
+    name: str = Field(description="Short name of the mechanism family.")
+    mechanism: str = Field(
+        description="What this family changes and why it should help on this task."
+    )
+    sources: list[str] = Field(
+        default_factory=list, description="Papers behind it, as 'id title'."
+    )
+    fit: str = Field(
+        default="",
+        description="How well it fits the working conditions (GPU, memory, time) and the rough cost of one try.",
+    )
+    risk: str = Field(default="", description="The most likely way it fails here.")
+
+
+class SurveyArgs(BaseModel):
+    clusters: list[ClusterArgs] = Field(
+        description="4-6 mechanism families: kinds of approach that differ in what they change, not in a "
+        "hyperparameter. Calling again with a known name replaces that family."
     )
 
 
@@ -82,6 +118,26 @@ class NewArgs(BaseModel):
     gpu: bool = Field(
         default=True,
         description="False for work that does not need the GPU; only one GPU node runs at a time.",
+    )
+    plan: str = Field(
+        description="What to build or change, concretely, in 2-5 sentences. It goes into the sub-agent's brief."
+    )
+    cluster: str = Field(
+        default="",
+        description="The surveyed mechanism family this step belongs to (a name given to tree_survey).",
+    )
+    component: str = Field(
+        default="", description="The part of the solution this step changes."
+    )
+    reuse: str = Field(
+        default="", description="What to keep or reuse from the parents or other nodes."
+    )
+    avoid: str = Field(
+        default="",
+        description="Dead ends the record shows, with the reason, so the sub-agent does not repeat them.",
+    )
+    stop_condition: str = Field(
+        default="", description="When the sub-agent should give up early."
     )
 
 
@@ -136,13 +192,19 @@ def create_research_tree_tools(
     if now is not None:
         kwargs["now"] = now
     tree = ResearchTree(root, **kwargs)
+    tree.resume_monitor()  # the agent may have been restarted mid-run
 
-    def guarded(fn: Callable[..., str]) -> Callable[..., str]:
+    def guarded(fn: Callable[..., str], name: str) -> Callable[..., str]:
         def run(**args) -> str:
+            logged, started = _plain(args), time.time()  # fn may consume args
             try:
-                return fn(**args)
+                out = fn(**args)
             except (TreeError, GitError) as e:
-                return f"ERROR: {e}"
+                out = f"ERROR: {e}"
+            journal_call(
+                tree.dir / "calls.jsonl", name, logged, out, started, time.time()
+            )
+            return out
 
         run.__name__ = fn.__name__
         run.__doc__ = fn.__doc__
@@ -150,7 +212,7 @@ def create_research_tree_tools(
 
     def tool(fn, name: str, description: str, schema: type[BaseModel]) -> BaseTool:
         return StructuredTool.from_function(
-            func=guarded(fn),
+            func=guarded(fn, name),
             name=name,
             description=description,
             args_schema=schema,
@@ -164,6 +226,19 @@ def create_research_tree_tools(
             "Start the research tree for this task. Call once, at the start, after the task data is in place. "
             "It creates the git record and starts the clock.",
             InitArgs,
+        ),
+        tool(
+            lambda **a: tree.survey(
+                [
+                    c.model_dump() if hasattr(c, "model_dump") else c
+                    for c in a["clusters"]
+                ]
+            ),
+            "tree_survey",
+            "Record the mechanism families found by your literature survey (4-6, each differing in what it "
+            "changes). Nodes then name their family in `cluster`, and tree_status shows which families were "
+            "tried and which are still open.",
+            SurveyArgs,
         ),
         tool(
             lambda **a: tree.status(),
@@ -183,8 +258,9 @@ def create_research_tree_tools(
         tool(
             lambda **a: tree.new_node(**a),
             "tree_new",
-            "Open a node: one hypothesis, one git branch and worktree at nodes/<id>/. Then hand that directory to a "
-            "sub-agent to build it. Refused without based_on once there is history, with a second GPU node, or "
+            "Open a node: one hypothesis, one git branch and worktree at nodes/<id>/. The reply ends with a brief "
+            "for the sub-agent (the step, the parents' and related nodes' records, the rules); give it to the "
+            "sub-agent verbatim. Refused without based_on once there is history, with a second GPU node, or "
             "without time.",
             NewArgs,
         ),

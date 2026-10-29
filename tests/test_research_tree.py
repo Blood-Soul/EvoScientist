@@ -421,8 +421,386 @@ def test_history_brief_and_full(env):
     tree.finish(n1, change="c1", observation="o1", next_step="next-step-text")
     brief, full = tree.history(), tree.history([n1], full=True)
     assert "hypothesis: h1" in brief
-    assert "next-step-text" not in brief
+    # the brief view keeps the next step too, so the planner sees where each node pointed
+    assert "next: next-step-text" in brief
     assert "next-step-text" in full
     assert "commit:" in full
     with pytest.raises(TreeError, match="no finished node n9"):
         tree.history(["n9"])
+
+
+# ---- capabilities carried over from the external loop -----------------------
+
+
+def close(tree, root, clock, n_right, **new):
+    nid = do_node(tree, root, clock, minutes_used=10, n_right=n_right, **new)
+    return nid, tree.finish(nid, change="c", observation="o", next_step="try X")
+
+
+def test_survey_families_are_recorded_validated_and_tracked(env):
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    with pytest.raises(TreeError, match="record the survey with tree_survey first"):
+        tree.new_node(kind="explore", title="a", hypothesis="h", cluster="abstain")
+    out = tree.survey(
+        [
+            {
+                "name": "abstain",
+                "mechanism": "calibrate a no-answer threshold",
+                "sources": ["2101.1 A paper"],
+            },
+            {"name": "long-ctx", "mechanism": "window the long plots", "risk": "slow"},
+        ]
+    )
+    assert "abstain" in out
+    assert "tried in: nothing yet" in out
+    with pytest.raises(
+        TreeError, match="not a surveyed family; known: abstain, long-ctx"
+    ):
+        tree.new_node(kind="explore", title="a", hypothesis="h", cluster="nope")
+    with pytest.raises(TreeError, match="name and a mechanism"):
+        tree.survey([{"name": "x", "mechanism": ""}])
+    n1, _ = close(
+        tree,
+        root,
+        clock,
+        200,
+        kind="explore",
+        title="baseline",
+        hypothesis="floor",
+        cluster="abstain",
+        plan="plain model",
+    )
+    status = tree.status()
+    assert "abstain: calibrate a no-answer threshold" in status
+    assert f"tried in: {n1}" in status
+    assert "long-ctx" in status
+    assert "tried in: nothing yet" in status
+    log = git(root, "log", "-1", "--format=%B", f"node/{n1}")
+    assert "Cluster: abstain" in log
+    assert "Source: survey family abstain" in log
+    # a family can be corrected by naming it again
+    tree.survey([{"name": "abstain", "mechanism": "a revised mechanism"}])
+    assert "a revised mechanism" in tree.status()
+
+
+def test_new_node_returns_a_brief_with_the_relevant_record(env):
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    n1, _ = close(
+        tree,
+        root,
+        clock,
+        200,
+        kind="explore",
+        title="span extraction baseline",
+        hypothesis="span extraction gives a floor",
+        plan="plain",
+    )
+    n2, _ = close(
+        tree,
+        root,
+        clock,
+        260,
+        kind="explore",
+        title="retrieval of sentences",
+        hypothesis="retrieval helps long plots",
+        based_on=[n1],
+        plan="retrieve",
+    )
+    tree.insight(text="plain span models stall on long plots", evidence=[n1])
+    out = tree.new_node(
+        kind="refine",
+        title="span extraction with a no-answer head",
+        parents=[n2],
+        based_on=[n2, "I1"],
+        hypothesis="a no-answer head raises span extraction accuracy",
+        plan="add the head and calibrate it",
+        component="decision rule",
+        avoid="plain windowing already failed",
+        stop_condition="no gain after one run",
+    )
+    assert "## Brief for the sub-agent" in out
+    assert "what to build: add the head and calibrate it" in out
+    assert "component changed: decision rule" in out
+    assert "dead ends to avoid: plain windowing already failed" in out
+    assert "### n2 [method] retrieval of sentences" in out  # the parent's record
+    assert "next: try X" in out  # ... including where it pointed
+    assert (
+        "### n1 [method] span extraction baseline" in out
+    )  # the closest other node, by wording
+    assert "I1 [open] plain span models stall" in out  # an insight that bears on it
+    assert "git log --all" in out
+    assert "holdout_predictions.csv" in out
+    assert "starts from the code of n2" in out
+
+
+def test_insight_reminder_after_three_closed_nodes(env):
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    n1, _ = close(tree, root, clock, 100, kind="explore", title="a", hypothesis="h")
+    n2, msg2 = close(
+        tree, root, clock, 120, kind="explore", title="b", hypothesis="h", based_on=[n1]
+    )
+    assert "tree_insight" not in msg2
+    n3, msg3 = close(
+        tree, root, clock, 140, kind="explore", title="c", hypothesis="h", based_on=[n1]
+    )
+    assert "3 nodes have closed since the last insight" in msg3
+    assert "3 nodes have closed" in tree.status()
+    tree.insight(text="b and c beat a", evidence=[n1, n2, n3])
+    assert "since the last insight" not in tree.status()
+
+
+def test_pilots_do_not_count_towards_the_insight_reminder(env):
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    n1, _ = close(tree, root, clock, 100, kind="explore", title="a", hypothesis="h")
+    for i in range(3):
+        nid = tree.new_node(
+            kind="pilot", title=f"p{i}", hypothesis="h", based_on=[n1], minutes=5
+        ).split()[1]
+        (root / "nodes" / nid / "NODE_REPORT.md").write_text("saw it")
+        clock.advance(5)
+        tree.finish(nid, change="c", observation="o")
+    assert "since the last insight" not in tree.status()
+
+
+@pytest.mark.skipif(not Path("/proc/self/cwd").exists(), reason="needs /proc")
+def test_closing_a_node_stops_what_it_left_running(env):
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    nid = tree.new_node(kind="explore", title="a", hypothesis="h").split()[1]
+    node_dir = root / "nodes" / nid
+    (node_dir / "holdout_predictions.csv").write_text(accuracy_rows(200))
+    (node_dir / "submission.csv").write_text("d")
+    leftover = subprocess.Popen(["sleep", "300"], cwd=node_dir)
+    outside = subprocess.Popen(["sleep", "300"], cwd=root)
+    try:
+        clock.advance(10)
+        msg = tree.finish(nid, change="c", observation="o")
+        assert "Stopped 1 process(es)" in msg
+        assert leftover.wait(timeout=15) != 0
+        assert outside.poll() is None  # only the node's own directory is touched
+    finally:
+        outside.kill()
+        leftover.kill()
+
+
+def _command_judge(tmp_path, body_extra=""):
+    script = tmp_path / "score.py"
+    script.write_text(
+        "import json, sys\n"
+        "rows = [float(x) for x in open(sys.argv[1]).read().split()]\n"
+        "print(json.dumps({'score': sum(rows) / len(rows), 'per_sample': rows, "
+        "'slices': ['hit' if r else 'miss' for r in rows]}))\n" + body_extra
+    )
+    return script
+
+
+def test_a_local_scoring_command_is_a_judge_and_edits_to_it_are_caught(tmp_path):
+    import sys
+
+    from EvoScientist.research_tree.judge import CommandJudge
+
+    script = _command_judge(tmp_path)
+    root = tmp_path / "ws"
+    root.mkdir()
+    clock = Clock()
+    tree = ResearchTree(
+        root, judge=CommandJudge([sys.executable, str(script)]), now=clock
+    )
+    tree.init(budget_minutes=360)
+    n1, msg = close(tree, root, clock, 200, kind="explore", title="a", hypothesis="h")
+    assert "score 0.5000" in msg
+    assert "Eval-Sha: " in git(root, "log", "-1", "--format=%B", f"node/{n1}")
+    script.write_text(
+        script.read_text() + "# loosened\n"
+    )  # the scorer is edited mid-run
+    _, msg2 = close(
+        tree, root, clock, 390, kind="explore", title="b", hypothesis="h", based_on=[n1]
+    )
+    assert "closed as failed" in msg2
+    assert "judge changed" in msg2
+
+
+def test_command_judge_reports_failures_as_errors_not_scores(tmp_path):
+    import sys
+
+    from EvoScientist.research_tree.judge import CommandJudge
+
+    pred = tmp_path / "p.csv"
+    pred.write_text("1\n0\n")
+    bad = tmp_path / "bad.py"
+    bad.write_text("print('not json')\n")
+    assert "error" in CommandJudge([sys.executable, str(bad)]).score(pred, None)
+    assert "error" in CommandJudge(["/no/such/scorer"]).score(pred, None)
+
+
+def test_judge_from_env_prefers_url_then_command(monkeypatch):
+    from EvoScientist.research_tree.judge import CommandJudge, HttpJudge, judge_from_env
+
+    monkeypatch.delenv("EVOSCIENTIST_TREE_JUDGE_URL", raising=False)
+    monkeypatch.delenv("EVOSCIENTIST_TREE_JUDGE_COMMAND", raising=False)
+    assert judge_from_env() is None
+    monkeypatch.setenv("EVOSCIENTIST_TREE_JUDGE_COMMAND", "python /x/score.py --flag")
+    judge = judge_from_env()
+    assert isinstance(judge, CommandJudge)
+    assert judge.command == [
+        "python",
+        "/x/score.py",
+        "--flag",
+    ]
+    monkeypatch.setenv("EVOSCIENTIST_TREE_JUDGE_URL", "http://127.0.0.1:1/")
+    assert isinstance(judge_from_env(), HttpJudge)
+
+
+def test_every_tree_action_is_written_to_the_event_log(env):
+    import json
+
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    n1, _ = close(tree, root, clock, 200, kind="explore", title="a", hypothesis="h")
+    tree.insight(text="a stalls", evidence=[n1])
+    tree.finalize()
+    events = [
+        json.loads(x)
+        for x in (root / ".research" / "events.jsonl").read_text().splitlines()
+    ]
+    assert [e["event"] for e in events] == [
+        "init",
+        "node-start",
+        "node-snapshot",
+        "node-end",
+        "insight",
+        "finalize",
+    ]
+    assert events[3]["node"] == n1
+    assert events[3]["status"] == "done"
+    assert (
+        json.loads((root / ".research" / "state.json").read_text())["finalized"] is True
+    )
+
+
+@pytest.mark.skipif(not Path("/proc/self/cwd").exists(), reason="needs /proc")
+def test_a_node_past_its_budget_loses_its_processes_but_stays_open(env):
+    import json
+
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    nid = tree.new_node(kind="explore", title="a", hypothesis="h", minutes=30).split()[
+        1
+    ]
+    job = subprocess.Popen(["sleep", "300"], cwd=root / "nodes" / nid)
+    try:
+        clock.advance(31)  # past the budget but inside the grace period
+        assert tree.enforce_budgets() == []
+        assert job.poll() is None
+        clock.advance(2)  # now beyond budget plus grace
+        assert tree.enforce_budgets() == [nid]
+        assert job.wait(timeout=15) != 0
+        assert tree.enforce_budgets() == []  # once per node
+        assert "its processes were stopped" in tree.status()
+        events = [
+            json.loads(x)
+            for x in (root / ".research" / "events.jsonl").read_text().splitlines()
+        ]
+        timeout = next(e for e in events if e["event"] == "node-timeout")
+        assert timeout["node"] == nid
+        assert timeout["killed"] == 1
+        # the node is still open: the agent closes it with what it has
+        (root / "nodes" / nid / "holdout_predictions.csv").write_text(
+            accuracy_rows(200)
+        )
+        (root / "nodes" / nid / "submission.csv").write_text("d")
+        assert "closed as done" in tree.finish(nid, change="c", observation="o")
+    finally:
+        job.kill()
+
+
+# ---- the whole run can be replayed from what is saved ------------------------
+
+
+def test_the_brief_handed_to_the_sub_agent_is_kept(env):
+    tree, root, _clock, _ = env
+    tree.init(budget_minutes=360)
+    out = tree.new_node(kind="explore", title="a", hypothesis="h", plan="build it")
+    saved = (root / ".research" / "briefs" / "n1.md").read_text()
+    assert saved.startswith("## Brief for the sub-agent")
+    assert saved in out
+
+
+def test_a_closed_node_keeps_its_logs_and_a_manifest_of_what_it_left(env):
+    import json
+
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    nid = tree.new_node(kind="explore", title="a", hypothesis="h").split()[1]
+    node_dir = root / "nodes" / nid
+    (node_dir / "holdout_predictions.csv").write_text(accuracy_rows(200))
+    (node_dir / "submission.csv").write_text("d")
+    (node_dir / "outputs").mkdir()
+    (node_dir / "outputs" / "train.log").write_text(
+        "epoch 1 loss 0.9\nepoch 2 loss 0.5\n"
+    )
+    (node_dir / "outputs" / "model.bin").write_bytes(b"w" * 5000)
+    clock.advance(10)
+    tree.finish(nid, change="c", observation="o")
+    art = root / ".research" / "artifacts" / nid
+    assert (art / "traces" / "outputs" / "train.log").read_text().endswith("loss 0.5\n")
+    assert not (
+        art / "traces" / "outputs" / "model.bin"
+    ).exists()  # weights are listed, not copied
+    files = {
+        f["path"]: f for f in json.loads((art / "files.json").read_text())["files"]
+    }
+    assert files["outputs/train.log"]["kept"] == "full"
+    assert files["outputs/model.bin"]["bytes"] == 5000
+    assert len(files["outputs/model.bin"]["sha256"]) == 64
+    assert not any(
+        p.startswith("data/") for p in files
+    )  # the shared data link is not walked
+
+
+def test_every_event_carries_an_absolute_timestamp(env):
+    import json
+
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    close(tree, root, clock, 200, kind="explore", title="a", hypothesis="h")
+    events = [
+        json.loads(x)
+        for x in (root / ".research" / "events.jsonl").read_text().splitlines()
+    ]
+    assert all(isinstance(e["ts"], float) for e in events)
+    stamps = [e["ts"] for e in events]
+    assert stamps == sorted(stamps)
+
+
+def test_finalize_exports_the_record_as_one_json_file(env):
+    import json
+
+    tree, root, clock, _ = env
+    tree.init(budget_minutes=360)
+    tree.survey([{"name": "abstain", "mechanism": "calibrate a threshold"}])
+    n1, _ = close(
+        tree,
+        root,
+        clock,
+        200,
+        kind="explore",
+        title="a",
+        hypothesis="h",
+        cluster="abstain",
+    )
+    tree.insight(text="a is a floor", evidence=[n1])
+    tree.finalize()
+    doc = json.loads((root / ".research" / "trajectory.json").read_text())
+    assert doc["champion"] == n1
+    assert doc["survey"][0]["name"] == "abstain"
+    assert doc["insights"][0]["id"] == "I1"
+    node = doc["nodes"][0]
+    assert node["event"]["trailers"]["Score"] == "0.5000"
+    assert node["event"]["narrative"]["Observation"] == "o"
+    assert node["brief"] == f"briefs/{n1}.md"
+    assert (root / ".research" / node["brief"]).is_file()

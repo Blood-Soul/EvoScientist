@@ -21,6 +21,7 @@ the rerank parse fails, the fallback is the top scoring candidates from step 1.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,7 @@ from ..experiences.retrieval import search_experience_records
 from ..experiences.store import list_experience_documents
 from ..types import ExperienceLevel, ObservationSearchMode
 from .prompts import load_rerank_prompt
-from .trace import emit_trace, emit_trace_async
+from .trace import emit_trace, emit_trace_async, response_usage
 
 DEFAULT_RETRIEVE_LIMIT = 8
 DEFAULT_MAX_SELECTED = 4
@@ -197,9 +198,11 @@ async def rerank_candidates(
         descriptors=descriptors_text,
         max_selected=max_selected,
     )
+    started = time.monotonic()
     response = await model.ainvoke(
         [SystemMessage(content=filled), HumanMessage(content="Rerank now.")]
     )
+    seconds = round(time.monotonic() - started, 2)
     output = format_message_content(response).strip()
 
     async def _traced(result: dict[str, Any]) -> dict[str, Any]:
@@ -210,6 +213,8 @@ async def rerank_candidates(
                 call_id=call_id,
                 task=task.strip(),
                 raw_output=output,
+                seconds=seconds,
+                usage=response_usage(response),
                 selected_ids=[item["id"] for item in result["selected"]],
                 reason=result["reason"],
             )

@@ -776,3 +776,153 @@ class TestCoachModelIsQuiet:
         assert model.tags == ["keep", TAG_NOSTREAM]
         assert model.disable_streaming is True
         assert base.tags == ["keep"]
+
+
+class TestCoachTraceRecordsEverythingItDecides:
+    """The coach's model calls are tagged nostream and its advice is injected for one call only, so
+    neither reaches the agent's stream. Its trace is the only record of what it did, so it has to hold
+    what the gate saw, what each auxiliary call cost, and the text that was injected."""
+
+    @staticmethod
+    def _read(tmp_path) -> list[dict[str, Any]]:
+        import json
+
+        path = tmp_path / "policies" / "trace.jsonl"
+        return [json.loads(x) for x in path.read_text().splitlines()]
+
+    @pytest.fixture(autouse=True)
+    def _trace_on(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("EVOSCIENTIST_POLICY_TRACE", "1")
+        monkeypatch.delenv("EVOSCIENTIST_POLICY_TRACE_PATH", raising=False)
+        monkeypatch.setattr(
+            "EvoScientist.memory.experiences.experience_library_stats",
+            lambda **_: {"records": 9, "papers": 3},
+        )
+
+    @staticmethod
+    def _decision(**over: Any) -> dict[str, Any]:
+        return {
+            "need": True,
+            "reason": "choosing a rate",
+            "topic": "fine-tuning",
+            "method": "AdamW",
+            "task": "pick a learning rate",
+            "state": "",
+        } | over
+
+    @pytest.mark.asyncio
+    async def test_a_step_is_anchored_and_its_records_share_one_call_id(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        derive = AsyncMock(
+            return_value={
+                "status": "ok",
+                "cached": False,
+                "selected": ["E-1"],
+                "policy": {"verdict": "adapt", "procedure": ["warm up"]},
+            }
+        )
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.decide_experience_need",
+            AsyncMock(return_value=self._decision()),
+        )
+        monkeypatch.setattr("EvoScientist.memory.policy.derive_policy", derive)
+        messages = [
+            HumanMessage(content="pick a learning rate"),
+            AIMessage(content="ok"),
+        ]
+        await _coach(tmp_path)._suggestion(messages)
+        records = self._read(tmp_path)
+        assert [r["event"] for r in records] == ["coach_step", "coach_inject"]
+        step, inject = records
+        assert step["call_id"] == inject["call_id"]
+        assert step["n_messages"] == 2
+        assert inject["injected"] is True
+        assert "warm up" in inject["suggestion"]
+        # the retrieval pipeline's own records can be joined to this step
+        assert derive.await_args.kwargs["call_id"] == step["call_id"]
+
+    @pytest.mark.asyncio
+    async def test_reusing_the_last_advice_records_what_was_injected(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.decide_experience_need",
+            AsyncMock(return_value=self._decision()),
+        )
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.derive_policy",
+            AsyncMock(
+                return_value={
+                    "status": "ok",
+                    "cached": False,
+                    "selected": ["E-1"],
+                    "policy": {"verdict": "adapt", "procedure": ["warm up"]},
+                }
+            ),
+        )
+        coach = _coach(tmp_path)
+        messages = [
+            HumanMessage(content="pick a learning rate"),
+            AIMessage(content="ok"),
+        ]
+        first = await coach._suggestion(messages)
+        await coach._suggestion(messages)
+        reuse = next(r for r in self._read(tmp_path) if r["event"] == "coach_reuse")
+        assert reuse["suggestion"] == first
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_step_still_leaves_its_reason(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "EvoScientist.memory.experiences.experience_library_stats",
+            lambda **_: {"records": 0},
+        )
+        await _coach(tmp_path)._suggestion([HumanMessage(content="goal")])
+        step, skip = self._read(tmp_path)
+        assert step["event"] == "coach_step"
+        assert skip["event"] == "coach_skip"
+        assert skip["reason"] == "experience library is empty"
+        assert step["call_id"] == skip["call_id"]
+
+    @pytest.mark.asyncio
+    async def test_the_gate_record_holds_its_input_cost_and_answer(
+        self, tmp_path
+    ) -> None:
+        import json
+
+        from EvoScientist.memory.policy import decide_experience_need
+
+        class Aux:
+            async def ainvoke(self, _messages):
+                return AIMessage(
+                    content=json.dumps(
+                        TestCoachTraceRecordsEverythingItDecides._decision()
+                    ),
+                    usage_metadata={
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "total_tokens": 15,
+                    },
+                )
+
+        await decide_experience_need(
+            request_text="the original task",
+            recent_text="[ai] tried lr 1e-3",
+            library_text="9 records",
+            model=Aux(),
+            prompt="REQ {request} / RECENT {recent} / LIB {library}",
+            memory_dir=tmp_path,
+            call_id="abc123",
+        )
+        (gate,) = self._read(tmp_path)
+        assert gate["event"] == "gate"
+        assert gate["call_id"] == "abc123"
+        assert gate["request_text"] == "the original task"
+        assert gate["recent_text"] == "[ai] tried lr 1e-3"
+        assert gate["library_text"] == "9 records"
+        assert gate["usage"]["total_tokens"] == 15
+        assert gate["seconds"] >= 0
+        assert gate["need"] is True
+        assert "learning rate" in gate["raw_output"]

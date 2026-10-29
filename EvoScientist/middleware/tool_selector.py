@@ -105,6 +105,7 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         # step through these; hiding one would leave the agent unable to open or
         # close a node while the record still expects it.
         "tree_init",
+        "tree_survey",
         "tree_status",
         "tree_history",
         "tree_new",
