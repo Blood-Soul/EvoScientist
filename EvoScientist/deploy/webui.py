@@ -244,6 +244,9 @@ def run_webui(config: Any, workspace_dir: str | None = None) -> None:
                 f"[dim]({browser_note})[/dim]\n"
                 f"[bold]Logs:[/bold]     {_shorten(str(RUNTIME.log_file))}\n"
                 f"          {_shorten(str(webui_log))}\n"
+                f"[bold]Debug:[/bold]    "
+                f"{_base_url(cfg.backend_port, cfg.backend_host)}/debug/papers  "
+                f"[dim](paper full-text chunk store)[/dim]\n"
                 f"{remote_backend_hint}\n"
                 f"[dim]Press Ctrl+C to stop.[/dim]"
             ),
