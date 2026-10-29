@@ -61,7 +61,8 @@ def store(tmp_path: Path):
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    # The app's browser boundary refuses hosts that are not loopback names.
+    return TestClient(app, base_url="http://127.0.0.1:6174")
 
 
 def test_overview_lists_the_project_and_paper(client, store):

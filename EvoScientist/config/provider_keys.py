@@ -582,11 +582,36 @@ def check_s2_key(api_key: str) -> KeyCheck:
             return _INVALID
         if resp.status_code == 429:
             return KeyCheck(
-                "inconclusive", "Validation inconclusive — rate-limited, try again later"
+                "inconclusive",
+                "Validation inconclusive — rate-limited, try again later",
             )
         return KeyCheck(
             "inconclusive", f"Validation inconclusive (HTTP {resp.status_code})"
         )
+    except Exception as e:
+        return _classify_validation_error(e)
+
+
+def check_jina_key(api_key: str) -> KeyCheck:
+    """Check a Jina Reader API key with a minimal read.
+
+    Jina Reader (``r.jina.ai``) works unauthenticated (with a lower rate
+    limit), so a bad key does not fail the fetch itself: it 401s.
+    """
+    if not api_key:
+        return _SKIPPED
+
+    try:
+        import httpx
+
+        resp = httpx.get(
+            "https://r.jina.ai/https://example.com",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            return KeyCheck("valid", "Valid")
+        return _status_result(resp.status_code)
     except Exception as e:
         return _classify_validation_error(e)
 

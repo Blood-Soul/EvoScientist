@@ -13,15 +13,16 @@ from .store import list_observation_documents
 DEFAULT_MAX_INLINE_OBSERVATION_INDEX_CHARS = 12_000
 DEFAULT_INLINE_ROWS_PER_SESSION = 3
 
-# Each block gets its own budget rather than consuming one shared pool in
-# sequence. Under the shared pool the observation block ran first and the
-# experience block second, so a library of any real size spent the whole budget
-# on experience lines and the paper full-text block was never emitted at all --
-# while the prompt still instructed the agent to use `search_paper_text`. The
-# fractions are of `max_inline_chars`, so callers keep one knob.
-_OBSERVATION_BUDGET_FRACTION = 0.55
+# The experience and full-text blocks each have a ceiling, and the observation
+# block takes whatever they leave. Under one shared pool filled in sequence the
+# experience block ran second and spent the whole budget on experience lines, so
+# the paper full-text block was never emitted at all -- while the prompt still
+# instructed the agent to use `search_paper_text`. The ceilings are fractions of
+# `max_inline_chars`, so callers keep one knob, and the observation block is
+# guaranteed the remainder of at least ``1 - sum(ceilings)`` of it.
 _EXPERIENCE_BUDGET_FRACTION = 0.15
 _FULLTEXT_BUDGET_FRACTION = 0.30
+_BLOCK_SEPARATOR = "\n\n"
 
 
 def build_observation_index_context(
@@ -45,32 +46,33 @@ def build_observation_index_context(
     claim space first and the rest fill what is left, so one session that wrote
     many observations cannot push the others out; ``None`` fills by time alone.
     """
-    blocks = [
-        _format_observation_index_context(
-            _observation_documents(memory_dir=memory_dir, project_id=project_id),
-            include_counts=True,
-            include_paths=True,
-            include_search_hints=include_search_hints,
-            can_search=include_search_hints,
-            empty_context=True,
-            intro="Indexed observations:",
-            max_inline_chars=_budget(max_inline_chars, _OBSERVATION_BUDGET_FRACTION),
-            rows_per_session=rows_per_session,
-        ),
-        _build_experience_index(
-            memory_dir=memory_dir,
-            project_id=project_id,
-            remaining=_budget(max_inline_chars, _EXPERIENCE_BUDGET_FRACTION),
-        ),
-        # Full text can exist without experiences -- extraction is persisted
-        # after the text and may have failed -- so this block is independent.
-        _build_paper_fulltext_index(
-            memory_dir=memory_dir,
-            project_id=project_id,
-            remaining=_budget(max_inline_chars, _FULLTEXT_BUDGET_FRACTION),
-        ),
-    ]
-    return "\n\n".join(block for block in blocks if block)
+    experience = _build_experience_index(
+        memory_dir=memory_dir,
+        project_id=project_id,
+        remaining=_budget(max_inline_chars, _EXPERIENCE_BUDGET_FRACTION),
+    )
+    # Full text can exist without experiences -- extraction is persisted
+    # after the text and may have failed -- so this block is independent.
+    fulltext = _build_paper_fulltext_index(
+        memory_dir=memory_dir,
+        project_id=project_id,
+        remaining=_budget(max_inline_chars, _FULLTEXT_BUDGET_FRACTION),
+    )
+    others = [block for block in (experience, fulltext) if block]
+    taken = sum(len(block) + len(_BLOCK_SEPARATOR) for block in others)
+    observations = _format_observation_index_context(
+        _observation_documents(memory_dir=memory_dir, project_id=project_id),
+        include_counts=True,
+        include_paths=True,
+        include_search_hints=include_search_hints,
+        can_search=include_search_hints,
+        empty_context=True,
+        intro="Indexed observations:",
+        max_inline_chars=max(max_inline_chars - taken, 0),
+        rows_per_session=rows_per_session,
+    )
+    blocks = [observations, *others]
+    return _BLOCK_SEPARATOR.join(block for block in blocks if block)
 
 
 def _budget(max_inline_chars: int, fraction: float) -> int:
@@ -388,7 +390,11 @@ def _format_observation_index_context(
 
 
 def _frame_only(
-    *, header: Sequence[str], footer: Sequence[str], max_inline_chars: int
+    *,
+    header: Sequence[str],
+    footer: Sequence[str],
+    max_inline_chars: int,
+    keep_header: bool = False,
 ) -> str:
     """Render an entry-less block, dropping the hints when they do not fit.
 
@@ -402,7 +408,9 @@ def _frame_only(
     if len(full) <= max_inline_chars:
         return full
     bare = "\n".join([*header, "</observation_memory>"])
-    return bare if len(bare) <= max_inline_chars else ""
+    # ``keep_header`` is for a header that tells the reader what to do (search
+    # on demand), which is worth more than the budget it overruns.
+    return bare if keep_header or len(bare) <= max_inline_chars else ""
 
 
 def _truncated_observation_index_context(
@@ -448,6 +456,7 @@ def _truncated_observation_index_context(
         ],
         footer=footer,
         max_inline_chars=max_inline_chars,
+        keep_header=True,
     )
 
 

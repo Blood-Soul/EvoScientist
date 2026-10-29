@@ -984,8 +984,12 @@ API_KEY_FIELDS: frozenset[str] = frozenset(
         "custom_openai_api_key",
         "custom_anthropic_api_key",
         "tavily_api_key",
+        "s2_api_key",
+        "jina_api_key",
     }
 )
+# Paper-fetch credentials whose names do not end in ``_api_key``.
+PAPER_TOKEN_FIELDS: frozenset[str] = frozenset({"deepxiv_api_token"})
 CHANNEL_SECRET_FIELDS: frozenset[str] = frozenset(
     {
         "telegram_bot_token",
@@ -1008,7 +1012,9 @@ CHANNEL_SECRET_FIELDS: frozenset[str] = frozenset(
         "qq_app_secret",
     }
 )
-SECRET_FIELDS: frozenset[str] = API_KEY_FIELDS | CHANNEL_SECRET_FIELDS
+SECRET_FIELDS: frozenset[str] = (
+    API_KEY_FIELDS | PAPER_TOKEN_FIELDS | CHANNEL_SECRET_FIELDS
+)
 
 
 def secret_hint(key: str, value: str) -> str | None:

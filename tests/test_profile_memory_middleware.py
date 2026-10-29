@@ -19,7 +19,6 @@ from EvoScientist.memory.observations import (
     list_observation_documents,
     record_observation_file,
 )
-from EvoScientist.memory.observations.index import _OBSERVATION_BUDGET_FRACTION
 from EvoScientist.paths import Workspace
 
 
@@ -322,11 +321,10 @@ def test_observation_index_over_budget_keeps_entries_that_fit(tmp_path, monkeypa
         source_agent="research-agent",
     )
 
-    # `max_inline_chars` is the budget for the whole index, of which the
-    # observation block holds a fixed share; the other blocks get their own so a
-    # large experience library cannot starve them. The value here is sized so
-    # the observation share lands between one entry and two.
-    max_inline_chars = 2_800
+    # Sized so the budget lands between one entry and two; the search hints
+    # (which route paper-subject queries to `search_experience`) are part of
+    # the frame it has to cover.
+    max_inline_chars = 1_750
     context = build_observation_index_context(
         memory_dir=memories,
         project_id=project_id,
@@ -373,12 +371,8 @@ def test_observation_index_lists_newest_first_and_drops_the_oldest(
     full = build_observation_index_context(
         memory_dir=memories, project_id=project_id, max_inline_chars=100_000
     )
-    # The observation block only gets its share of the inline budget; size the
-    # total so that share falls just short of the full observation block.
     truncated = build_observation_index_context(
-        memory_dir=memories,
-        project_id=project_id,
-        max_inline_chars=int((len(full) - 1) / _OBSERVATION_BUDGET_FRACTION),
+        memory_dir=memories, project_id=project_id, max_inline_chars=len(full) - 1
     )
 
     assert full.index("newest observation") < full.index("middle observation")

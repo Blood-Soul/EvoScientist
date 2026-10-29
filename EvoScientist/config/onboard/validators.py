@@ -94,41 +94,7 @@ validate_kimi_key = _pair("check_kimi_key")
 validate_xiaomi_key = _pair("check_xiaomi_key")
 validate_tavily_key = _pair("check_tavily_key")
 validate_s2_key = _pair("check_s2_key")
-
-
-def validate_jina_key(api_key: str) -> tuple[bool, str]:
-    """Validate a Jina Reader API key against a minimal read.
-
-    Jina Reader (``r.jina.ai``) works unauthenticated (lower rate limit), so
-    an invalid key doesn't fail the fetch itself — it 401s instead.
-
-    Args:
-        api_key: The API key to validate.
-
-    Returns:
-        Tuple of (is_valid, message).
-    """
-    if not api_key:
-        return True, "Skipped (no key provided)"
-
-    try:
-        import httpx
-
-        resp = httpx.get(
-            "https://r.jina.ai/https://example.com",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            return True, "Valid"
-        if resp.status_code in (401, 403):
-            return False, "Invalid API key"
-        return False, f"Validation inconclusive (HTTP {resp.status_code})"
-    except Exception as e:
-        classified = _classify_validation_error(e)
-        if classified is not None:
-            return classified
-        return False, f"Error: {e}"
+validate_jina_key = _pair("check_jina_key")
 
 
 def validate_deepxiv_token(api_key: str) -> tuple[bool, str]:
