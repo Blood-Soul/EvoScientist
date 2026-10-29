@@ -315,6 +315,7 @@ def _configured_system_prompt(cfg, work_dir: str | Path) -> str:
         dangerous=cfg.dangerous_mode,
         cwd=real_cwd,
         bash_on_windows=uses_bash(),
+        research_tree=getattr(cfg, "research_tree_enabled", False),
     )
 
 
@@ -747,6 +748,13 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
         # main agent keeps it.
         if not getattr(cfg, "memory_experience_coach_enabled", True):
             base_tools.append(policy_tool)
+
+    if getattr(cfg, "research_tree_enabled", False):
+        from .research_tree.tools import create_research_tree_tools
+
+        for tool in create_research_tree_tools(workspace.root):
+            tool_registry[tool.name] = tool
+            base_tools.append(tool)
 
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search

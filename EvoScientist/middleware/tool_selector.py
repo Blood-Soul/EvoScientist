@@ -101,6 +101,16 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         # and no way to verify them against the papers themselves.
         "search_paper_text",
         "read_paper",
+        # Research tree (config research_tree_enabled). The prompt directs every
+        # step through these; hiding one would leave the agent unable to open or
+        # close a node while the record still expects it.
+        "tree_init",
+        "tree_status",
+        "tree_history",
+        "tree_new",
+        "tree_finish",
+        "tree_insight",
+        "tree_finalize",
     }
 )
 

@@ -12,6 +12,8 @@ The main agent's system prompt is assembled by :func:`get_system_prompt` from:
 - :data:`DELEGATION_STRATEGY` — sub-agent delegation strategy (sync sub-agents)
 - :data:`ASYNC_NOTIFICATIONS` — how to triage `[Async tasks update]` signals
   from async sub-agents
+- :data:`RESEARCH_TREE` — the tree-shaped research record kept by the
+  ``tree_*`` tools (only when ``research_tree_enabled``)
 
 Built-in sub-agent prompts live in ``EvoScientist/subagents/*.yaml``.
 
@@ -471,6 +473,25 @@ It is fine to fetch one task and defer another from the same batch.
 """
 
 # =============================================================================
+# Research tree (opt-in: config research_tree_enabled)
+# =============================================================================
+
+RESEARCH_TREE = """# Research Tree
+
+For an end-to-end research task, one that comes with a statement of your working conditions (hardware, time, memory, network) and a concrete goal, run the research as a tree of nodes kept by the `tree_*` tools. A node is one hypothesis with its own git branch and worktree at `nodes/<id>/`; each finished node becomes one commit, so `git log` is the research trajectory.
+
+- **Facts come from the tools, decisions from you.** Scores, deltas against the parent, the clock, parent links and outcomes are written by `tree_finish` and `tree_status`; the score comes from a frozen judge you cannot change. Never state a score as fact that `tree_finish` did not return. You choose what to try, which history to read, and write the narrative of each node.
+- **Start.** Read the conditions and the task in full and write the hard limits down. Put the task data in place, then call `tree_init`. Survey the field (paper-navigator, paper-experience, stored experience) and group what you find by mechanism, so that candidate directions differ in kind and not in hyperparameters. The first node is a cheap, valid baseline: a valid deliverable must exist before anything ambitious runs.
+- **Every step starts from the record.** Call `tree_status`, then `tree_history` for the nodes that bear on the decision. Read them in order, not only the best one: what a node tried depends on what the earlier nodes showed, and a failed node says what not to repeat. Do not repeat a direction the record shows failed under the same conditions; if you retry one, say what is different. Cite what you built on in `based_on`.
+- **Ask whether the record is enough.** Before committing a full node, check whether the record settles the question this step depends on. If it hinges on something nobody has measured (does this component matter, is the error in the representation or in the decision rule), open a `pilot` first: a small time-boxed experiment on a subset or a short run that probes only that uncertainty, then decide with its result. Do not pilot what the record already answers.
+- **One hypothesis per node.** Open each node with `tree_new`, stating what you expect and what would refute it. To refine a finished node, diagnose from its own errors first (the slices in its record), then change one major thing. When `tree_status` shows two nodes that are right on different rows, consider a merge.
+- **Build through sub-agents.** You do not write training code. Give a sub-agent the node directory and a self-contained brief: the hypothesis, the budget, what to reuse from other nodes, which approaches the record shows are dead ends, the files the node must contain, and what to report. Close the node with `tree_finish` and take the judge's number, not the sub-agent's claim.
+- **Learn from the trajectory.** After every two or three nodes, record what the sequence shows with `tree_insight`: when the situation looks like X, the step that worked or failed was Y, with the nodes that show it. Mark an insight contradicted when a later node refutes it.
+- **Time is a hard limit.** `tree_status` holds the clock. One GPU node runs at a time. Do not open a node that cannot finish; the last minutes belong to the deliverable. The champion's deliverable is kept at the project root automatically. Finish with `tree_finalize` and report the tree: what was tried, what won, what failed and why.
+- **Your context is not the record.** The tree is. Before each decision re-read it instead of relying on memory of earlier steps.
+"""
+
+# =============================================================================
 # Combined exports
 # =============================================================================
 
@@ -480,6 +501,7 @@ def get_system_prompt(
     dangerous: bool = False,
     cwd: str | None = None,
     bash_on_windows: bool = False,
+    research_tree: bool = False,
 ) -> str:
     """Generate the complete static system prompt.
 
@@ -507,6 +529,8 @@ def get_system_prompt(
         bash_on_windows: The agent's commands run in Git Bash on Windows
             (:func:`EvoScientist.agent_shell.uses_bash`); the guidelines say
             so, and dangerous mode shows Windows paths with forward slashes.
+        research_tree: Append :data:`RESEARCH_TREE`; set when the ``tree_*``
+            tools are registered (config ``research_tree_enabled``).
 
     Returns:
         Combined static system prompt string.
@@ -527,4 +551,6 @@ def get_system_prompt(
         DELEGATION_STRATEGY,
         ASYNC_NOTIFICATIONS,
     ]
+    if research_tree:
+        sections.append(RESEARCH_TREE)
     return "\n".join(sections)

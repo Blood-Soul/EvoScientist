@@ -472,6 +472,13 @@ class EvoScientistConfig:
     # context the gate does not use.
     memory_experience_coach_recent_messages: int = 6
 
+    # Research tree. Registers the `tree_*` tools and appends the research-tree
+    # section to the system prompt: the agent runs an end-to-end research task as
+    # a tree of git-backed nodes, reads the record before each decision, and the
+    # tools write the facts (scores from a frozen judge, clock, parents). Off by
+    # default; the judge is reached through EVOSCIENTIST_TREE_JUDGE_URL.
+    research_tree_enabled: bool = False
+
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
     default_workdir: str = ""
@@ -1445,6 +1452,7 @@ _ENV_MAPPINGS = {
         "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_MAX_SELECTED"
     ),
     "memory_experience_coach_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED",
+    "research_tree_enabled": "EVOSCIENTIST_RESEARCH_TREE_ENABLED",
     "memory_experience_coach_recent_messages": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES"
     ),
