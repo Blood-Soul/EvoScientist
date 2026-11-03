@@ -110,6 +110,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         recent_messages: int = 6,
         background: bool = False,
         max_wait_steps: int = 5,
+        max_wait_seconds: float = 90.0,
         idle_trigger_steps: int = 12,
         recent_actions: int = 10,
         candidate_limit: int = 24,
@@ -133,6 +134,10 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         # Background mode and its bookkeeping.
         self._background = background
         self._max_wait_steps = max_wait_steps
+        # A forced wait must end: if a derivation hangs (model endpoint stuck, proxy
+        # down) the agent would otherwise hang with it. After this many seconds the
+        # derivation is cancelled and the agent carries on without guidance.
+        self._max_wait_seconds = max_wait_seconds
         self._idle_trigger_steps = idle_trigger_steps
         self._step = 0
         self._pending: asyncio.Task[str] | None = None
@@ -444,7 +449,16 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         if not task.done():
             if not block:
                 return ""
-            await asyncio.wait({task})
+            await asyncio.wait({task}, timeout=self._max_wait_seconds)
+            if not task.done():
+                task.cancel()
+                self._pending = None
+                await self._trace(
+                    "coach_timeout",
+                    waited_seconds=round(time.monotonic() - self._pending_started, 1),
+                    age_steps=self._step - self._pending_step,
+                )
+                return ""
         self._pending = None
         try:
             suggestion = task.result()
