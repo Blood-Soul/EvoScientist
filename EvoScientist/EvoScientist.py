@@ -357,6 +357,7 @@ def _inject_subagent_middleware(
         ToolErrorHandlerMiddleware,
         ToolHistoryRepairMiddleware,
         create_context_editing_middleware,
+        create_experience_coach_middleware,
         create_memory_lifecycle_middleware,
         create_memory_middleware,
         create_per_run_summarization_middleware,
@@ -372,6 +373,25 @@ def _inject_subagent_middleware(
     for sa in subs:
         name = str(sa.get("name") or "sub-agent")
         source_type = MemorySourceType.SUBAGENT
+        # Tools are still YAML names here (`_tool_names`) on the normal path, or
+        # already objects when a caller resolved them first.
+        granted = {
+            t if isinstance(t, str) else getattr(t, "name", "")
+            for t in [*(sa.get("_tool_names") or []), *(sa.get("tools") or [])]
+        }
+        # A subagent the config names gets its own coach (same pipeline as the
+        # main agent's). It must not also hold the pull tool, so the two routes
+        # stay mutually exclusive; the YAML is what to fix if both are granted.
+        coached = (
+            memory_controls.experience_policy_enabled
+            and memory_controls.experience_coach_enabled
+            and name in memory_controls.experience_coach_subagents
+        )
+        if coached and "apply_experience" in granted:
+            raise ValueError(
+                f"Subagent {name!r} is coached (memory_experience_coach_subagents) "
+                "and also holds apply_experience: pick one route"
+            )
         memory_middleware = create_memory_middleware(
             memory_dir,
             workspace_dir=workspace.root,
@@ -392,11 +412,13 @@ def _inject_subagent_middleware(
             ),
             # Gated on the subagent actually holding the tool: the instructions
             # tell it to route reuse through `apply_experience`, which is wrong
-            # guidance for a subagent whose YAML does not grant it.
+            # guidance for a subagent whose YAML does not grant it. A coached
+            # subagent is told that guidance arrives on its own instead.
             enable_experience_policy=(
                 memory_controls.experience_policy_enabled
-                and "apply_experience" in (sa.get("tools") or [])
+                and ("apply_experience" in (sa.get("tools") or []) or coached)
             ),
+            enable_experience_coach=coached,
             memory_scheduler=memory_scheduler,
         )
         middleware = [
@@ -432,6 +454,19 @@ def _inject_subagent_middleware(
         ]
         if memory_controls.memory_enabled:
             middleware.append(memory_middleware)
+        if coached:
+            # After memory, as on the main agent. The aux model is the same one
+            # the main agent's coach uses; a subagent keeps the main model for its
+            # own work, but a gate call is the one-off helper kind.
+            middleware.append(
+                create_experience_coach_middleware(
+                    memory_dir=memory_dir,
+                    project_id=memory_middleware.project_id,
+                    model=None,
+                    max_selected=memory_controls.experience_policy_max_selected,
+                    recent_messages=memory_controls.experience_coach_recent_messages,
+                )
+            )
         if memory_controls.worker_needed(MemoryObservationTarget.SUBAGENT_WORKER):
             middleware.append(
                 create_memory_lifecycle_middleware(
@@ -745,8 +780,12 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
         # does that judgement on every step instead, so handing the main agent
         # the tool as well would only buy a second, worse-phrased route to the
         # same pipeline. With the coach off, the tool is the only route and the
-        # main agent keeps it.
-        if not getattr(cfg, "memory_experience_coach_enabled", True):
+        # main agent keeps it. With `memory_experience_main_reuse_enabled` off the
+        # main agent only coordinates: it gets neither route, and so neither does
+        # the general-purpose subagent that inherits its tools.
+        if getattr(cfg, "memory_experience_main_reuse_enabled", True) and not getattr(
+            cfg, "memory_experience_coach_enabled", True
+        ):
             base_tools.append(policy_tool)
 
     if getattr(cfg, "research_tree_enabled", False):
@@ -1158,7 +1197,12 @@ def _get_default_middleware(
         ),
         enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
         enable_experience_search=memory_controls.experience_search_enabled,
-        enable_experience_policy=memory_controls.experience_policy_enabled,
+        # A main agent that only coordinates (`experience_main_reuse_enabled` off)
+        # is told about neither route: it has no coach and no tool to describe.
+        enable_experience_policy=(
+            memory_controls.experience_policy_enabled
+            and (memory_controls.experience_main_reuse_enabled or for_async_subagent)
+        ),
         # Must mirror the condition that appends the coach middleware below: the
         # two blocks describe mutually exclusive routes, so an agent told that
         # guidance arrives on its own has to be an agent the coach is actually
@@ -1236,6 +1280,7 @@ def _get_default_middleware(
     if (
         memory_controls.experience_policy_enabled
         and memory_controls.experience_coach_enabled
+        and memory_controls.experience_main_reuse_enabled
         and not for_async_subagent
     ):
         mw.append(

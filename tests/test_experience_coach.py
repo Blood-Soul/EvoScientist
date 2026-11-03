@@ -926,3 +926,134 @@ class TestCoachTraceRecordsEverythingItDecides:
         assert gate["seconds"] >= 0
         assert gate["need"] is True
         assert "learning rate" in gate["raw_output"]
+
+
+class TestCoordinatorMainAgent:
+    """`memory_experience_main_reuse_enabled` off: the main agent only coordinates."""
+
+    @staticmethod
+    def _cfg(**over: Any) -> Any:
+        from types import SimpleNamespace
+
+        base = dict(
+            memory_experience_search_enabled=True,
+            memory_paper_fulltext_enabled=True,
+            memory_experience_policy_enabled=True,
+            memory_experience_coach_enabled=True,
+            memory_experience_policy_max_selected=4,
+            memory_experience_main_reuse_enabled=True,
+            research_tree_enabled=False,
+        )
+        return SimpleNamespace(**{**base, **over})
+
+    @pytest.mark.parametrize("coach", [True, False])
+    def test_no_reuse_tool_on_the_main_agent(self, tmp_path: Path, coach: bool) -> None:
+        from EvoScientist import EvoScientist as evo
+
+        ws = Workspace(tmp_path)
+        cfg = self._cfg(
+            memory_experience_main_reuse_enabled=False,
+            memory_experience_coach_enabled=coach,
+        )
+        registry, base = evo._build_paper_tools(cfg=cfg, workspace=ws, work_dir=tmp_path)
+        assert "apply_experience" in registry  # subagent YAML still resolves
+        assert not any(t.name == "apply_experience" for t in base)
+
+    def test_default_keeps_the_tool_with_the_coach_off(self, tmp_path: Path) -> None:
+        from EvoScientist import EvoScientist as evo
+
+        cfg = self._cfg(memory_experience_coach_enabled=False)
+        _, base = evo._build_paper_tools(
+            cfg=cfg, workspace=Workspace(tmp_path), work_dir=tmp_path
+        )
+        assert any(t.name == "apply_experience" for t in base)
+
+    def test_main_agent_has_no_coach_and_no_reuse_paragraph(self) -> None:
+        from EvoScientist.middleware.memory import (
+            EXPERIENCE_COACH_INSTRUCTIONS,
+            EXPERIENCE_POLICY_INSTRUCTIONS,
+        )
+
+        middleware, memory = TestAgentWiring._stack(
+            memory_experience_main_reuse_enabled=False
+        )
+        assert not any(getattr(m, "name", "") == "experience_coach" for m in middleware)
+        text = memory._observation_memory_instructions()
+        assert EXPERIENCE_COACH_INSTRUCTIONS not in text
+        assert EXPERIENCE_POLICY_INSTRUCTIONS not in text
+        # Retrieval stays: reading the library is not the reuse layer.
+        assert "search_experience" in text
+
+
+class TestCoachedSubagents:
+    """`memory_experience_coach_subagents`: named subagents get their own coach."""
+
+    @staticmethod
+    def _inject(tmp_path: Path, subs: list[dict], **over: Any) -> list[dict]:
+        from EvoScientist import EvoScientist as evo
+
+        cfg = evo._ensure_config()
+        saved = {key: getattr(cfg, key) for key in over}
+        try:
+            for key, value in over.items():
+                setattr(cfg, key, value)
+            evo._inject_subagent_middleware(
+                subs,
+                workspace=Workspace(tmp_path),
+                cfg=cfg,
+                chat_model=MagicMock(profile={"max_input_tokens": 200_000}),
+            )
+        finally:
+            for key, value in saved.items():
+                setattr(cfg, key, value)
+        return subs
+
+    @staticmethod
+    def _memory(sub: dict) -> Any:
+        return next(
+            m for m in sub["middleware"] if type(m).__name__ == "EvoMemoryMiddleware"
+        )
+
+    @staticmethod
+    def _coached(sub: dict) -> bool:
+        return any(getattr(m, "name", "") == "experience_coach" for m in sub["middleware"])
+
+    def test_named_subagent_is_coached_and_told_so(self, tmp_path: Path) -> None:
+        subs = [
+            {"name": "planner-agent", "_tool_names": ["think_tool"], "tools": []},
+            {"name": "code-agent", "_tool_names": ["think_tool"], "tools": []},
+        ]
+        self._inject(
+            tmp_path, subs, memory_experience_coach_subagents="planner-agent"
+        )
+        planner, code = subs
+        assert self._coached(planner) and self._memory(planner)._enable_experience_coach
+        assert not self._coached(code) and not self._memory(code)._enable_experience_coach
+
+    def test_default_coaches_no_subagent(self, tmp_path: Path) -> None:
+        subs = [{"name": "planner-agent", "_tool_names": ["think_tool"], "tools": []}]
+        self._inject(tmp_path, subs)
+        assert not self._coached(subs[0])
+
+    def test_coached_subagent_cannot_also_hold_the_pull_tool(self, tmp_path: Path) -> None:
+        subs = [
+            {
+                "name": "planner-agent",
+                "_tool_names": ["think_tool", "apply_experience"],
+                "tools": [],
+            }
+        ]
+        with pytest.raises(ValueError, match="pick one route"):
+            self._inject(
+                tmp_path, subs, memory_experience_coach_subagents="planner-agent"
+            )
+
+    def test_coach_off_means_no_coached_subagent(self, tmp_path: Path) -> None:
+        subs = [{"name": "planner-agent", "_tool_names": ["think_tool"], "tools": []}]
+        self._inject(
+            tmp_path,
+            subs,
+            memory_experience_coach_enabled=False,
+            memory_experience_coach_subagents="planner-agent",
+        )
+        assert not self._coached(subs[0])

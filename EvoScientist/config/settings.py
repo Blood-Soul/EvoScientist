@@ -471,6 +471,18 @@ class EvoScientistConfig:
     # last few steps; paying for the whole trajectory on the auxiliary model buys
     # context the gate does not use.
     memory_experience_coach_recent_messages: int = 6
+    # Whether the main agent takes part in experience reuse at all. False: no
+    # coach on it, no `apply_experience` in its tool set (nor in the general-purpose
+    # subagent that inherits it), and no reuse paragraph in its memory
+    # instructions. For runs where the main agent only coordinates and reuse
+    # belongs to subagents (`memory_experience_coach_subagents`).
+    memory_experience_main_reuse_enabled: bool = True
+    # Comma-separated subagent names that get their own coach, same middleware
+    # and same pipeline as the main agent's. The gate then reads that subagent's
+    # own trajectory, whose first human turn is the task the main agent handed
+    # it. A coached subagent must not also hold `apply_experience`: the two
+    # routes are mutually exclusive (see TestRouteExclusivity). Empty: none.
+    memory_experience_coach_subagents: str = ""
 
     # Research tree. Registers the `tree_*` tools and appends the research-tree
     # section to the system prompt: the agent runs an end-to-end research task as
@@ -862,6 +874,8 @@ class MemoryControls:
     experience_policy_max_selected: int = 4
     experience_coach_enabled: bool = True
     experience_coach_recent_messages: int = 6
+    experience_main_reuse_enabled: bool = True
+    experience_coach_subagents: tuple[str, ...] = ()
 
     @classmethod
     def from_config(cls, config: EvoScientistConfig) -> MemoryControls:
@@ -877,6 +891,12 @@ class MemoryControls:
             experience_coach_enabled=config.memory_experience_coach_enabled,
             experience_coach_recent_messages=(
                 config.memory_experience_coach_recent_messages
+            ),
+            experience_main_reuse_enabled=config.memory_experience_main_reuse_enabled,
+            experience_coach_subagents=tuple(
+                name.strip()
+                for name in str(config.memory_experience_coach_subagents or "").split(",")
+                if name.strip()
             ),
         )
 
@@ -1457,6 +1477,12 @@ _ENV_MAPPINGS = {
     "research_tree_enabled": "EVOSCIENTIST_RESEARCH_TREE_ENABLED",
     "memory_experience_coach_recent_messages": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES"
+    ),
+    "memory_experience_main_reuse_enabled": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_REUSE_ENABLED"
+    ),
+    "memory_experience_coach_subagents": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_SUBAGENTS"
     ),
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
