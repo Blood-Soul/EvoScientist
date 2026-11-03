@@ -463,8 +463,8 @@ class EvoScientistConfig:
     # per-call and never written to state, so it does not grow the trajectory or
     # invalidate the prompt cache. Costs one auxiliary call per step that is not
     # short-circuited in code, plus two more when the gate opens. Disabling
-    # leaves the pull path (`apply_experience`, still granted to the research and
-    # planner subagents) as the only route into the reuse layer.
+    # leaves the pull path (`apply_experience`, held by the main agent only
+    # when the coach is off) as the only route into the reuse layer.
     memory_experience_coach_enabled: bool = True
     # How much of the trajectory tail the coach's gate reads. The gate names the
     # decision immediately ahead, so it needs the originating request plus the

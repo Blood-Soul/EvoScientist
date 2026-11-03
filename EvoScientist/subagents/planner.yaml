@@ -2,15 +2,13 @@ planner-agent:
   description: "Plan experiments: stages, success signals, and dependencies (no web search, no implementation)."
   # No web search by design, but planning decisions should be checkable against
   # papers already stored for this project rather than recalled from summaries.
-  # apply_experience is the primary memory path here: a plan is exactly where a
-  # source-bound experience record gets copied verbatim (the paper's dataset,
-  # model, and thresholds), and it returns those as values to re-derive instead.
+  # apply_experience is deliberately not granted: experience reuse (the policy
+  # layer) is the main agent's job, through the coach.
   tools:
     [
       think_tool,
       search_experience,
       list_experience,
-      apply_experience,
       search_paper_text,
       read_paper,
     ]
