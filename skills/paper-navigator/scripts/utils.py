@@ -60,6 +60,16 @@ class RateLimitExhausted(Exception):
     pass
 
 
+class S2NotConfigured(RateLimitExhausted):
+    """Semantic Scholar was not called because no ``S2_API_KEY`` is set.
+
+    Unauthenticated Semantic Scholar traffic is throttled hard, so this build
+    does not use it by default: every S2 request fails fast instead of burning
+    about 45 s on 429 retries. Subclassing ``RateLimitExhausted`` keeps every
+    existing ``except RateLimitExhausted`` fallback working unchanged.
+    """
+
+
 def _is_s2_url(url: str) -> bool:
     """Check if URL targets Semantic Scholar API."""
     return url.startswith(S2_BASE) or url.startswith(S2_RECOMMEND_BASE)
@@ -280,6 +290,11 @@ def request_with_retry(
     # Apply global rate pacer for Semantic Scholar API
     api = _classify_api(url)
     if api == "S2":
+        if not os.environ.get("S2_API_KEY"):
+            raise S2NotConfigured(
+                "Semantic Scholar is not configured in this build (no S2_API_KEY); "
+                "use scholar_search (arXiv/DeepXiv) or arxiv_monitor instead."
+            )
         pace_s2_request()
 
     # Inject S2_DATE_CUTOFF as `publicationDateOrYear` for filterable

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from .prompts import load_rerank_prompt, load_writer_prompt
 from .select import (
     DEFAULT_MAX_SELECTED,
     DEFAULT_RETRIEVE_LIMIT,
+    fetch_candidates,
     gather_candidates,
     rerank_candidates,
 )
@@ -50,8 +52,17 @@ async def derive_policy(
     max_selected: int = DEFAULT_MAX_SELECTED,
     model: Any | None = None,
     refresh: bool = False,
+    brief: str = "",
+    situation: str = "",
+    picked_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Derive one target-bound reuse policy for ``task``.
+
+    ``brief`` is the task brief; the writer is told it is the only authority on
+    what the task requires (see ``policy_write.md``). ``picked_ids`` are records
+    the gate already chose from its candidate list: the pipeline then fetches just
+    those and reranks them down, instead of running its own lexical retrieval. The
+    pull tool passes neither and keeps the original retrieve-then-rerank path.
 
     Returns a report carrying the policy plus the selection trail, so the
     caller can see which records were considered, which were used, and whether
@@ -97,15 +108,23 @@ async def derive_policy(
 
     model = quiet_model(model)
 
-    candidates = await _gather(
-        memory_dir=memory_dir,
-        project_id=project_id,
-        task=task,
-        topic=topic,
-        method=method,
-        retrieve_limit=retrieve_limit,
-        call_id=call_id,
-    )
+    if picked_ids:
+        candidates = await _fetch_picked(
+            memory_dir=memory_dir,
+            project_id=project_id,
+            picked_ids=picked_ids,
+            call_id=call_id,
+        )
+    else:
+        candidates = await _gather(
+            memory_dir=memory_dir,
+            project_id=project_id,
+            task=task,
+            topic=topic,
+            method=method,
+            retrieve_limit=retrieve_limit,
+            call_id=call_id,
+        )
     if not candidates:
         report = {
             "status": "no_candidates",
@@ -179,6 +198,8 @@ async def derive_policy(
         prompt=await load_writer_prompt(),
         memory_dir=memory_dir,
         call_id=call_id,
+        brief=brief,
+        situation=situation,
     )
     await _store(
         memory_dir=memory_dir,
@@ -220,6 +241,23 @@ async def _gather(
         topic=topic,
         method=method,
         limit=retrieve_limit,
+        call_id=call_id,
+    )
+
+
+async def _fetch_picked(
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+    picked_ids: Sequence[str],
+    call_id: str,
+) -> list[dict[str, Any]]:
+    """Fetch the records the gate named, in the order it named them."""
+    return await asyncio.to_thread(
+        fetch_candidates,
+        memory_dir=memory_dir,
+        project_id=project_id,
+        ids=list(picked_ids),
         call_id=call_id,
     )
 

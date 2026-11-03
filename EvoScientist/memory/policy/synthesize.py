@@ -73,11 +73,21 @@ async def synthesize_policy(
     prompt: str,
     memory_dir: str | Path | None = None,
     call_id: str | None = None,
+    brief: str = "",
+    situation: str = "",
 ) -> dict[str, Any]:
-    """Invoke the writer model and return the normalized policy."""
+    """Invoke the writer model and return the normalized policy.
+
+    ``brief`` is the task brief: facts the task states, each verified against the
+    statement. It is the only text the writer may cite when it says what the task
+    requires. ``situation``, ``task`` and ``state`` are descriptions written along
+    the way and carry no authority.
+    """
     filled = prompt.format(
+        brief=brief.strip() or "[no task brief available]",
+        situation=situation.strip() or "[not described]",
         task=task.strip(),
-        state=state.strip() or "[no project state provided]",
+        state=state.strip() or "[nothing recorded yet]",
         records=_render_records(selected),
     )
     response = await model.ainvoke(

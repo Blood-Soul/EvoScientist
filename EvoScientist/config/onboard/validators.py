@@ -93,7 +93,6 @@ validate_moonshot_key = _pair("check_moonshot_key")
 validate_kimi_key = _pair("check_kimi_key")
 validate_xiaomi_key = _pair("check_xiaomi_key")
 validate_tavily_key = _pair("check_tavily_key")
-validate_s2_key = _pair("check_s2_key")
 validate_jina_key = _pair("check_jina_key")
 
 

@@ -45,7 +45,6 @@ from .style import (
 from .validators import (
     validate_deepxiv_token,
     validate_jina_key,
-    validate_s2_key,
     validate_tavily_key,
 )
 
@@ -1037,34 +1036,6 @@ def _step_tavily_key(
         validate_tavily_key,
         skip_validation,
         placeholder=FormattedText([("fg:#858585", " (recommended for web search)")]),
-    )
-
-
-def _step_s2_key(
-    config: EvoScientistConfig,
-    skip_validation: bool = False,
-) -> str | None:
-    """Step: Enter Semantic Scholar API key for paper-navigator's full-text
-    fetch (higher rate limits, extra endpoints — optional).
-
-    Args:
-        config: Current configuration.
-        skip_validation: Skip API key validation.
-
-    Returns:
-        New API key or None if unchanged.
-    """
-    current = config.s2_api_key or os.environ.get("S2_API_KEY", "")
-
-    hint = f"Current: ***{current[-4:]}" if current else "Not set"
-    prompt_text = f"Semantic Scholar API key for paper lookup ({hint}, Enter to keep):"
-
-    return _prompt_and_validate_api_key(
-        prompt_text,
-        current,
-        validate_s2_key,
-        skip_validation,
-        placeholder=FormattedText([("fg:#858585", " (optional, higher rate limits)")]),
     )
 
 

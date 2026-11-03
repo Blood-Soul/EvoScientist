@@ -1,48 +1,56 @@
-"""Experience coach: push stored paper experience at the step that needs it.
+"""Experience coach: push stored paper experience at the decisions that need it.
 
 `apply_experience` is a *pull*. The agent has to notice that it is making a
 decision, remember the tool exists, and write the retrieval query itself. In
-practice all three fail together: the tool is not in the always-include set, so
-above the tool-selector threshold it can be filtered out of the request entirely;
-and when it does get called, the query is whatever sentence the agent wrote about
-its own situation, which is rarely the vocabulary a paper's abstract would use.
+practice all three fail together, so this middleware inverts the direction: it
+works out what experience bears on the agent's next decision and puts the result in
+front of the agent, without being asked.
 
-This middleware inverts the direction. On every model request it decides, on the
-auxiliary model, whether stored experience bears on the step about to be taken --
-and if it does, derives the retrieval facets itself, runs the existing reuse
-pipeline, and injects the resulting *guidance* into that one call. The agent is
-not asked to do anything; it finds the advice already in front of it.
+Roles (see ``memory/policy``):
+
+* the **task brief** is built once from the task statement, every fact carrying a
+  quotation checked against the statement. It is the only source of what the task
+  requires;
+* the **gate** reads the brief, the agent's recent actions and a catalog of the
+  library, decides whether stored experience bears on the decision, and names the
+  records it wants;
+* the **reranker** narrows the named records; the **writer** turns them into
+  guidance for this decision.
+
+Timing. The three model calls take about a minute, far longer than an agent step, so
+nothing waits for them by default:
+
+* a derivation **starts** only after a substantive action (writing or editing a
+  file, launching a job), or when the agent has gone ``idle_trigger_steps`` steps
+  without one. Reading files and polling processes are not decisions;
+* it runs **beside** the agent. The result is injected into the first model call
+  after it finishes;
+* if it has been outstanding for ``max_wait_steps`` agent steps the agent is made to
+  wait for it, so guidance never arrives arbitrarily late;
+* guidance delivered after the agent has acted since the snapshot starts with a line
+  saying what the agent did meanwhile, so the agent can judge whether it still
+  applies. It is never dropped silently for being old.
 
 Three properties are deliberate:
-
-**The reuse pipeline is unchanged.** `derive_policy` still does the work and the
-nine-field policy is still the product. The coach supplies a better-phrased query
-and better timing; it does not re-implement query-conditioned reuse. `apply_experience`
-stays registered for the subagents whose YAML grants it, so push and pull share
-one implementation and one cache.
 
 **The injection is per-call, never persisted.** `ModelRequest.override` returns a
 new request; only the returned `ModelResponse` is written to graph state. So the
 guidance is visible to the model exactly once, and the trajectory the next step
-caches is byte-identical to the one this step started from. Any scheme that wrote
-the guidance into history -- or, worse, rewrote an older one -- would invalidate
-every cached token after the edit point, on every step.
+caches is byte-identical to the one this step started from.
 
-**Most steps must cost nothing.** The gate is one auxiliary call, which is cheap
-but not free, and it runs on every step. So the short-circuits below run first, in
-code, without a model: an empty library has no answer to give; a step that
-follows a pure lookup is not a decision point; and facets identical to the last
-intervention's reuse the guidance already derived. A step that survives all three
-costs one call to ask, two more only if the answer is yes.
+**Most steps must cost nothing.** Before any model is asked, code answers for free:
+an empty library has nothing to say; the agent's last action was a pure lookup; no
+substantive action has happened since the last derivation.
 
-Cost per step, worst case: 0 short-circuited, 1 gate says no, 2 nothing rerank
-selects, 3 a full hit that misses the policy cache.
+**Failure is silence.** Reuse enhances the agent's own reasoning; a coach that cannot
+run must be invisible, not disruptive.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from collections import deque
@@ -59,21 +67,11 @@ from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
 
-# Library statistics are ~2ms on a real library and already computed once per
-# model request by the memory index block, but the coach runs on a different
-# schedule and must not add a second disk walk per step.
 _STATS_TTL_SECONDS = 30.0
-
-# How many past interventions to remember. This exists to answer "did we already
-# say this?" -- not to build a history the model reads. It is instance state, so
-# it never enters the trajectory and never affects the prompt prefix.
 _HISTORY_LIMIT = 8
 
-# Tools that gather context rather than commit to anything. A step whose last
-# action was one of these is mid-lookup: the agent is still reading, and a
-# decision it has not reached yet cannot be coached. Writes, code execution and
-# delegation are absent on purpose -- those are exactly the commitments worth
-# advising before, not after.
+# Tools that gather context rather than commit to anything. A step whose last action
+# was one of these is mid-lookup: the agent is still reading.
 _READ_ONLY_TOOLS = frozenset(
     {
         "list_experience",
@@ -86,7 +84,14 @@ _READ_ONLY_TOOLS = frozenset(
         "search_paper_text",
         "glob",
         "grep",
+        "check_process",
     }
+)
+
+# Actions that commit the agent to something. A derivation is started after one of
+# these: it is the moment a decision has just been taken or is about to be.
+_SUBSTANTIVE_TOOLS = frozenset(
+    {"write_file", "edit_file", "run_in_background", "execute", "task"}
 )
 
 
@@ -103,6 +108,11 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         model: Any | None = None,
         max_selected: int = 4,
         recent_messages: int = 6,
+        background: bool = False,
+        max_wait_steps: int = 5,
+        idle_trigger_steps: int = 12,
+        recent_actions: int = 10,
+        candidate_limit: int = 24,
     ) -> None:
         super().__init__()
         self._memory_dir = Path(memory_dir).expanduser()
@@ -110,14 +120,32 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         self._model = model
         self._max_selected = max_selected
         self._recent_messages = recent_messages
+        self._recent_actions = recent_actions
+        self._candidate_limit = candidate_limit
         self._stats: dict[str, Any] | None = None
         self._stats_at: float = 0.0
-        self._prompt: str | None = None
-        # Last intervention, kept so an unchanged decision does not pay for the
-        # same derivation twice in a row.
-        self._last_facets: tuple[str, str] | None = None
+        self._gate_prompt: str | None = None
+        self._brief: Any | None = None
+        self._brief_for: str = ""
+        self._last_picked: tuple[str, ...] | None = None
         self._last_suggestion: str = ""
         self._history: deque[dict[str, Any]] = deque(maxlen=_HISTORY_LIMIT)
+        # Background mode and its bookkeeping.
+        self._background = background
+        self._max_wait_steps = max_wait_steps
+        self._idle_trigger_steps = idle_trigger_steps
+        self._step = 0
+        self._pending: asyncio.Task[str] | None = None
+        self._pending_step = 0
+        self._pending_started = 0.0
+        self._pending_actions: list[str] = []
+        self._substantive_seen = 0
+        self._last_started_substantive = 0
+        # Idle time is counted from the start of the run, so nothing is derived
+        # before the agent has done anything at all.
+        self._last_started_step = 0
+        self._recorded_tool_ids: set[str] = set()
+        self._since_snapshot: list[str] = []
 
     # -- inspection ---------------------------------------------------------
 
@@ -129,12 +157,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
     # -- cheap, model-free precondition checks ------------------------------
 
     def _cached_stats(self) -> dict[str, Any] | None:
-        """Library counts, refreshed at most once per TTL.
-
-        Walks the library directory, so the async path calls this through
-        ``asyncio.to_thread`` -- never inline on the event loop, where it would
-        also trip langgraph dev's blockbuster detector.
-        """
+        """Library counts, refreshed at most once per TTL (disk walk, run in a thread)."""
         now = time.monotonic()
         if self._stats is None or (now - self._stats_at) > _STATS_TTL_SECONDS:
             try:
@@ -144,9 +167,6 @@ class ExperienceCoachMiddleware(AgentMiddleware):
                     memory_dir=self._memory_dir, project_id=self._project_id
                 )
             except Exception:
-                # An unreadable library is a reason to stay quiet, not to fail
-                # the agent's turn. Cache the failure so a broken path does not
-                # get re-walked on every step.
                 logger.debug("Experience library stats unavailable", exc_info=True)
                 self._stats = {}
             self._stats_at = now
@@ -154,13 +174,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
 
     @staticmethod
     def _last_tool_names(messages: list[Any]) -> set[str]:
-        """Names of the tools whose results the current step is reading.
-
-        Read backwards over the trailing ToolMessages to the AIMessage that
-        requested them, so a parallel batch is judged as one step. An agent that
-        fired `search_experience` and `read_memory` together is still looking
-        things up.
-        """
+        """Names of the tools whose results the current step is reading."""
         names: set[str] = set()
         for message in reversed(messages):
             if getattr(message, "type", "") == "tool":
@@ -172,12 +186,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         return names
 
     def _request_text(self, messages: list[Any]) -> str:
-        """The originating request: the first real human turn.
-
-        Synthetic HumanMessages (summarization, injected context) carry an
-        ``lc_source`` marker and are skipped -- the gate needs the goal the run
-        was given, which a summary paraphrases and an injection replaces.
-        """
+        """The originating request: the first real human turn."""
         from ..utils import format_message_content
 
         for message in messages:
@@ -198,22 +207,13 @@ class ExperienceCoachMiddleware(AgentMiddleware):
             return f"mid-lookup after {', '.join(sorted(tool_names))}"
         return ""
 
-    # -- the coaching step --------------------------------------------------
-
-    async def _load_prompt(self) -> str:
-        if self._prompt is None:
-            from ..memory.policy import load_gate_prompt
-
-            self._prompt = await load_gate_prompt()
-        return self._prompt
+    # -- the task brief -----------------------------------------------------
 
     def _resolve_model(self) -> Any:
         if self._model is None:
             from ..EvoScientist import _ensure_auxiliary_chat_model
 
             self._model = _ensure_auxiliary_chat_model()
-        # The gate, rerank and synthesis calls run inside the main agent's model
-        # node; untagged, their JSON is streamed out as the agent's own text.
         from .utils import quiet_model
 
         self._model = quiet_model(self._model)
@@ -224,13 +224,31 @@ class ExperienceCoachMiddleware(AgentMiddleware):
 
         await emit_trace_async(self._memory_dir, event, **fields)
 
+    async def _task_brief(self, statement: str) -> Any:
+        """Build the brief once per distinct task statement."""
+        if self._brief is not None and self._brief_for == statement:
+            return self._brief
+        from ..memory.policy import build_brief
+
+        brief = await build_brief(statement, self._resolve_model())
+        self._brief, self._brief_for = brief, statement
+        await self._trace("coach_brief", **brief.to_dict())
+        return brief
+
+    async def _load_gate_prompt(self) -> str:
+        if self._gate_prompt is None:
+            from ..memory.policy import load_gate_prompt
+
+            self._gate_prompt = await load_gate_prompt()
+        return self._gate_prompt
+
+    # -- the coaching step --------------------------------------------------
+
     async def _suggestion(self, messages: list[Any]) -> str:
-        """Run the coach for one step and return the guidance to inject.
+        """Run the coach for one decision point and return the guidance to inject.
 
         Returns ``""`` whenever nothing should be injected, which is the common
-        case. Every failure mode also returns ``""``: reuse is an enhancement to
-        the agent's own reasoning, so a coach that cannot run must be invisible
-        rather than disruptive.
+        case. Every failure mode also returns ``""``.
         """
         call_id = uuid.uuid4().hex[:12]
         stats = await asyncio.to_thread(self._cached_stats)
@@ -242,18 +260,33 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         from ..memory.policy import (
             decide_experience_need,
             derive_policy,
-            render_library,
-            render_recent,
+            render_activity,
+            render_catalog,
             render_suggestion,
+            situation_terms,
         )
 
         try:
+            brief = await self._task_brief(self._request_text(messages))
+            brief_text = brief.render()
+            activity = render_activity(messages, actions=self._recent_actions)
+            catalog = await asyncio.to_thread(
+                render_catalog,
+                memory_dir=self._memory_dir,
+                project_id=self._project_id,
+                # Built in code from text that exists, so the candidates do not
+                # depend on the gate having phrased anything correctly.
+                query=situation_terms(brief_text, activity),
+                candidates=self._candidate_limit,
+            )
             decision = await decide_experience_need(
-                request_text=self._request_text(messages),
-                recent_text=render_recent(messages, limit=self._recent_messages),
-                library_text=render_library(stats),
+                brief_text=brief_text,
+                activity_text=activity,
+                library_map=catalog["map"],
+                candidates_text=catalog["candidates"],
+                allowed_ids=catalog["candidate_ids"],
                 model=self._resolve_model(),
-                prompt=await self._load_prompt(),
+                prompt=await self._load_gate_prompt(),
                 memory_dir=self._memory_dir,
                 call_id=call_id,
             )
@@ -265,26 +298,22 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         if not decision["need"]:
             return ""
 
-        facets = (decision["topic"], decision["method"])
-        if facets == self._last_facets and self._last_suggestion:
-            # Same question as last time. Retrieval and rerank would re-run two
-            # aux calls before the policy cache is even consulted, and return the
-            # guidance already in hand.
-            await self._trace(
-                "coach_reuse", call_id=call_id, topic=facets[0], method=facets[1]
-            )
+        picked = tuple(decision["pick"])
+        if picked == self._last_picked and self._last_suggestion:
+            await self._trace("coach_reuse", call_id=call_id, pick=list(picked))
             return self._last_suggestion
 
         try:
             report = await derive_policy(
                 memory_dir=self._memory_dir,
                 project_id=self._project_id,
-                task=decision["task"],
-                state=decision["state"],
-                topic=decision["topic"],
-                method=decision["method"],
+                task=decision["purpose"],
+                state=activity,
                 max_selected=self._max_selected,
                 model=self._resolve_model(),
+                brief=brief_text,
+                situation=decision["situation"],
+                picked_ids=list(picked),
             )
         except Exception:
             logger.debug("Policy derivation failed; skipping coach", exc_info=True)
@@ -297,9 +326,9 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         await self._trace(
             "coach_inject",
             call_id=call_id,
-            topic=decision["topic"],
-            method=decision["method"],
-            task=decision["task"],
+            situation=decision["situation"],
+            purpose=decision["purpose"],
+            pick=list(picked),
             status=report.get("status"),
             cached=report.get("cached"),
             selected=report.get("selected") or [],
@@ -308,14 +337,13 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         )
         if not suggestion:
             return ""
-
-        self._last_facets = facets
+        self._last_picked = picked
         self._last_suggestion = suggestion
         self._history.append(
             {
                 "call_id": call_id,
-                "topic": decision["topic"],
-                "method": decision["method"],
+                "situation": decision["situation"],
+                "purpose": decision["purpose"],
                 "reason": decision["reason"],
                 "selected": report.get("selected") or [],
             }
@@ -326,16 +354,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
 
     @staticmethod
     def _inject(request: ModelRequest, suggestion: str) -> ModelRequest:
-        """Append the guidance as one extra human turn for this call only.
-
-        It goes at the end of ``messages`` rather than into the system message
-        because the advice is about *this* step: the system prompt is a stable
-        prefix shared by every call, and appending there would put step-specific
-        text in front of the whole trajectory, re-caching it each step. A
-        trailing message is legal wherever the loop pauses for a model call --
-        tool results have already landed by then -- and is dropped as soon as the
-        call returns, since only the response is persisted.
-        """
+        """Append the guidance as one extra human turn for this call only."""
         return request.override(
             messages=[
                 *request.messages,
@@ -351,19 +370,117 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        # The coach is async end to end (two awaited model calls and threaded
-        # disk reads). Driving that from the sync path would mean owning an event
-        # loop inside a middleware, so the sync path stays a pass-through and the
-        # coach is an async-execution feature.
+        # The coach is async end to end; the sync path is a pass-through.
         return handler(request)
+
+    # -- background timing --------------------------------------------------
+
+    def _observe_actions(self, messages: list[Any]) -> None:
+        """Count new substantive actions and remember what the agent did meanwhile."""
+        for message in messages:
+            if getattr(message, "type", "") != "ai":
+                continue
+            for call in getattr(message, "tool_calls", None) or []:
+                identifier = str(call.get("id", "")) if isinstance(call, dict) else ""
+                name = str(call.get("name", "")) if isinstance(call, dict) else ""
+                if not identifier or identifier in self._recorded_tool_ids:
+                    continue
+                self._recorded_tool_ids.add(identifier)
+                if name in _SUBSTANTIVE_TOOLS:
+                    self._substantive_seen += 1
+                    args = call.get("args") or {}
+                    target = ""
+                    if isinstance(args, dict):
+                        target = str(
+                            args.get("file_path")
+                            or args.get("command")
+                            or args.get("path")
+                            or ""
+                        )[:80]
+                    self._since_snapshot.append(f"{name} {target}".strip())
+
+    def _should_start(self) -> bool:
+        """Start a derivation after a substantive action, or after a long idle stretch."""
+        if self._pending is not None:
+            return False
+        if self._substantive_seen > self._last_started_substantive:
+            return True
+        return self._step - self._last_started_step >= self._idle_trigger_steps
+
+    def _start_background(self, messages: list[Any]) -> None:
+        self._pending_step = self._step
+        self._pending_started = time.monotonic()
+        self._last_started_substantive = self._substantive_seen
+        self._last_started_step = self._step
+        self._since_snapshot = []
+        self._pending = asyncio.create_task(self._derive_quietly(messages))
+
+    async def _derive_quietly(self, messages: list[Any]) -> str:
+        """Background body: never raises, so a failed derivation is just silence."""
+        try:
+            return await self._suggestion(messages)
+        except Exception:
+            logger.debug("Experience coach failed in background", exc_info=True)
+            return ""
+
+    async def _collect(self, *, block: bool) -> str:
+        """Take the finished guidance; with ``block`` wait for it to finish."""
+        task = self._pending
+        if task is None:
+            return ""
+        if not task.done():
+            if not block:
+                return ""
+            await asyncio.wait({task})
+        self._pending = None
+        try:
+            suggestion = task.result()
+        except BaseException:  # cancelled or failed: stay silent
+            return ""
+        if not suggestion:
+            return ""
+        age_steps = self._step - self._pending_step
+        meanwhile = list(self._since_snapshot)
+        await self._trace(
+            "coach_deliver",
+            age_steps=age_steps,
+            age_seconds=round(time.monotonic() - self._pending_started, 1),
+            blocked=block,
+            actions_meanwhile=meanwhile[:6],
+            chars=len(suggestion),
+        )
+        if meanwhile:
+            note = (
+                "Note: this guidance was prepared before your last "
+                f"{len(meanwhile)} commit(s) ("
+                + "; ".join(meanwhile[-4:])
+                + "). Check it against what you have already done; it may no "
+                "longer apply."
+            )
+            return f"{note}\n\n{suggestion}"
+        return suggestion
 
     async def awrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
+        messages = list(request.messages)
+        if self._background:
+            self._step += 1
+            self._observe_actions(messages)
+            overdue = (
+                self._pending is not None
+                and self._step - self._pending_step >= self._max_wait_steps
+            )
+            suggestion = await self._collect(block=overdue)
+            if self._should_start():
+                self._start_background(messages)
+            if suggestion:
+                request = self._inject(request, suggestion)
+            return await handler(request)
         try:
-            suggestion = await self._suggestion(list(request.messages))
+            suggestion = await self._suggestion(messages)
         except Exception:
             logger.debug("Experience coach failed; proceeding", exc_info=True)
             suggestion = ""
@@ -379,20 +496,25 @@ def create_experience_coach_middleware(
     model: Any | None = None,
     max_selected: int = 4,
     recent_messages: int = 6,
+    background: bool | None = None,
 ) -> ExperienceCoachMiddleware:
     """Factory for the experience coach (main agent only).
 
-    ``model`` is left unset by callers that want the configured auxiliary model,
-    resolved lazily on first use. Worth knowing: ``auxiliary_model`` defaults to
-    the main model, so the coach's cost argument only holds once a cheap
-    auxiliary is actually configured.
+    ``background`` defaults to on: the coach derives guidance beside the agent and
+    makes it wait only when a derivation has been outstanding for several steps. Set
+    ``EVOSCIENTIST_COACH_BLOCKING=1`` (or pass ``background=False``) for blocking
+    behaviour, which is what an ablation of the change needs.
     """
+    if background is None:
+        blocking = os.environ.get("EVOSCIENTIST_COACH_BLOCKING", "").strip().lower()
+        background = blocking not in {"1", "true", "yes", "on"}
     return ExperienceCoachMiddleware(
         memory_dir=memory_dir,
         project_id=project_id,
         model=model,
         max_selected=max_selected,
         recent_messages=recent_messages,
+        background=background,
     )
 
 

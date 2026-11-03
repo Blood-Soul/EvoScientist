@@ -10,16 +10,16 @@ from __future__ import annotations
 import argparse
 import sys
 
-import httpx
-
 import deepxiv_client
+import httpx
 from utils import (
     S2_BASE,
-    s2_headers,
-    request_with_retry,
     RateLimitExhausted,
+    S2NotConfigured,
     add_output_args,
     emit_results,
+    request_with_retry,
+    s2_headers,
 )
 
 S2_FIELDS = "paperId,corpusId,externalIds,title,authors,year,citationCount,influentialCitationCount,tldr,isOpenAccess,openAccessPdf,publicationVenue,abstract"
@@ -113,6 +113,12 @@ def search(
                 client, f"{S2_BASE}/paper/search", params, s2_headers()
             )
         return data.get("data", [])
+    except S2NotConfigured:
+        print(
+            "Note: Semantic Scholar is not configured; searching arXiv instead.",
+            file=sys.stderr,
+        )
+        return _fallback_arxiv_search(query, limit, year_min, year_max)
     except RateLimitExhausted:
         print(
             "⚠️  S2 rate limited after all retries. Falling back to arXiv search...",

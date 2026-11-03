@@ -13,12 +13,15 @@ synthesize → cache. The tool at ``tools/experience_policy.py`` wraps it.
 
 from __future__ import annotations
 
+from .brief import TaskBrief, build_brief
+from .catalog import render_catalog, situation_terms
 from .gate import (
     DEFAULT_RECENT_MESSAGES,
     GateOutputError,
     decide_experience_need,
     normalize_gate,
     parse_gate_json,
+    render_activity,
     render_library,
     render_recent,
 )
@@ -28,6 +31,7 @@ from .schema import BINDING_KINDS, VERDICTS, PolicyOutputError, normalize_policy
 from .select import (
     DEFAULT_MAX_SELECTED,
     DEFAULT_RETRIEVE_LIMIT,
+    fetch_candidates,
     gather_candidates,
     rerank_candidates,
     transferable_core,
@@ -47,8 +51,11 @@ __all__ = [
     "VERDICTS",
     "GateOutputError",
     "PolicyOutputError",
+    "TaskBrief",
+    "build_brief",
     "decide_experience_need",
     "derive_policy",
+    "fetch_candidates",
     "gather_candidates",
     "load_cached_policy",
     "load_gate_prompt",
@@ -58,10 +65,13 @@ __all__ = [
     "normalize_policy",
     "parse_gate_json",
     "parse_policy_json",
+    "render_activity",
+    "render_catalog",
     "render_library",
     "render_recent",
     "render_suggestion",
     "rerank_candidates",
+    "situation_terms",
     "store_policy",
     "synthesize_policy",
     "transferable_core",

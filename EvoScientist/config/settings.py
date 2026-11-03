@@ -202,8 +202,6 @@ class EvoScientistConfig:
         nvidia_api_key: NVIDIA API key for NVIDIA models.
         google_api_key: Google API key for Gemini models.
         tavily_api_key: Tavily API key for web search.
-        s2_api_key: Semantic Scholar API key (optional; higher rate limits for
-            paper-navigator's S2 lookups, used when fetching paper full text).
         deepxiv_api_token: DeepXiv API token (optional; arXiv search/fetch
             fallback used by paper-navigator when Semantic Scholar is
             unavailable or rate-limited).
@@ -251,7 +249,6 @@ class EvoScientistConfig:
     # (Semantic Scholar API -> arXiv/DeepXiv -> scraping fallback) and by the
     # Jina Reader fetch used for paper full text (memory experience
     # extraction, paper-navigator). Unset just means lower rate limits.
-    s2_api_key: str = ""
     deepxiv_api_token: str = ""
     jina_api_key: str = ""
 
@@ -984,7 +981,6 @@ API_KEY_FIELDS: frozenset[str] = frozenset(
         "custom_openai_api_key",
         "custom_anthropic_api_key",
         "tavily_api_key",
-        "s2_api_key",
         "jina_api_key",
     }
 )
@@ -1380,7 +1376,6 @@ _ENV_MAPPINGS = {
     "custom_anthropic_base_url": "CUSTOM_ANTHROPIC_BASE_URL",
     "ollama_base_url": "OLLAMA_BASE_URL",
     "tavily_api_key": "TAVILY_API_KEY",
-    "s2_api_key": "S2_API_KEY",
     "deepxiv_api_token": "DEEPXIV_API_TOKEN",
     "jina_api_key": "JINA_API_KEY",
     "default_mode": "EVOSCIENTIST_DEFAULT_MODE",
@@ -1800,8 +1795,6 @@ def _apply_config_to_env(config: EvoScientistConfig) -> None:
         os.environ["OLLAMA_BASE_URL"] = config.ollama_base_url
     if config.tavily_api_key and not os.environ.get("TAVILY_API_KEY"):
         os.environ["TAVILY_API_KEY"] = config.tavily_api_key
-    if config.s2_api_key and not os.environ.get("S2_API_KEY"):
-        os.environ["S2_API_KEY"] = config.s2_api_key
     if config.deepxiv_api_token and not os.environ.get("DEEPXIV_API_TOKEN"):
         os.environ["DEEPXIV_API_TOKEN"] = config.deepxiv_api_token
     if config.jina_api_key and not os.environ.get("JINA_API_KEY"):

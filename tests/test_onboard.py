@@ -1921,7 +1921,6 @@ class TestRunOnboard:
             mock_q.password.return_value.ask.side_effect = [
                 "",  # Provider API key (keep current)
                 "",  # Tavily key (keep current)
-                "",  # Semantic Scholar key (keep current)
                 "",  # DeepXiv token (keep current)
                 "",  # Jina Reader key (keep current)
             ]
@@ -1982,7 +1981,6 @@ class TestRunOnboard:
                 "",  # Main provider API key (keep current)
                 "sk-aux-openai",  # Auxiliary provider API key
                 "",  # Tavily key (keep current)
-                "",  # Semantic Scholar key (keep current)
                 "",  # DeepXiv token (keep current)
                 "",  # Jina Reader key (keep current)
             ]
