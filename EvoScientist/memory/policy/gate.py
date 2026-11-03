@@ -1,36 +1,39 @@
-"""The push-side gate: decide whether experience is wanted, and phrase the query.
+"""The gate: look at the situation and the library, then say what to consult.
 
-`apply_experience` is a *pull*: the agent has to remember the tool exists, judge
-its own need for experience, and hand-write the query. Two things go wrong. The
-query is capped by whatever sentence the agent happened to write, which is
-usually the vocabulary of its own situation rather than the vocabulary a paper
-would use; and the tool is absent from the always-include list, so above the
-tool-selector threshold it can be filtered out of the request entirely and the
-reuse layer silently stops running.
+Role. The gate answers two questions in one call: does the decision the agent is
+about to take have stored experience that bears on it, and if so, which records. It
+is the only stage that knows the agent's situation, so it is the stage that has to
+name what is wanted.
 
-This module is the other direction. One auxiliary-model call answers both halves
-of the question the agent would otherwise have to ask itself -- *is experience
-worth retrieving here* and *what should be retrieved* -- and returns the three
-retrieval facets plus the task and state strings the synthesis stage wants. The
-two halves are merged into one call because they are one judgement: naming the
-decision is what tells you whether there is a decision.
+What it sees (and why):
+* the task brief: facts the task states, each verified against the statement. The
+  one place a rule of the task can come from;
+* the agent's recent actions and their results: what happened, as recorded, with the
+  coach's own earlier guidance removed so the gate cannot read its own output back;
+* the agent's recent narration, labelled as the agent's words: it shows where the
+  agent is heading, but it is never a source of task rules;
+* the library: a map of topics and a short list of candidate records, so the gate
+  chooses from what exists instead of guessing the library's vocabulary.
 
-Merging them costs a model call on every step where the answer is "no", so the
-caller is expected to short-circuit in code first (empty library, mechanical
-step, facets unchanged since the last intervention). What remains here is the
-judgement that genuinely needs a model.
+What it returns:
+* ``need``;
+* ``situation``: what the agent is doing right now, in neutral words;
+* ``pick``: the ids of the records it wants (from the candidate list only);
+* ``purpose``: what it wants to decide with them.
 
-`need=false` is a first-class answer, mirroring the `verdict: decline` doctrine
-one stage down: the honest "stored experience does not bear on this step" is more
-useful than a manufactured relevance.
+It does not return topic, method, or state. Topic and method were guesses at the
+library's vocabulary; state was a paraphrase of the agent's work that the writer
+then read as fact. Candidates replace the former, the writer's own inputs the
+latter.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -41,13 +44,28 @@ from .trace import emit_trace_async, response_usage
 
 logger = logging.getLogger(__name__)
 
-# How much of the trajectory tail the gate reads. The gate is not being asked to
-# reconstruct the run -- it needs the original request plus enough of the recent
-# steps to name the decision immediately ahead. Paying for the whole trajectory
-# on the auxiliary model buys context the gate does not use.
 DEFAULT_RECENT_MESSAGES = 6
-MAX_MESSAGE_CHARS = 700
-MAX_REQUEST_CHARS = 2000
+# Action history shown to the gate: how many recent steps, and how much of each.
+DEFAULT_RECENT_ACTIONS = 10
+MAX_ACTION_CHARS = 260
+MAX_RESULT_CHARS = 260
+MAX_NARRATION_CHARS = 500
+MAX_PICKED = 8
+
+_GUIDANCE_BLOCK = re.compile(
+    r"<experience_guidance>.*?</experience_guidance>", re.DOTALL | re.IGNORECASE
+)
+# The agent habitually opens a reply by acknowledging the guidance it just got and
+# then restating it ("Guidance received. It asks for a balanced objective ...").
+# Dropping only the acknowledgement would leave the restatement, which is the
+# coach's own advice coming back as if it were the agent's situation. In the DuoRC
+# runs 56% of the agent's text blocks opened this way. So a block that opens by
+# acknowledging guidance is dropped whole; the actions and results still show what
+# the agent then did.
+_ECHO_LEAD = re.compile(
+    r"^\s*(?:\*\*)?(?:the\s+|this\s+)?guidance(?:\W|'s|\b)",
+    re.IGNORECASE,
+)
 
 
 class GateOutputError(Exception):
@@ -62,56 +80,104 @@ def _clean(text: str, limit: int) -> str:
     return collapsed[:limit] + " ...[truncated]"
 
 
-def render_recent(messages: list[Any], *, limit: int = DEFAULT_RECENT_MESSAGES) -> str:
-    """Render the trajectory tail as a compact transcript for the gate.
+def strip_echo(text: str) -> str:
+    """Remove the coach's own guidance and the agent's restatement of it."""
+    text = _GUIDANCE_BLOCK.sub(" ", text or "").strip()
+    return "" if _ECHO_LEAD.match(text) else text
 
-    Tool calls are rendered by name and arguments rather than dropped: "the agent
-    just called `search_paper_text` three times" is often the whole signal for
-    whether a decision is being approached or already resolved.
+
+def _brief_args(args: Any) -> str:
+    if isinstance(args, Mapping):
+        for key in ("command", "file_path", "path", "pattern", "query", "task", "url"):
+            if args.get(key):
+                return str(args[key])
+        return json.dumps(args, ensure_ascii=False, default=str)
+    return str(args or "")
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    return " ".join(
+        str(part.get("text", ""))
+        for part in content or []
+        if isinstance(part, Mapping) and part.get("type") == "text"
+    )
+
+
+def render_activity(
+    messages: Sequence[Any], *, actions: int = DEFAULT_RECENT_ACTIONS
+) -> str:
+    """The agent's recent history as the gate reads it.
+
+    Each step is the agent's narration (labelled as such, with the coach's echo
+    removed), then what it did, then what came back. Narration is kept because
+    without it the gate cannot tell where the agent is in its work; it is labelled
+    because it is the agent's own words and can say anything.
     """
-    rendered: list[str] = []
-    for message in messages[-limit:]:
-        role = getattr(message, "type", "") or type(message).__name__
-        body = _clean(format_message_content(message), MAX_MESSAGE_CHARS)
-        if not body:
+    results: dict[str, str] = {}
+    for message in messages:
+        if getattr(message, "type", "") == "tool":
+            results[str(getattr(message, "tool_call_id", ""))] = _clean(
+                format_message_content(message), MAX_RESULT_CHARS
+            )
+    steps: list[str] = []
+    for message in messages:
+        if getattr(message, "type", "") != "ai":
             continue
-        rendered.append(f"[{role}] {body}")
+        narration = _clean(strip_echo(_message_text(message)), MAX_NARRATION_CHARS)
+        calls = getattr(message, "tool_calls", None) or []
+        if not calls and not narration:
+            continue
+        lines = []
+        if narration:
+            lines.append(f"  agent says: {narration}")
+        for call in calls:
+            if not isinstance(call, Mapping):
+                continue
+            action = _clean(
+                f"{call.get('name', '')}: {_brief_args(call.get('args'))}",
+                MAX_ACTION_CHARS,
+            )
+            lines.append(f"  did: {action}")
+            outcome = results.get(str(call.get("id", "")))
+            if outcome:
+                lines.append(f"  result: {outcome}")
+        steps.append("\n".join(lines))
+    shown = steps[-actions:]
+    if not shown:
+        return "[no steps yet]"
+    return "\n".join(f"[step {i + 1}]\n{block}" for i, block in enumerate(shown))
+
+
+def render_recent(
+    messages: Sequence[Any], *, limit: int = DEFAULT_RECENT_MESSAGES
+) -> str:
+    """Compact transcript of the last few messages."""
+    rendered: list[str] = []
+    for message in list(messages)[-limit:]:
+        role = getattr(message, "type", "") or type(message).__name__
+        body = _clean(format_message_content(message), 700)
+        if body:
+            rendered.append(f"[{role}] {body}")
     return "\n".join(rendered)
 
 
 def render_library(stats: Mapping[str, Any] | None) -> str:
-    """Render library statistics so the gate knows what vocabulary exists.
-
-    Counts and facet values only, never a record listing: the gate runs on every
-    step that reaches it, so this block has to stay a fixed size as the library
-    grows. Its purpose is to stop the gate from asking for subject matter the
-    library provably does not hold.
-    """
+    """One-line library statistics, for callers that have no catalog."""
     if not stats:
         return "[library statistics unavailable]"
-    disciplines = ", ".join(
-        f"{name}({count})" for name, count in (stats.get("disciplines") or [])[:6]
-    )
-    domains = ", ".join(
-        f"{name}({count})" for name, count in (stats.get("top_domains") or [])[:8]
-    )
-    lines = [
-        f"records: {stats.get('records', 0)} from {stats.get('papers', 0)} papers",
-    ]
-    if disciplines:
-        lines.append(f"disciplines: {disciplines}")
-    if domains:
-        lines.append(f"domains: {domains}")
-    return "\n".join(lines)
+    return f"records: {stats.get('records', 0)} from {stats.get('papers', 0)} papers"
 
 
-def parse_gate_json(raw_output: str) -> dict[str, Any]:
+def parse_gate_json(
+    raw_output: str, *, allowed_ids: Sequence[str] | None = None
+) -> dict[str, Any]:
     """Parse the gate's decision, tolerating fenced JSON and trailing prose.
 
-    Raises ``GateOutputError`` rather than guessing. An unreadable gate output
-    must not be read as ``need=true`` (which would spend two more model calls on
-    a query nobody wrote) nor silently as ``need=false``; the caller decides, and
-    records the reason.
+    Raises ``GateOutputError`` rather than guessing: an unreadable output must not
+    be read as permission to spend two more model calls, nor as a silent no.
     """
     candidate = raw_output.strip()
     if candidate.startswith("```"):
@@ -130,65 +196,72 @@ def parse_gate_json(raw_output: str) -> dict[str, Any]:
             raise GateOutputError(f"gate returned malformed JSON: {exc.msg}") from exc
     if not isinstance(payload, dict):
         raise GateOutputError("gate output must be a JSON object")
-    return normalize_gate(payload)
+    return normalize_gate(payload, allowed_ids=allowed_ids)
 
 
-def normalize_gate(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Coerce a parsed gate payload into the fixed decision shape.
+def normalize_gate(
+    payload: Mapping[str, Any], *, allowed_ids: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """Coerce a parsed payload into the fixed decision shape.
 
-    ``need`` is read strictly: only a real boolean ``true`` or the string
-    ``"true"`` opens the gate. Anything else -- a missing key, a null, the string
-    ``"maybe"`` -- closes it, because the failure that matters is a malformed
-    output being read as permission to spend two more calls.
-
-    A ``need=true`` with no usable ``topic`` is downgraded to ``need=false``:
-    lexical retrieval with an empty topic returns the library in directory order,
-    which is not a recall path, it is noise with a confident shape.
+    ``need`` opens only on a real ``true``. Picked ids that are not in the candidate
+    list are dropped: the gate chooses from what exists. A ``need=true`` that picks
+    nothing usable is downgraded, because there is then nothing to consult.
     """
     raw_need = payload.get("need")
     need = raw_need is True or (
         isinstance(raw_need, str) and raw_need.strip().lower() == "true"
     )
-    topic = _clean(payload.get("topic") or "", 400)
-    method = _clean(payload.get("method") or "", 400)
-    task = _clean(payload.get("task") or "", 800)
-    state = _clean(payload.get("state") or "", 1200)
+    situation = _clean(payload.get("situation") or "", 500)
+    purpose = _clean(payload.get("purpose") or "", 500)
     reason = _clean(payload.get("reason") or "", 400)
-    if need and not topic:
+    raw_pick = payload.get("pick")
+    pick: list[str] = []
+    if isinstance(raw_pick, list):
+        allowed = set(allowed_ids) if allowed_ids is not None else None
+        for item in raw_pick:
+            identifier = str(item).strip()
+            if (
+                identifier
+                and identifier not in pick
+                and (allowed is None or identifier in allowed)
+            ):
+                pick.append(identifier)
+    pick = pick[:MAX_PICKED]
+    if need and not pick:
         need = False
         reason = (
-            f"{reason} [downgraded: gate asked for retrieval without a topic]"
+            f"{reason} [downgraded: no usable record picked]"
             if reason
-            else "downgraded: gate asked for retrieval without a topic"
+            else "downgraded: no usable record picked"
         )
     return {
         "need": need,
         "reason": reason,
-        "topic": topic,
-        "method": method,
-        # The writer reads `task` verbatim and it is part of the policy cache
-        # key, so an empty one would key every policy on the same string. Fall
-        # back to the topic, which is at least the subject being decided.
-        "task": task or topic,
-        "state": state,
+        "situation": situation,
+        "pick": pick,
+        "purpose": purpose or situation,
     }
 
 
 async def decide_experience_need(
     *,
-    request_text: str,
-    recent_text: str,
-    library_text: str,
+    brief_text: str,
+    activity_text: str,
+    library_map: str,
+    candidates_text: str,
+    allowed_ids: Sequence[str],
     model: Any,
     prompt: str,
     memory_dir: str | Path | None = None,
     call_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run the merged gate call and return the normalized decision."""
+    """Run the gate call and return the normalised decision."""
     filled = prompt.format(
-        request=_clean(request_text, MAX_REQUEST_CHARS) or "[no request text]",
-        recent=recent_text or "[no prior steps]",
-        library=library_text,
+        brief=brief_text or "[no task brief available]",
+        activity=activity_text or "[no steps yet]",
+        library_map=library_map,
+        candidates=candidates_text,
     )
     started = time.monotonic()
     response = await model.ainvoke(
@@ -197,17 +270,14 @@ async def decide_experience_need(
     seconds = round(time.monotonic() - started, 2)
     output = format_message_content(response).strip()
     try:
-        decision = parse_gate_json(output)
+        decision = parse_gate_json(output, allowed_ids=allowed_ids)
     except GateOutputError as error:
-        # Closed on an unreadable output: the expensive path must never open on
-        # a query the gate did not actually write.
         decision = {
             "need": False,
             "reason": f"gate output unreadable: {error}",
-            "topic": "",
-            "method": "",
-            "task": "",
-            "state": "",
+            "situation": "",
+            "pick": [],
+            "purpose": "",
         }
     if memory_dir is not None:
         await emit_trace_async(
@@ -215,9 +285,8 @@ async def decide_experience_need(
             "gate",
             call_id=call_id,
             raw_output=output,
-            request_text=request_text,
-            recent_text=recent_text,
-            library_text=library_text,
+            activity_text=activity_text,
+            candidates_text=candidates_text,
             seconds=seconds,
             usage=response_usage(response),
             **decision,
@@ -226,11 +295,15 @@ async def decide_experience_need(
 
 
 __all__ = [
+    "DEFAULT_RECENT_ACTIONS",
     "DEFAULT_RECENT_MESSAGES",
+    "MAX_PICKED",
     "GateOutputError",
     "decide_experience_need",
     "normalize_gate",
     "parse_gate_json",
+    "render_activity",
     "render_library",
     "render_recent",
+    "strip_echo",
 ]

@@ -173,6 +173,47 @@ def gather_candidates(
     return candidates
 
 
+def fetch_candidates(
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+    ids: list[str],
+    call_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch named records as candidates, keeping the caller's order.
+
+    Used when the gate has already chosen from its candidate list: the lexical
+    retrieval step is skipped and only those records go on to rerank and writing.
+    Unknown ids are ignored.
+    """
+    bodies = {
+        document.observation_id: document.text
+        for document in list_experience_documents(
+            memory_dir=memory_dir, project_id=project_id
+        )
+    }
+    candidates: list[dict[str, Any]] = []
+    for experience_id in dict.fromkeys(ids):
+        record = _experience_record(bodies.get(experience_id, ""))
+        if record is None:
+            continue
+        candidates.append(
+            {"id": experience_id, "record": record, "descriptor": _descriptor(record)}
+        )
+    emit_trace(
+        memory_dir,
+        "retrieve",
+        call_id=call_id,
+        project_id=project_id,
+        query="[picked by the gate]",
+        topic="",
+        method="",
+        candidate_ids=[item["id"] for item in candidates],
+        descriptors={item["id"]: item["descriptor"] for item in candidates},
+    )
+    return candidates
+
+
 async def rerank_candidates(
     *,
     candidates: list[dict[str, Any]],
@@ -253,6 +294,7 @@ async def rerank_candidates(
 __all__ = [
     "DEFAULT_MAX_SELECTED",
     "DEFAULT_RETRIEVE_LIMIT",
+    "fetch_candidates",
     "gather_candidates",
     "load_rerank_prompt",
     "rerank_candidates",

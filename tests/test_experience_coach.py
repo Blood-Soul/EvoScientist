@@ -22,6 +22,7 @@ from EvoScientist.memory.policy.gate import (
     GateOutputError,
     normalize_gate,
     parse_gate_json,
+    render_activity,
     render_library,
     render_recent,
 )
@@ -37,23 +38,27 @@ from EvoScientist.paths import Workspace
 class TestGateParsing:
     """The gate's output is JSON from a small model; read it defensively."""
 
+    IDS = ("E-1", "E-2", "E-3")
+
     def test_plain_json(self) -> None:
         decision = parse_gate_json(
-            '{"reason": "choosing a learning rate", "need": true, '
-            '"topic": "transformer fine-tuning", "method": "AdamW warmup", '
-            '"task": "pick a learning rate for a 7B model", "state": "no runs yet"}'
+            '{"reason": "choosing a threshold", "need": true, '
+            '"situation": "tuning the no-answer threshold", '
+            '"pick": ["E-1", "E-2"], "purpose": "set the no-answer threshold"}',
+            allowed_ids=self.IDS,
         )
         assert decision["need"] is True
-        assert decision["topic"] == "transformer fine-tuning"
-        assert decision["method"] == "AdamW warmup"
-        assert decision["state"] == "no runs yet"
+        assert decision["pick"] == ["E-1", "E-2"]
+        assert decision["purpose"] == "set the no-answer threshold"
+        assert decision["situation"] == "tuning the no-answer threshold"
 
     def test_fenced_json(self) -> None:
         decision = parse_gate_json(
-            '```json\n{"reason": "r", "need": true, "topic": "t"}\n```'
+            '```json\n{"reason": "r", "need": true, "pick": ["E-1"]}\n```',
+            allowed_ids=self.IDS,
         )
         assert decision["need"] is True
-        assert decision["topic"] == "t"
+        assert decision["pick"] == ["E-1"]
 
     def test_json_with_trailing_prose(self) -> None:
         decision = parse_gate_json(
@@ -71,24 +76,23 @@ class TestGateParsing:
 
 
 class TestGateNormalization:
-    """``need`` is read strictly, because a false positive costs two calls."""
+    """``need`` is read strictly, and the gate may only name records that exist."""
 
     @pytest.mark.parametrize("raw", [True, "true", "True", " true "])
     def test_truthy_forms_open_the_gate(self, raw: Any) -> None:
-        assert normalize_gate({"need": raw, "topic": "t"})["need"] is True
+        assert normalize_gate({"need": raw, "pick": ["E-1"]})["need"] is True
 
     @pytest.mark.parametrize(
         "raw", [False, "false", "maybe", None, 1, "yes", "", "TRUE-ish"]
     )
     def test_everything_else_closes_it(self, raw: Any) -> None:
-        assert normalize_gate({"need": raw, "topic": "t"})["need"] is False
+        assert normalize_gate({"need": raw, "pick": ["E-1"]})["need"] is False
 
     def test_missing_need_closes_it(self) -> None:
-        assert normalize_gate({"topic": "t"})["need"] is False
+        assert normalize_gate({"pick": ["E-1"]})["need"] is False
 
-    def test_need_without_topic_is_downgraded(self) -> None:
-        """An empty topic ranks the library in directory order, not by relevance."""
-        decision = normalize_gate({"need": True, "topic": "", "reason": "seems useful"})
+    def test_need_without_a_pick_is_downgraded(self) -> None:
+        decision = normalize_gate({"need": True, "reason": "seems useful"})
         assert decision["need"] is False
         assert "downgraded" in decision["reason"]
 
@@ -97,17 +101,39 @@ class TestGateNormalization:
         assert decision["need"] is False
         assert decision["reason"].startswith("downgraded")
 
-    def test_task_falls_back_to_topic(self) -> None:
-        """``task`` keys the policy cache, so it must never be empty."""
-        decision = normalize_gate({"need": True, "topic": "batch size scaling"})
-        assert decision["task"] == "batch size scaling"
+    def test_invented_ids_are_dropped(self) -> None:
+        """The gate chooses from the candidates; an id it made up retrieves nothing."""
+        decision = normalize_gate(
+            {"need": True, "pick": ["E-1", "E-made-up", "E-1"]},
+            allowed_ids=["E-1", "E-2"],
+        )
+        assert decision["pick"] == ["E-1"]
+
+    def test_all_invented_ids_close_the_gate(self) -> None:
+        decision = normalize_gate({"need": True, "pick": ["E-x"]}, allowed_ids=["E-1"])
+        assert decision["need"] is False
+
+    def test_pick_is_capped(self) -> None:
+        ids = [f"E-{i}" for i in range(20)]
+        assert len(normalize_gate({"need": True, "pick": ids})["pick"]) == 8
+
+    def test_purpose_falls_back_to_the_situation(self) -> None:
+        decision = normalize_gate(
+            {"need": True, "pick": ["E-1"], "situation": "tuning a threshold"}
+        )
+        assert decision["purpose"] == "tuning a threshold"
 
     def test_fields_are_flattened_and_capped(self) -> None:
         decision = normalize_gate(
-            {"need": True, "topic": "a\n   b\tc", "task": "x" * 2000}
+            {
+                "need": True,
+                "pick": ["E-1"],
+                "situation": "a\n   b\tc",
+                "purpose": "x" * 2000,
+            }
         )
-        assert decision["topic"] == "a b c"
-        assert len(decision["task"]) < 2000
+        assert decision["situation"] == "a b c"
+        assert len(decision["purpose"]) < 2000
 
 
 class TestGateRendering:
@@ -126,22 +152,88 @@ class TestGateRendering:
         rendered = render_recent([AIMessage(content=""), AIMessage(content="kept")])
         assert rendered == "[ai] kept"
 
-    def test_render_library_reports_counts_and_facets(self) -> None:
-        rendered = render_library(
-            {
-                "records": 12,
-                "papers": 4,
-                "disciplines": [("cs", 9), ("bio", 3)],
-                "top_domains": [("nlp", 7)],
-            }
-        )
-        assert "records: 12 from 4 papers" in rendered
-        assert "cs(9)" in rendered
-        assert "nlp(7)" in rendered
-
     def test_render_library_without_stats(self) -> None:
         assert "unavailable" in render_library(None)
         assert "unavailable" in render_library({})
+
+
+class TestActivityRendering:
+    """The gate reads actions and results, with the coach's own echo removed."""
+
+    @staticmethod
+    def _step(call_id: str, narration: str, name: str, command: str, result: str):
+        return [
+            AIMessage(
+                content=narration,
+                tool_calls=[
+                    {"id": call_id, "name": name, "args": {"command": command}}
+                ],
+            ),
+            ToolMessage(content=result, tool_call_id=call_id, name=name),
+        ]
+
+    def test_shows_narration_action_and_result(self) -> None:
+        text = render_activity(
+            self._step("1", "Now training", "execute", "python train.py", "loss 0.4")
+        )
+        assert "agent says: Now training" in text
+        assert "did: execute: python train.py" in text
+        assert "result: loss 0.4" in text
+
+    @pytest.mark.parametrize(
+        "narration",
+        [
+            "Guidance received. It asks for a balanced objective. Writing the sweep.",
+            "Guidance noted. I'll adopt it: freeze the balanced objective.",
+            "The guidance's key requirement is a pre-declared objective.",
+            "**Guidance received** - it matches my plan.",
+        ],
+    )
+    def test_the_agents_restatement_of_guidance_is_dropped_whole(
+        self, narration: str
+    ) -> None:
+        """Dropping only the acknowledgement would leave the coach's advice in."""
+        text = render_activity(self._step("1", narration, "write_file", "x", "ok"))
+        assert "balanced" not in text
+        assert "objective" not in text
+        assert "agent says" not in text
+        # What the agent then did is still shown.
+        assert "did: write_file: x" in text
+
+    def test_ordinary_narration_that_mentions_guidance_later_is_kept(self) -> None:
+        text = render_activity(
+            self._step(
+                "1",
+                "Training finished. The guidance was useful.",
+                "execute",
+                "python p.py",
+                "ok",
+            )
+        )
+        assert "Training finished" in text
+
+    def test_an_injected_guidance_block_is_removed(self) -> None:
+        text = render_activity(
+            [
+                AIMessage(
+                    content="<experience_guidance>do X</experience_guidance> and I will go on"
+                )
+            ]
+        )
+        assert "do X" not in text
+        assert "I will go on" in text
+
+    def test_only_the_last_steps_are_shown(self) -> None:
+        messages = []
+        for i in range(30):
+            messages += self._step(str(i), "", "execute", f"cmd-{i}", f"out-{i}")
+        text = render_activity(messages, actions=3)
+        assert "cmd-29" in text
+        assert "cmd-27" in text
+        assert "cmd-26" not in text
+
+    def test_no_steps(self) -> None:
+        assert render_activity([HumanMessage(content="goal")]) == "[no steps yet]"
 
 
 def _report(policy: dict[str, Any] | None, **extra: Any) -> dict[str, Any]:
@@ -444,28 +536,42 @@ class TestCoachInjection:
 
 
 class TestCoachFlow:
-    """The `_suggestion` decision path, with the gate and pipeline stubbed."""
+    """The `_suggestion` decision path, with the gate, catalog and pipeline stubbed."""
 
     @staticmethod
     def _messages() -> list[Any]:
-        return [HumanMessage(content="pick a learning rate"), AIMessage(content="ok")]
+        return [HumanMessage(content="pick a threshold"), AIMessage(content="ok")]
 
     @pytest.fixture(autouse=True)
-    def _stub_library(self, monkeypatch) -> None:
+    def _stub(self, monkeypatch) -> None:
         monkeypatch.setattr(
             "EvoScientist.memory.experiences.experience_library_stats",
             lambda **_: {"records": 9, "papers": 3},
+        )
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.render_catalog",
+            lambda **_: {
+                "records": 9,
+                "map": "- topic (9)",
+                "candidate_ids": ["E-1", "E-2"],
+                "candidates": "E-1 [L1] a\nE-2 [L2] b",
+            },
+        )
+        brief = MagicMock()
+        brief.render.return_value = "- (metric) accuracy"
+        brief.to_dict.return_value = {"source": "model", "facts": [], "dropped": 0}
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.build_brief", AsyncMock(return_value=brief)
         )
 
     @staticmethod
     def _decision(**over: Any) -> dict[str, Any]:
         return {
             "need": True,
-            "reason": "choosing a learning rate",
-            "topic": "fine-tuning",
-            "method": "AdamW",
-            "task": "pick a learning rate",
-            "state": "",
+            "reason": "choosing a threshold",
+            "situation": "tuning the no-answer threshold",
+            "pick": ["E-1"],
+            "purpose": "set the no-answer threshold",
         } | over
 
     @staticmethod
@@ -474,7 +580,7 @@ class TestCoachFlow:
             "status": "ok",
             "cached": False,
             "selected": ["E-1"],
-            "policy": {"verdict": "adapt", "procedure": ["warm up"]},
+            "policy": {"verdict": "adapt", "procedure": ["calibrate on held-out rows"]},
         }
 
     @pytest.mark.asyncio
@@ -482,15 +588,16 @@ class TestCoachFlow:
         derive = AsyncMock()
         monkeypatch.setattr(
             "EvoScientist.memory.policy.decide_experience_need",
-            AsyncMock(return_value=self._decision(need=False)),
+            AsyncMock(return_value=self._decision(need=False, pick=[])),
         )
         monkeypatch.setattr("EvoScientist.memory.policy.derive_policy", derive)
-        coach = _coach(tmp_path)
-        assert await coach._suggestion(self._messages()) == ""
+        assert await _coach(tmp_path)._suggestion(self._messages()) == ""
         derive.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_open_gate_derives_and_renders(self, tmp_path, monkeypatch) -> None:
+    async def test_open_gate_derives_from_the_picked_records(
+        self, tmp_path, monkeypatch
+    ) -> None:
         derive = AsyncMock(return_value=self._policy_report())
         monkeypatch.setattr(
             "EvoScientist.memory.policy.decide_experience_need",
@@ -500,15 +607,31 @@ class TestCoachFlow:
         coach = _coach(tmp_path)
         suggestion = await coach._suggestion(self._messages())
         assert SUGGESTION_OPEN in suggestion
-        assert "warm up" in suggestion
-        # The gate's facets are what reach retrieval, not the agent's own wording.
-        assert derive.await_args.kwargs["topic"] == "fine-tuning"
-        assert derive.await_args.kwargs["method"] == "AdamW"
-        assert derive.await_args.kwargs["task"] == "pick a learning rate"
+        assert "calibrate on held-out rows" in suggestion
+        kwargs = derive.await_args.kwargs
+        # The records the gate chose are what reach the pipeline, and the writer
+        # receives the brief, not a paraphrase of the task.
+        assert kwargs["picked_ids"] == ["E-1"]
+        assert kwargs["task"] == "set the no-answer threshold"
+        assert kwargs["brief"] == "- (metric) accuracy"
+        assert kwargs["situation"] == "tuning the no-answer threshold"
         assert coach.interventions[-1]["selected"] == ["E-1"]
 
     @pytest.mark.asyncio
-    async def test_unchanged_facets_reuse_without_model_calls(
+    async def test_the_gate_receives_the_brief_activity_and_catalog(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        gate = AsyncMock(return_value=self._decision(need=False, pick=[]))
+        monkeypatch.setattr("EvoScientist.memory.policy.decide_experience_need", gate)
+        await _coach(tmp_path)._suggestion(self._messages())
+        kwargs = gate.await_args.kwargs
+        assert kwargs["brief_text"] == "- (metric) accuracy"
+        assert kwargs["library_map"] == "- topic (9)"
+        assert "E-2 [L2] b" in kwargs["candidates_text"]
+        assert kwargs["allowed_ids"] == ["E-1", "E-2"]
+
+    @pytest.mark.asyncio
+    async def test_the_same_pick_reuses_without_model_calls(
         self, tmp_path, monkeypatch
     ) -> None:
         derive = AsyncMock(return_value=self._policy_report())
@@ -524,9 +647,9 @@ class TestCoachFlow:
         assert derive.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_changed_facets_derive_again(self, tmp_path, monkeypatch) -> None:
+    async def test_a_different_pick_derives_again(self, tmp_path, monkeypatch) -> None:
         derive = AsyncMock(return_value=self._policy_report())
-        decisions = [self._decision(), self._decision(topic="evaluation")]
+        decisions = [self._decision(), self._decision(pick=["E-2"])]
         monkeypatch.setattr(
             "EvoScientist.memory.policy.decide_experience_need",
             AsyncMock(side_effect=decisions),
@@ -573,6 +696,23 @@ class TestCoachFlow:
         coach = _coach(tmp_path)
         assert await coach._suggestion(self._messages()) == ""
         assert coach.interventions == []
+
+    @pytest.mark.asyncio
+    async def test_the_brief_is_built_once(self, tmp_path, monkeypatch) -> None:
+        build = AsyncMock()
+        brief = MagicMock()
+        brief.render.return_value = "b"
+        brief.to_dict.return_value = {}
+        build.return_value = brief
+        monkeypatch.setattr("EvoScientist.memory.policy.build_brief", build)
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.decide_experience_need",
+            AsyncMock(return_value=self._decision(need=False, pick=[])),
+        )
+        coach = _coach(tmp_path)
+        for _ in range(3):
+            await coach._suggestion(self._messages())
+        assert build.await_count == 1
 
 
 class TestRouteExclusivity:

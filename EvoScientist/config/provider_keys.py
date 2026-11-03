@@ -557,41 +557,6 @@ def check_tavily_key(api_key: str) -> KeyCheck:
         return _classify_validation_error(e)
 
 
-def check_s2_key(api_key: str) -> KeyCheck:
-    """Check a Semantic Scholar API key against the public search endpoint.
-
-    Semantic Scholar serves ``/graph/v1/paper/search`` unauthenticated too
-    (with lower rate limits), so a bad key does not 401 as most providers do:
-    S2 answers 403. Any other status leaves the key's validity unknown.
-    """
-    if not api_key:
-        return _SKIPPED
-
-    try:
-        import httpx
-
-        resp = httpx.get(
-            "https://api.semanticscholar.org/graph/v1/paper/search",
-            params={"query": "test", "limit": 1},
-            headers={"x-api-key": api_key},
-            timeout=_TIMEOUT,
-        )
-        if resp.status_code == 200:
-            return KeyCheck("valid", "Valid")
-        if resp.status_code == 403:
-            return _INVALID
-        if resp.status_code == 429:
-            return KeyCheck(
-                "inconclusive",
-                "Validation inconclusive — rate-limited, try again later",
-            )
-        return KeyCheck(
-            "inconclusive", f"Validation inconclusive (HTTP {resp.status_code})"
-        )
-    except Exception as e:
-        return _classify_validation_error(e)
-
-
 def check_jina_key(api_key: str) -> KeyCheck:
     """Check a Jina Reader API key with a minimal read.
 
