@@ -324,6 +324,29 @@ class TestBackgroundCoach:
         )  # step 3: cap reached, blocked
         release_later.cancel()
 
+    async def test_a_hung_derivation_cannot_hang_the_agent(self, tmp_path) -> None:
+        coach = _coach(
+            tmp_path, background=True, max_wait_steps=1, max_wait_seconds=0.2
+        )
+        never = asyncio.Event()
+
+        async def hang(_messages: list[Any]) -> str:
+            await never.wait()
+            return "never delivered"
+
+        coach._suggestion = hang  # type: ignore[method-assign]
+        m1 = [HumanMessage(content="goal"), _acted("write_file", "w0", file_path="a")]
+        await coach.awrap_model_call(_request(m1), _handler)  # starts the derivation
+        m2 = [*m1, _acted("read_file", "r1", file_path="a")]
+        # step cap reached -> forced wait -> must return within the timeout, without guidance
+        out = await asyncio.wait_for(coach.awrap_model_call(_request(m2), _handler), 2)
+        assert len(out.messages) == len(m2)
+        assert (
+            coach._pending is None
+            or coach._pending.cancelled()
+            or coach._pending.done()
+        )
+
     async def test_guidance_after_commits_says_what_the_agent_did(
         self, tmp_path
     ) -> None:
