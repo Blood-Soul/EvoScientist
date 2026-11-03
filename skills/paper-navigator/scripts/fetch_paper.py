@@ -131,18 +131,78 @@ def _strip_boilerplate(text: str) -> str:
     return text
 
 
-def fetch_via_jina(url: str, limit_chars: int = 50000) -> str:
-    """Fetch URL content as Markdown via Jina Reader."""
-    jina_url = f"{JINA_PREFIX}{url}"
+def _arxiv_pdf_url(url: str) -> str:
+    """Return the arXiv PDF URL for an arxiv.org abs/pdf URL, else ''."""
+    m = re.search(r"arxiv\.org/(?:abs|pdf)/([^?#\s]+?)(?:\.pdf)?(?:[?#].*)?$", url)
+    return f"https://arxiv.org/pdf/{m.group(1)}" if m else ""
 
-    with httpx.Client() as client:
-        text = request_with_retry(
-            client,
-            jina_url,
-            headers=jina_headers(),
-            timeout=60,
-            parse_json=False,
-            follow_redirects=True,
+
+def fetch_arxiv_pdf_text(url: str) -> str:
+    """Download an arXiv PDF and extract its text locally (no Jina).
+
+    Fallback for when Jina Reader is unreachable. Needs ``pypdf``; raises
+    RuntimeError with a clear message otherwise.
+    """
+    pdf_url = _arxiv_pdf_url(url)
+    if not pdf_url:
+        raise RuntimeError("local PDF fallback only handles arxiv.org URLs")
+    try:
+        from pypdf import PdfReader
+    except ImportError as e:
+        raise RuntimeError("pypdf is not installed (pip install pypdf)") from e
+    import io
+
+    with httpx.Client(follow_redirects=True, timeout=90) as client:
+        resp = client.get(pdf_url)
+        resp.raise_for_status()
+    reader = PdfReader(io.BytesIO(resp.content))
+    pages = [(p.extract_text() or "").strip() for p in reader.pages]
+    return "\n\n".join(t for t in pages if t)
+
+
+def fetch_via_jina(url: str, limit_chars: int = 50000) -> str:
+    """Fetch URL content as Markdown via Jina Reader.
+
+    If Jina cannot be reached and the URL is on arxiv.org, the PDF is
+    downloaded and its text extracted locally instead.
+    """
+    jina_url = f"{JINA_PREFIX}{url}"
+    has_fallback = bool(_arxiv_pdf_url(url))
+
+    try:
+        with httpx.Client() as client:
+            if has_fallback:
+                # One short attempt: request_with_retry would spend minutes
+                # (5 tries x 60 s + backoff) on an unreachable host.
+                resp = client.get(
+                    jina_url,
+                    headers=jina_headers(),
+                    timeout=httpx.Timeout(20, connect=8),
+                    follow_redirects=True,
+                )
+                resp.raise_for_status()
+                text = resp.text
+            else:
+                text = request_with_retry(
+                    client,
+                    jina_url,
+                    headers=jina_headers(),
+                    timeout=60,
+                    parse_json=False,
+                    follow_redirects=True,
+                )
+    except (Exception, SystemExit) as jina_err:
+        if not has_fallback:
+            raise
+        try:
+            text = fetch_arxiv_pdf_text(url)
+        except Exception as pdf_err:
+            raise RuntimeError(
+                f"Jina failed ({jina_err}); local PDF fallback failed ({pdf_err})"
+            ) from pdf_err
+        print(
+            "*Jina unreachable; text extracted locally from the arXiv PDF*",
+            file=sys.stderr,
         )
 
     text = _strip_boilerplate(text)
