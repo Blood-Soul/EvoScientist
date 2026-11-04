@@ -133,6 +133,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         self._brief: Any | None = None
         self._brief_for: str = ""
         self._last_picked: tuple[str, ...] | None = None
+        self._last_request: str = ""
         self._last_suggestion: str = ""
         self._history: deque[dict[str, Any]] = deque(maxlen=_HISTORY_LIMIT)
         # Background mode and its bookkeeping.
@@ -317,7 +318,15 @@ class ExperienceCoachMiddleware(AgentMiddleware):
             return ""
 
         picked = tuple(decision["pick"])
-        if picked == self._last_picked and self._last_suggestion:
+        request = self._request_text(messages)
+        # The same records are only the same guidance for the same task: a coached
+        # subagent is invoked many times with different descriptions, and this
+        # instance outlives each invocation.
+        if (
+            picked == self._last_picked
+            and request == self._last_request
+            and self._last_suggestion
+        ):
             await self._trace(
                 "coach_reuse",
                 call_id=call_id,
@@ -362,6 +371,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         if not suggestion:
             return ""
         self._last_picked = picked
+        self._last_request = request
         self._last_suggestion = suggestion
         self._history.append(
             {

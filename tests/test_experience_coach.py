@@ -661,6 +661,29 @@ class TestCoachFlow:
         assert derive.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_the_same_pick_for_another_task_is_not_reused(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A coached subagent keeps one coach across invocations; a new task description
+        must not be answered with the previous invocation's guidance."""
+        derive = AsyncMock(return_value=self._policy_report())
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.decide_experience_need",
+            AsyncMock(return_value=self._decision()),
+        )
+        monkeypatch.setattr("EvoScientist.memory.policy.derive_policy", derive)
+        coach = _coach(tmp_path)
+
+        def messages(task: str) -> list[Any]:
+            return [HumanMessage(content=task), AIMessage(content="ok")]
+
+        await coach._suggestion(messages("plan direction A"))
+        await coach._suggestion(messages("plan direction A"))
+        assert derive.await_count == 1
+        await coach._suggestion(messages("plan direction B"))
+        assert derive.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_gate_failure_is_swallowed(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(
             "EvoScientist.memory.policy.decide_experience_need",
