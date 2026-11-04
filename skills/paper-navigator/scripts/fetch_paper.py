@@ -24,6 +24,8 @@ from utils import (
     jina_headers,
     request_with_retry,
     normalize_paper_id,
+    metadata_without_s2,
+    s2_configured,
     _strip_arxiv_version,
 )
 
@@ -85,10 +87,13 @@ def resolve_paper_url(paper_id: str) -> tuple[str, dict]:
 
     fields = "paperId,corpusId,externalIds,title,authors,year,citationCount,tldr,isOpenAccess,openAccessPdf,abstract"
 
-    with httpx.Client() as client:
-        meta = request_with_retry(
-            client, f"{S2_BASE}/paper/{pid}", {"fields": fields}, s2_headers()
-        )
+    if not s2_configured():
+        meta = metadata_without_s2(paper_id)  # no wait: arXiv / DOI straight away
+    else:
+        with httpx.Client() as client:
+            meta = request_with_retry(
+                client, f"{S2_BASE}/paper/{pid}", {"fields": fields}, s2_headers()
+            )
 
     # Determine best URL
     url = ""
@@ -222,7 +227,8 @@ def format_metadata(meta: dict) -> str:
     if len(authors) > 5:
         author_str += f" et al. ({len(authors)} authors)"
     year = meta.get("year", "?")
-    citations = meta.get("citationCount", 0)
+    citations = meta.get("citationCount")
+    citations = "n/a" if citations is None else citations
 
     tldr = ""
     if meta.get("tldr") and meta["tldr"].get("text"):
