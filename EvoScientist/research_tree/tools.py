@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from .gitlog import GitError
 from .judge import Judge
 from .monitor import _plain, journal_call
+from .reports import experience_ids, plan_title, read_draft, section_items
 from .tree import CATEGORIES, KINDS, ResearchTree, TreeError
 
 
@@ -185,10 +186,11 @@ class InsightArgs(BaseModel):
 
 
 class PlanArgs(BaseModel):
-    text: str = Field(
+    path: str = Field(
         default="",
-        description="The plan-writer's plan, pasted as it came back. Give this to record a new plan, or with "
-        "plan_id to rewrite a draft. Leave empty when you are deciding.",
+        description="Workspace-relative path of the plan file the plan-writer wrote (it reports the path in "
+        "its reply). Give it to record a new plan, or with plan_id to rewrite one. Leave empty when you are "
+        "deciding. The tool reads the file; do not paste the plan.",
     )
     cluster: str = Field(
         default="", description="The surveyed mechanism family the plan belongs to."
@@ -197,11 +199,9 @@ class PlanArgs(BaseModel):
         default_factory=list,
         description="Finished, scored nodes the plan starts from (empty for a new direction, one node for a refinement).",
     )
-    experiences: list[str] = Field(
-        default_factory=list,
-        description="Ids of stored experience records the plan-writer says it used.",
+    title: str = Field(
+        default="", description="Short name; defaults to the plan file's '# Plan: ...' line."
     )
-    title: str = Field(default="", description="Short name; defaults to the first line.")
     plan_id: str = Field(
         default="",
         description="Existing plan (P1, ...) to rewrite (with text) or to decide on (with decision).",
@@ -218,22 +218,10 @@ class PlanArgs(BaseModel):
 
 class AnalysisArgs(BaseModel):
     node: str = Field(description="The finished node that was analysed.")
-    text: str = Field(
-        description="The node-analyst's report, pasted as it came back."
-    )
-    strengths: list[str] = Field(
-        default_factory=list, description="What is worth keeping, one item each."
-    )
-    flaws: list[str] = Field(
-        default_factory=list, description="What is wrong or unproven, one item each."
-    )
-    improvements: list[str] = Field(
-        default_factory=list,
-        description="What to change next, one item each; a refine starts from these.",
-    )
-    experiences: list[str] = Field(
-        default_factory=list,
-        description="Ids of stored experience records the analyst says it used.",
+    path: str = Field(
+        description="Workspace-relative path of the analysis file the node-analyst wrote. The tool reads the "
+        "file and takes the items under '## Worth keeping', '## Flaws', '## Improvements' and "
+        "'## Experience used'; do not paste the report."
     )
 
 
@@ -282,6 +270,26 @@ def create_research_tree_tools(
             description=description,
             args_schema=schema,
             infer_schema=False,
+        )
+
+    def plan_tool(**a) -> str:
+        path = a.pop("path", "")
+        if path:
+            text = read_draft(tree.root, path)
+            a["text"] = text
+            a["title"] = a.get("title") or plan_title(text)
+            a["experiences"] = experience_ids(text)
+        return tree.plan(**a)
+
+    def analysis_tool(**a) -> str:
+        text = read_draft(tree.root, a.pop("path", ""))
+        return tree.analysis(
+            node=a["node"],
+            text=text,
+            strengths=section_items(text, "Worth keeping", "Strengths"),
+            flaws=section_items(text, "Flaws"),
+            improvements=section_items(text, "Improvements"),
+            experiences=experience_ids(text),
         )
 
     return [
@@ -345,18 +353,19 @@ def create_research_tree_tools(
             InsightArgs,
         ),
         tool(
-            lambda **a: tree.plan(**a),
+            plan_tool,
             "tree_plan",
-            "Record a plan the plan-writer sub-agent returned (paste it in `text`), or decide on one "
-            "(`plan_id` and `decision`: accepted, revise, rejected). A plan backs one explore or refine node: "
-            "pass its id to tree_new. Rewrites are limited to 2 per plan.",
+            "Record a plan file the plan-writer sub-agent wrote (`path`), or decide on a plan (`plan_id` and "
+            "`decision`: accepted, revise, rejected). A plan backs one explore or refine node: pass its id to "
+            "tree_new. A plan can be rewritten twice; an accepted plan no node uses yet can be rewritten or "
+            "rejected as the record changes.",
             PlanArgs,
         ),
         tool(
-            lambda **a: tree.analysis(**a),
+            analysis_tool,
             "tree_analysis",
-            "Record the analysis the node-analyst sub-agent returned for a finished node: what is worth "
-            "keeping, the flaws, the improvements. A refine of that node starts from them.",
+            "Record the analysis file the node-analyst sub-agent wrote for a finished node (`node`, `path`): "
+            "what is worth keeping, the flaws, the improvements. A refine of that node starts from them.",
             AnalysisArgs,
         ),
         tool(

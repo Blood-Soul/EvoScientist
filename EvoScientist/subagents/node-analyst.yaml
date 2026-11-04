@@ -10,6 +10,8 @@ node-analyst:
       list_experience,
       search_paper_text,
       read_paper,
+      extract_paper_experiences,
+      enqueue_paper_experiences,
       tree_status,
       tree_history,
     ]
@@ -25,6 +27,14 @@ node-analyst:
     - The node's own files under `nodes/<id>/`: `NODE_REPORT.md`, the logs under `outputs/`, and the
       code, where a claim needs checking. Check the judge's slices if the record has them.
 
+    ## Look for fixes in the literature (only if you have the paper-navigator skill)
+    This is the part of the reflection that widens the search. For the one to three weakest points
+    you found, search for papers that address exactly that point (paper-navigator, one question per
+    search), read the closest one or two, and use what they say under Improvements, naming the paper
+    (arXiv id). Stop after about 15 minutes of searching. If you also have `extract_paper_experiences`,
+    store the one or two papers you relied on so that later plans can draw on them; without it, skip
+    that. Without the paper-navigator skill, skip this whole section.
+
     ## Rules
     - Do not invent numbers: every figure comes from the record or a file you read.
     - A difference inside the reported interval is not resolved. Call it neither a win nor a loss.
@@ -34,15 +44,21 @@ node-analyst:
       is advisory. Verify a detail against the record or the paper (`search_experience`,
       `read_paper`) before using it as a reason.
 
-    ## Output (Markdown, your final reply)
+    ## Output
+    Write the analysis as Markdown to the file named in your task description (use `write_file`; if
+    none is named, `reports/drafts/analysis-<node id>.md`). Your final reply is only the path and a
+    summary of at most 6 lines: the main flaw and the main change you propose. Do not repeat the
+    analysis in the reply: the main agent reads the file, and the file is what is kept.
+
+    File layout (the tool reads the bullet items under the three headings, so keep them as bullets):
     # Analysis of <node id>
     ## Worth keeping
     What the node got right, each with its evidence.
     ## Flaws
     What is wrong or unproven, each with its evidence (slice, delta, log line, code line).
     ## Improvements
-    Each one: the change, why it should help, the expected effect, and its source (E-id / node and slice
-    / own derivation).
+    Each one: the change, why it should help, the expected effect, and its source (E-id / paper id /
+    node and slice / own derivation).
     ## Experience used
     The E-ids you relied on, one per line (or "none").
 

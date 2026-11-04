@@ -625,6 +625,18 @@ class ResearchTree:
                 f"that are scored), `{st['deliverable']}` (the deliverable) and `NODE_REPORT.md` "
                 "(what was done, what the errors look like, what you would try next)."
             )
+            brief = self._save_brief(nid, self._brief(st, nid, path, deliver))
+            if self.require_plans:
+                # Reports mode: the brief is a file the sub-agent reads, not text the
+                # main agent has to carry through its own context.
+                rel = path.relative_to(self.root)
+                (path / "BRIEF.md").write_text(brief)
+                tail = [
+                    f"The brief for the sub-agent is {rel}/BRIEF.md (a copy is kept in .research/briefs/{nid}.md). "
+                    f"Tell the sub-agent to read it in full and to work only in {rel}/.",
+                ]
+            else:
+                tail = ["", brief]
             return "\n".join(
                 [
                     f"Created {nid} ({kind}) at {path.relative_to(self.root)}/ with a budget of {budget:.0f} min.",
@@ -638,8 +650,7 @@ class ResearchTree:
                         else []
                     ),
                     f"When it is done, call tree_finish {nid}.",
-                    "",
-                    self._save_brief(nid, self._brief(st, nid, path, deliver)),
+                    *tail,
                 ]
             )
 
@@ -1081,8 +1092,8 @@ class ResearchTree:
         """Record a plan (or rewrite a draft), or decide on one."""
         if bool(text.strip()) == bool(decision):
             raise TreeError(
-                "give either `text` (record or rewrite a plan) or `decision` (accepted, rejected or "
-                "revise), not both and not neither"
+                "give either a plan file (`path`: record or rewrite a plan) or a `decision` (accepted, "
+                "rejected or revise), not both and not neither"
             )
         self.repo.exclude(["/reports/"])
         with self._edit() as st:
@@ -1093,9 +1104,11 @@ class ResearchTree:
                 found = plans.get(plan_id)
                 if found is None:
                     raise TreeError(f"no plan {plan_id}")
-                if found["status"] != "draft":
+                unused = found["status"] == "accepted" and not found.get("node")
+                if found["status"] != "draft" and not unused:
                     raise TreeError(
-                        f"plan {plan_id} is {found['status']}; only a draft can be rewritten"
+                        f"plan {plan_id} is {found['status']}; only a draft, or an accepted plan no node "
+                        "uses yet, can be rewritten"
                     )
                 if found["rounds"] >= MAX_PLAN_REVISIONS:
                     raise TreeError(
@@ -1103,6 +1116,7 @@ class ResearchTree:
                         "reject it, and start a new plan if the direction is still worth pursuing"
                     )
                 found["rounds"] += 1
+                found["status"] = "draft"  # a rewritten plan is reviewed again
                 found["text"] = text.strip()
                 found["experiences"] = sorted(
                     set(found["experiences"]) | set(experiences)
@@ -1146,7 +1160,7 @@ class ResearchTree:
             write_report(self.root, "plans", pid, text, 1)
             self._log(st, "plan", plan=pid, cluster=cluster or None, parents=parents)
             return (
-                f"{pid} recorded as a draft at reports/plans/{pid}.md. Review it, then call "
+                f"{pid} recorded as a draft at reports/plans/{pid}.md. Read it in full, then call "
                 f"tree_plan(plan_id='{pid}', decision='accepted'|'revise'|'rejected', reason=...)."
             )
 
@@ -1158,7 +1172,8 @@ class ResearchTree:
         found = plans.get(plan_id)
         if found is None:
             raise TreeError(f"no plan {plan_id or '(plan_id is required)'}")
-        if found["status"] != "draft":
+        unused = found["status"] == "accepted" and not found.get("node")
+        if found["status"] != "draft" and not (unused and decision == "rejected"):
             raise TreeError(f"plan {plan_id} is already {found['status']}")
         if decision != "accepted" and not reason.strip():
             raise TreeError(f"say why in `reason` when the decision is {decision}")
@@ -1190,11 +1205,12 @@ class ResearchTree:
     ) -> str:
         """Record the analysis of a finished node (a second call rewrites it)."""
         if not text.strip():
-            raise TreeError("text is required: the analyst's report, as it came back")
+            raise TreeError("text is required: the analyst's report")
         if not (flaws or improvements):
             raise TreeError(
-                "an analysis names at least one flaw or one improvement; if the node has none, say what "
-                "was checked and put the reason in `improvements` as 'nothing to change: ...'"
+                "the analysis needs bullet items under '## Flaws' or '## Improvements'; if the node has "
+                "none, say what was checked and put the reason under '## Improvements' as "
+                "'nothing to change: ...'"
             )
         self.repo.exclude(["/reports/"])
         with self._edit() as st:

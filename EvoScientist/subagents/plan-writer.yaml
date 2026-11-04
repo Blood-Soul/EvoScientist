@@ -40,7 +40,13 @@ plan-writer:
     and must be labelled "own derivation". Never present a detail as coming from a paper or a record
     unless you have read it there.
 
-    ## Output (Markdown, your final reply)
+    ## Output
+    Write the plan as Markdown to the file named in your task description (use `write_file`; if none
+    is named, `reports/drafts/plan-<short name>.md`). Your final reply is only the path and a summary
+    of at most 6 lines: the direction, the key choice, the budget. Do not repeat the plan in the
+    reply: the main agent reads the file, and the file is what is kept.
+
+    File layout:
     # Plan: <short title>
     ## Direction and hypothesis
     The family it belongs to, what it changes, and a falsifiable claim: "X should raise the metric

@@ -24,6 +24,8 @@ Style notes
 3. Skill internals belong in ``SKILL.md`` — keep here only *which* skill, *when*.
 """
 
+import re
+
 # =============================================================================
 # Identity
 # =============================================================================
@@ -481,12 +483,12 @@ RESEARCH_TREE = """# Research Tree
 For an end-to-end research task, one that comes with a statement of your working conditions (hardware, time, memory, network) and a concrete goal, run the research as a tree of nodes kept by the `tree_*` tools. A node is one hypothesis with its own git branch and worktree at `nodes/<id>/`; each finished node becomes one commit, so `git log` is the research trajectory.
 
 - **Facts come from the tools, decisions from you.** Scores, deltas against the parent, the clock, parent links and outcomes are written by `tree_finish` and `tree_status`; the score comes from a frozen judge you cannot change. Never state a score as fact that `tree_finish` did not return. You choose what to try, which history to read, and write the narrative of each node.
-- **Start.** Read the conditions and the task in full and write the hard limits down. Put the task data in place, then call `tree_init`. Survey the field with what you have (paper-navigator and paper-experience when they are installed, stored experience when there is any; otherwise the data and what you know), group what you find into 4-6 mechanism families so that candidate directions differ in kind and not in hyperparameters, and record them with `tree_survey`. The first node is a cheap, valid baseline: a valid deliverable must exist before anything ambitious runs.
+- **Start.** Read the conditions and the task in full and write the hard limits down. Put the task data in place, then call `tree_init`. Survey the field with what you have (paper-navigator and paper-experience when they are installed, stored experience when there is any; otherwise the data and what you know), group what you find into 4-6 mechanism families so that candidate directions differ in kind and not in hyperparameters, and record them with `tree_survey`. Take the time the survey needs; there is no prize for the fastest first node. Before the first long training run, make sure a valid deliverable file exists at the project root (a trivial one is fine: the champion's replaces it).
 - **Every step starts from the record.** Call `tree_status`, then `tree_history` for the nodes that bear on the decision. Read them in order, not only the best one: what a node tried depends on what the earlier nodes showed, and a failed node says what not to repeat. Do not repeat a direction the record shows failed under the same conditions; if you retry one, say what is different. Prefer a surveyed family that has not been tried yet (`tree_status` lists which were). Cite what you built on in `based_on`.
 - **Ask whether the record is enough.** Before committing a full node, check whether the record settles the question this step depends on. If it hinges on something nobody has measured (does this component matter, is the error in the representation or in the decision rule), open a `pilot` first: a small time-boxed experiment on a subset or a short run that probes only that uncertainty, then decide with its result. Do not pilot what the record already answers.
 - **One hypothesis per node.** Open each node with `tree_new`, stating what you expect and what would refute it, which family it belongs to (`cluster`), which component it changes, what to build (`plan`), what to reuse, which dead ends to avoid and when to stop early. To refine a finished node, diagnose from its own errors first (the slices in its record), then change one major thing. When `tree_status` shows two nodes that are right on different rows, consider a merge. A difference inside the reported interval is not resolved: treat it as neither a win nor a loss.
 - **Use the literature where a step is stuck (only if you have paper tools).** When a refinement has a specific weakness that papers might fix (for example how others decide that a question has no answer), search for it before `tree_new` with the paper tools, read the one or two closest papers, propose up to three directions that differ in mechanism, pick one, and give its paper id as `source` when you close the node.
-- **Build through sub-agents.** You do not write training code. `tree_new` ends with a brief for the sub-agent: the step, the parents' records, the most related earlier nodes, the insights that bear on it, the budget and the files the node must contain. Give it to the sub-agent verbatim, with the node directory as its working directory, and add anything the record does not hold. Close the node with `tree_finish` and take the judge's number, not the sub-agent's claim; processes the node left running in its directory are stopped then.
+- **Build through sub-agents.** You do not write training code. `tree_new` produces a brief for the sub-agent: the step, the parents' records, the most related earlier nodes, the insights that bear on it, the budget and the files the node must contain. If the reply ends with the brief, give it to the sub-agent verbatim; if the reply names a `BRIEF.md` in the node directory, tell the sub-agent to read that file in full. Either way the node directory is its working directory; add anything the record does not hold. Close the node with `tree_finish` and take the judge's number, not the sub-agent's claim; processes the node left running in its directory are stopped then.
 - **Learn from the trajectory.** Every three closed nodes the tools remind you to record what the sequence shows with `tree_insight`: when the situation looks like X, the step that worked or failed was Y, with the nodes that show it. Keep the set current instead of rewriting it: mark an insight supported when a later node confirms it, contradicted when one refutes it, and cite insights in `based_on` of later steps.
 - **Time is a hard limit.** `tree_status` holds the clock. One GPU node runs at a time. Do not open a node that cannot finish; the last minutes belong to the deliverable. The champion's deliverable is kept at the project root automatically. Finish with `tree_finalize` and report the tree: what was tried, what won, what failed and why.
 - **Your context is not the record.** The tree is. Before each decision re-read it instead of relying on memory of earlier steps.
@@ -494,18 +496,50 @@ For an end-to-end research task, one that comes with a statement of your working
 
 RESEARCH_TREE_REPORTS = """## Plans and analyses
 
-This run asks for a written plan before an explore or refine node and a written analysis of a node before it is refined. Sub-agents write the documents, you decide what to do with them.
+This run asks for a written plan before an explore or refine node and a written analysis of a node before it is refined. Sub-agents write these documents as files and report the path; you read them, judge them and record them with the tools. Do not copy their text into your own messages or tool arguments: the tools read the files, and the files are what is kept for audit and for the sub-agents that come after.
 
-- **Plan before a node.** For a direction you chose (a surveyed family, or the flaws of a finished node), delegate to `plan-writer` with the `task` tool. If an experience coach is mounted on it, the coach reads only the description you give it; either way, put in the description: the direction and its family, what the data looks like (sizes, columns, the metric, anything measured so far), the working conditions (GPU, minutes left from `tree_status`), and for a refinement the parent's id with its analysis (flaws and improvements). It returns a plan. Paste that plan unchanged into `tree_plan(text=..., cluster=..., parents=[...], experiences=[the ids it names])`. Read it critically: does it test one hypothesis, can it finish in the node's minutes, does it repeat a node that failed in `tree_status`? Then call `tree_plan(plan_id=..., decision='accepted' | 'revise' | 'rejected', reason=...)`. A plan can be sent back twice; after that accept or reject it.
-- **Open the node on the accepted plan.** `tree_new(plan_id=...)` for explore and refine nodes (merge and pilot take no plan). The plan's full text goes into the implementing sub-agent's brief. The implementer has no coach; it keeps `search_experience`.
-- **Analysis after a node.** After `tree_finish`, delegate to `node-analyst` with the node id and what to check (hypothesis, score and slices from `tree_history`). It returns what is worth keeping, the flaws and the improvements. Record it with `tree_analysis(node=..., text=..., strengths=[...], flaws=[...], improvements=[...], experiences=[...])`. A refine is refused until its parent has an analysis, and the next plan for that parent starts from those flaws.
-- **Paste, do not paraphrase.** The record should hold what the sub-agent wrote and you reviewed. Your own judgement goes into `reason` and into the next decision.
+- **Survey, then plans, then one node.** Survey normally and take the time it needs. From the families you found, pick two or three promising directions and ask `plan-writer` for a plan for each (one call per direction). Read the plans, compare them, accept those worth trying and open a node on the best one. The accepted plans you do not use yet stay available for later nodes; rewrite or reject them when the record changes.
+- **Asking plan-writer.** Delegate with the `task` tool. Put in the description: the direction and its family, what the data looks like (sizes, columns, the metric, anything measured so far), the working conditions (GPU, minutes left from `tree_status`), for a refinement the parent's id with its analysis, and the file to write (`reports/drafts/plan-<direction>.md`). If an experience coach is mounted on it, the coach reads only this description, so the facts must be in it.
+- **Record and decide.** `tree_plan(path='reports/drafts/plan-<direction>.md', cluster=..., parents=[...])` records the file as a draft (P1, ...) and keeps a copy in `reports/plans/`. Read that copy in full: does it test one hypothesis, can it finish in the node's minutes, does it repeat a node that failed in `tree_status`? Then `tree_plan(plan_id=..., decision='accepted' | 'revise' | 'rejected', reason=...)`. Send a plan back with `revise` and your reason instead of editing it yourself; it can be rewritten twice.
+- **Open the node on the accepted plan.** `tree_new(plan_id=...)` for explore and refine nodes (merge and pilot take no plan). The plan and the brief go to the implementing sub-agent through `nodes/<id>/BRIEF.md`. The implementer has no coach; it keeps `search_experience`.
+- **Reflection after a node.** After `tree_finish`, delegate to `node-analyst` with the node id, what to check and the file to write (`reports/drafts/analysis-<node>.md`). This is the reflection step of this run, in place of planner-agent. It reads the node, finds what is worth keeping and what is wrong, and, where you have paper tools, searches the literature for the weakest points to propose changes. Read its file and record it with `tree_analysis(node=..., path=...)`. A refine is refused until its parent has an analysis, and the next plan for that parent starts from those flaws and improvements.
 - **If you have the experience tools, fill the library before the first plan.** The coach can only speak from stored experience. If `search_experience` finds little, survey with paper-navigator, extract at least three papers with paper-experience and wait for the extraction to finish before asking `plan-writer` for the first plan.
 """
 
 # =============================================================================
 # Combined exports
 # =============================================================================
+
+
+_PLANNER_ROUTES = (
+    (
+        "  - Planning/structuring → planner-agent\n",
+        "  - Planning for a research direction → plan-writer\n",
+    ),
+    (
+        "- If delegating planning to planner-agent, start your message with: `MODE: PLAN`.\n",
+        "- Planning is done by `plan-writer` in this run (see Plans and analyses); planner-agent is not used.\n",
+    ),
+    (
+        '- "Plan experimental stages" → planner-agent\n- "Reflect and update the plan after a stage" → planner-agent\n',
+        '- "Write the plan for one research direction" → plan-writer\n- "Analyse a finished node and propose what to change" → node-analyst\n',
+    ),
+)
+_STAGE_REFLECTION = re.compile(
+    r"### Stage Reflection \(Recommended Checkpoint\).*?(?=## Step 5: Write Report)", re.S
+)
+_STAGE_REFLECTION_TREE = (
+    "### Stage Reflection\n"
+    "In this run the reflection after each node is written by `node-analyst` (see Plans and "
+    "analyses). Do not use planner-agent for it.\n\n"
+)
+
+
+def _for_tree_reports(text: str) -> str:
+    """The old planner-agent routes, replaced by the plan-writer / node-analyst ones."""
+    for old, new in _PLANNER_ROUTES:
+        text = text.replace(old, new)
+    return _STAGE_REFLECTION.sub(_STAGE_REFLECTION_TREE, text)
 
 
 def get_system_prompt(
@@ -568,6 +602,8 @@ def get_system_prompt(
         ASYNC_NOTIFICATIONS,
     ]
     if research_tree:
+        if research_tree_reports:
+            sections = [_for_tree_reports(x) for x in sections]
         sections.append(RESEARCH_TREE)
         if research_tree_reports:
             sections.append(RESEARCH_TREE_REPORTS)

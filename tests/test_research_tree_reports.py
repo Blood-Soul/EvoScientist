@@ -68,9 +68,9 @@ class TestPlanLifecycle:
 
     def test_text_xor_decision(self, strict) -> None:
         tree, *_ = strict
-        with pytest.raises(TreeError, match="either `text`"):
+        with pytest.raises(TreeError, match="either a plan file"):
             tree.plan()
-        with pytest.raises(TreeError, match="either `text`"):
+        with pytest.raises(TreeError, match="either a plan file"):
             tree.plan(text=PLAN, decision="accepted")
 
     def test_reject_and_revise_need_a_reason(self, strict) -> None:
@@ -99,8 +99,10 @@ class TestPlanLifecycle:
         with pytest.raises(TreeError, match="rewritten 2 times"):
             tree.plan(plan_id="P1", decision="revise", reason="still")
         tree.plan(plan_id="P1", decision="accepted")
-        with pytest.raises(TreeError, match="already accepted"):
-            tree.plan(plan_id="P1", decision="rejected", reason="late")
+        # an accepted plan no node uses yet can still be dropped; after that it is final
+        tree.plan(plan_id="P1", decision="rejected", reason="the record changed")
+        with pytest.raises(TreeError, match="already rejected"):
+            tree.plan(plan_id="P1", decision="accepted")
         with pytest.raises(TreeError, match="only a draft"):
             tree.plan(plan_id="P1", text="after the decision")
 
@@ -128,10 +130,13 @@ class TestNodesNeedPlans:
         tree, root, clock = strict
         pid = new_plan(tree)
         out = tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=pid)
-        assert "### The accepted plan (P1): build this" in out
-        assert "answer-free windows" in out
-        assert "follow the accepted plan P1" in out
-        assert (root / ".research" / "briefs" / "n1.md").read_text().count("P1") >= 1
+        # reports mode: the brief is a file, not text the main agent carries
+        assert "nodes/n1/BRIEF.md" in out and "### The accepted plan" not in out
+        brief = (root / "nodes" / "n1" / "BRIEF.md").read_text()
+        assert "### The accepted plan (P1): build this" in brief
+        assert "answer-free windows" in brief
+        assert "follow the accepted plan P1" in brief
+        assert (root / ".research" / "briefs" / "n1.md").read_text() == brief
         clock.advance(10)
         with pytest.raises(TreeError, match="already backs n1"):
             tree.new_node(
@@ -184,9 +189,10 @@ class TestNodesNeedPlans:
             flaws=["no-answer recall is low"],
             improvements=["train the null score on answer-free windows"],
         )
-        out = tree.new_node(**refine, plan_id=p2)
-        assert "Analysis A1 of n1:" in out
-        assert "no-answer recall is low" in out
+        tree.new_node(**refine, plan_id=p2)
+        brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
+        assert "Analysis A1 of n1:" in brief
+        assert "no-answer recall is low" in brief
 
     def test_the_default_tree_is_unchanged(self, tmp_path) -> None:
         tree, root, clock = make(tmp_path, require_plans=False)
@@ -220,7 +226,7 @@ class TestAnalyses:
             tree.analysis(node="n7", text="t", flaws=["f"])
         with pytest.raises(TreeError, match="text is required"):
             tree.analysis(node=n1, text=" ", flaws=["f"])
-        with pytest.raises(TreeError, match="at least one flaw"):
+        with pytest.raises(TreeError, match="bullet items under"):
             tree.analysis(node=n1, text="t")
         tree.analysis(node=n1, text="first\n", flaws=["f1"])
         tree.analysis(node=n1, text="second\n", flaws=["f1"], improvements=["i1"])
@@ -256,14 +262,18 @@ class TestTools:
         return by_name
 
     def test_refusals_come_back_as_text(self, made) -> None:
-        assert made["tree_plan"].invoke({}).startswith("ERROR: give either `text`")
+        assert made["tree_plan"].invoke({}).startswith("ERROR: give either a plan file")
         out = made["tree_new"].invoke(
             {"kind": "explore", "title": "t", "hypothesis": "h"}
         )
         assert out.startswith("ERROR: explore nodes need an accepted plan")
 
-    def test_plan_then_node_through_the_tools(self, made) -> None:
-        assert made["tree_plan"].invoke({"text": PLAN}).startswith("P1 recorded")
+    def test_plan_then_node_through_the_tools(self, made, tmp_path) -> None:
+        draft = tmp_path / "ws" / "reports" / "drafts" / "plan-a.md"
+        draft.parent.mkdir(parents=True)
+        draft.write_text(PLAN)
+        out = made["tree_plan"].invoke({"path": "reports/drafts/plan-a.md"})
+        assert out.startswith("P1 recorded")
         assert "accepted" in made["tree_plan"].invoke(
             {"plan_id": "P1", "decision": "accepted"}
         )
@@ -271,7 +281,24 @@ class TestTools:
             {"kind": "explore", "title": "t", "hypothesis": "h", "plan_id": "P1"}
         )
         assert out.startswith("Created n1")
-        assert "answer-free windows" in out
+        brief = (tmp_path / "ws" / "nodes" / "n1" / "BRIEF.md").read_text()
+        assert "answer-free windows" in brief
+
+
+def test_reports_mode_replaces_the_planner_agent_routes() -> None:
+    plain = get_system_prompt(research_tree=True)
+    on = get_system_prompt(research_tree=True, research_tree_reports=True)
+    # the default prompt keeps the planner-agent routes (they are what the other arms use)
+    assert "MODE: PLAN" in plain and "MODE: REFLECTION" in plain and "Plan Update JSON" in plain
+    # reports mode: no instruction left that sends planning or reflection there
+    for gone in ("MODE: PLAN", "MODE: REFLECTION", "Plan Update JSON", "→ planner-agent"):
+        assert gone not in on, gone
+    for line in on.splitlines():
+        if "planner-agent" in line:
+            assert "not used" in line or "Do not use" in line or "in place of planner-agent" in line, line
+    assert "→ plan-writer" in on and "→ node-analyst" in on
+    # no pressure to land a first node fast; a placeholder deliverable is allowed
+    assert "cheap, valid baseline" not in on and "a trivial one is fine" in on
 
 
 def test_the_prompt_section_follows_the_flag() -> None:
@@ -417,3 +444,121 @@ class TestArmWithoutExperience:
             "tree_status",
             "tree_history",
         }
+
+
+ANALYSIS = """# Analysis of n1
+## Worth keeping
+- clean windowing, no answer is cut at a boundary
+- the null score is calibrated on validation
+## Flaws
+- no-answer recall is low: 31% of answerable rows are abstained,
+  mostly long plots
+- the threshold was fitted on 7540 rows only
+## Improvements
+1. train the null score on answer-free windows (E-0123456789ab)
+2. add a second epoch for the long plots
+## Experience used
+- E-0123456789ab
+- E-ffffffffffff
+"""
+
+
+class TestFilesAsHandoff:
+    """Sub-agents write documents; the tools read them. The main agent carries paths."""
+
+    def test_read_draft_stays_inside_the_workspace(self, tmp_path) -> None:
+        from EvoScientist.research_tree.reports import read_draft
+
+        (tmp_path / "ok.md").write_text("x")
+        (tmp_path / "empty.md").write_text("  \n")
+        assert read_draft(tmp_path, "ok.md") == "x"
+        assert read_draft(tmp_path, "/ok.md") == "x"  # a leading slash is the workspace root
+        with pytest.raises(TreeError, match="outside the workspace"):
+            read_draft(tmp_path, "../ok.md")
+        with pytest.raises(TreeError, match="no file at"):
+            read_draft(tmp_path, "missing.md")
+        with pytest.raises(TreeError, match="is empty"):
+            read_draft(tmp_path, "empty.md")
+        with pytest.raises(TreeError, match="path is required"):
+            read_draft(tmp_path, " ")
+
+    def test_sections_are_read_as_items(self) -> None:
+        from EvoScientist.research_tree.reports import (
+            experience_ids,
+            plan_title,
+            section_items,
+        )
+
+        assert section_items(ANALYSIS, "Worth keeping")[0].startswith("clean windowing")
+        flaws = section_items(ANALYSIS, "Flaws")
+        assert len(flaws) == 2 and "mostly long plots" in flaws[0]  # a wrapped line joins its item
+        assert section_items(ANALYSIS, "Improvements")[1] == "add a second epoch for the long plots"
+        assert experience_ids(ANALYSIS) == ["E-0123456789ab", "E-ffffffffffff"]
+        assert section_items("## Experience used\nnone\n", "Experience used") == []
+        assert section_items("## Flaws\nonly prose here\n", "Flaws") == ["only prose here"]
+        assert section_items(ANALYSIS, "Nope") == []
+        assert plan_title("# Plan: shared-norm reader\n...") == "shared-norm reader"
+
+    @pytest.fixture
+    def tools(self, tmp_path):
+        root = tmp_path / "ws"
+        root.mkdir()
+        clock = Clock()
+        made = {
+            t.name: t
+            for t in create_research_tree_tools(
+                root, judge=FakeJudge(), now=clock, require_plans=True
+            )
+        }
+        made["tree_init"].invoke({"budget_minutes": 900})
+        (root / "reports" / "drafts").mkdir(parents=True)
+        return made, root, clock
+
+    def test_a_plan_file_gives_title_and_experience_ids(self, tools) -> None:
+        made, root, _ = tools
+        (root / "reports" / "drafts" / "p.md").write_text(
+            PLAN + "## Experience used\n- E-0123456789ab\n"
+        )
+        made["tree_plan"].invoke({"path": "reports/drafts/p.md"})
+        state = (root / ".research" / "state.json").read_text()
+        assert '"title": "shared-norm reader"' in state
+        assert "E-0123456789ab" in state
+
+    def test_an_analysis_file_gives_the_lists(self, tools) -> None:
+        made, root, clock = tools
+        (root / "reports" / "drafts" / "p.md").write_text(PLAN)
+        made["tree_plan"].invoke({"path": "reports/drafts/p.md"})
+        made["tree_plan"].invoke({"plan_id": "P1", "decision": "accepted"})
+        out = made["tree_new"].invoke(
+            {"kind": "explore", "title": "t", "hypothesis": "h", "plan_id": "P1"}
+        )
+        node = root / "nodes" / "n1"
+        (node / "holdout_predictions.csv").write_text("1\n" * 400)
+        (node / "submission.csv").write_text("d")
+        clock.advance(30)
+        assert "closed as done" in made["tree_finish"].invoke(
+            {"node": "n1", "change": "c", "observation": "o"}
+        )
+        (root / "reports" / "drafts" / "a.md").write_text(ANALYSIS)
+        done = made["tree_analysis"].invoke({"node": "n1", "path": "reports/drafts/a.md"})
+        assert "A1 recorded for n1" in done and "2 flaws, 2 improvements" in done
+        bad = root / "reports" / "drafts" / "bad.md"
+        bad.write_text("# Analysis\nnothing under headings\n")
+        assert made["tree_analysis"].invoke(
+            {"node": "n1", "path": "reports/drafts/bad.md"}
+        ).startswith("ERROR: the analysis needs bullet items")
+        # the brief is not part of the node's commit
+        names = git(root, "ls-tree", "-r", "--name-only", "node/n1")
+        assert "BRIEF.md" not in names and "reports" not in names
+
+    def test_an_unused_accepted_plan_can_be_rewritten_a_used_one_cannot(self, strict) -> None:
+        tree, root, _ = strict
+        pid = new_plan(tree)
+        out = tree.plan(plan_id=pid, text=PLAN + "updated\n")
+        assert "draft again" in out and "P1 draft" in tree.status()
+        tree.plan(plan_id=pid, decision="accepted")
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=pid)
+        with pytest.raises(TreeError, match="only a draft, or an accepted plan no node uses"):
+            tree.plan(plan_id=pid, text="too late")
+        with pytest.raises(TreeError, match="already accepted"):
+            tree.plan(plan_id=pid, decision="rejected", reason="late")

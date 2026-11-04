@@ -51,7 +51,7 @@ IGNORE_PATTERNS = [
     f"/{STATE_DIR}/",
     "/data/",
     "/models/",
-    "/NODE_REPORT.md",
+    "/NODE_REPORT.md", "/BRIEF.md",
     "/TRAJECTORY.md",
     "outputs/",
     "__pycache__/",
