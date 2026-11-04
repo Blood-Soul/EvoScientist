@@ -45,7 +45,7 @@ arXiv access (`arxiv_monitor`, `scholar_search` fallback) uses the DeepXiv SDK: 
 
 | Env var | Used by | Notes |
 |---|---|---|
-| `S2_API_KEY` | All S2 scripts | Without it: `scholar_search` falls back to arXiv (via DeepXiv); `citation_traverse` / `recommend` / `snippet_search` are disabled |
+| `S2_API_KEY` | All S2 scripts | Without it (the normal case here): `scholar_search` falls back to arXiv (via DeepXiv) at once; `fetch_paper` / `download_paper` take an arXiv ID, a DOI or a URL and go straight to arXiv / Unpaywall; `citation_traverse`, `recommend`, `snippet_search`, `author_search`, `trending`, `match_paper_by_title` and `literature_report` need S2: they exit at once with code 3 and one line, do not retry them |
 | `DEEPXIV_API_TOKEN` | `arxiv_monitor`, `scholar_search` fallback | Get a free token: `deepxiv token` (writes `~/.env`). Also read from `DEEPXIV_TOKEN` and `./.env`/`~/.env`. ~10,000 req/day |
 | `JINA_API_KEY` | `fetch_paper` | Free tier works without key |
 | `GITHUB_TOKEN` | `github_search`, `find_code` | Higher rate limits |
@@ -358,7 +358,7 @@ All discovery scripts: `--limit N`, `--json`, `--output FILE`, `--append`; accep
 
 Global S2 pacer + circuit breaker (5 failures → 60s cooldown). Retries: 3s / 6s / 12s / 24s / 48s.
 
-Without `S2_API_KEY`: use `scholar_search` (arXiv fallback) + `arxiv_monitor`. Skip `citation_traverse` / `recommend` / `snippet_search` — they're S2-only; do not retry.
+Without `S2_API_KEY`: use `scholar_search` (arXiv fallback) + `arxiv_monitor`, and read papers with `fetch_paper` / `download_paper` by arXiv ID, DOI or URL (S2 hashes and CorpusIds cannot be resolved). Skip `citation_traverse`, `recommend`, `snippet_search`, `author_search`, `trending`, `match_paper_by_title` and `literature_report` — they're S2-only and exit at once with code 3; do not retry.
 
 ---
 

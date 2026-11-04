@@ -70,6 +70,24 @@ class S2NotConfigured(RateLimitExhausted):
     """
 
 
+def s2_configured() -> bool:
+    """True when a Semantic Scholar key is set; without it every S2 call fails fast."""
+    return bool(os.environ.get("S2_API_KEY"))
+
+
+def _s2_not_configured_exit(exc_type, exc, tb) -> None:
+    """Uncaught S2NotConfigured: one line and exit code 3, not a traceback."""
+    if issubclass(exc_type, S2NotConfigured):
+        sys.stdout.flush()
+        print(f"error: {exc}", file=sys.stderr)
+        sys.stderr.flush()
+        os._exit(3)
+    sys.__excepthook__(exc_type, exc, tb)
+
+
+sys.excepthook = _s2_not_configured_exit
+
+
 def _is_s2_url(url: str) -> bool:
     """Check if URL targets Semantic Scholar API."""
     return url.startswith(S2_BASE) or url.startswith(S2_RECOMMEND_BASE)
@@ -402,6 +420,27 @@ def request_with_retry(
 def _strip_arxiv_version(arxiv_id: str) -> str:
     """Strip version suffix (e.g. v5) from arXiv ID."""
     return re.sub(r"v\d+$", "", arxiv_id)
+
+
+def metadata_without_s2(paper_id: str) -> dict:
+    """The little that is known about a paper without Semantic Scholar: its ID.
+
+    Enough to build an arXiv or DOI URL and name the saved file. Other ID kinds
+    (S2 hash, CorpusId, PMID) can only be resolved through S2.
+    """
+    pid = normalize_paper_id(paper_id)
+    if pid.startswith("ArXiv:"):
+        return {
+            "paperId": pid,
+            "title": f"arXiv:{pid[6:]}",
+            "externalIds": {"ArXiv": pid[6:]},
+        }
+    if pid.startswith("DOI:"):
+        return {"paperId": pid, "title": pid, "externalIds": {"DOI": pid[4:]}}
+    raise S2NotConfigured(
+        f"{paper_id!r} can only be resolved through Semantic Scholar (no S2_API_KEY); "
+        "use an arXiv ID, a DOI or a URL instead"
+    )
 
 
 def normalize_paper_id(raw: str) -> str:

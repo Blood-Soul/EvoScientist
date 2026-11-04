@@ -22,6 +22,8 @@ from utils import (
     s2_headers,
     request_with_retry,
     normalize_paper_id,
+    metadata_without_s2,
+    s2_configured,
     _strip_arxiv_version,
 )
 
@@ -36,6 +38,8 @@ DEFAULT_MAX_MB = 50  # skip oversized PDFs (huge appendices etc.)
 
 def resolve_metadata(paper_id: str) -> dict:
     """Fetch S2 metadata for a paper. Returns dict with externalIds, openAccessPdf, etc."""
+    if not s2_configured():
+        return metadata_without_s2(paper_id)  # no wait: arXiv / DOI straight away
     pid = normalize_paper_id(paper_id)
     fields = (
         "paperId,externalIds,title,authors,year,citationCount,"
