@@ -346,3 +346,74 @@ class TestSubagents:
         assert not T._coached(planner)
         coach = next(m for m in writer["middleware"] if m.name == "experience_coach")
         assert coach._agent == "plan-writer"
+
+
+class TestArmWithoutExperience:
+    """Tree flow with the whole experience system off: same prompts, fewer tools."""
+
+    EXPERIENCE_TOOLS = {
+        "enqueue_paper_experiences",
+        "extract_paper_experiences",
+        "search_experience",
+        "list_experience",
+        "search_paper_text",
+        "read_paper",
+        "apply_experience",
+    }
+
+    @staticmethod
+    def _cfg(**over):
+        base = dict(
+            memory_paper_extraction_enabled=True,
+            memory_experience_search_enabled=True,
+            memory_paper_fulltext_enabled=True,
+            memory_experience_policy_enabled=True,
+            memory_experience_coach_enabled=True,
+            memory_experience_policy_max_selected=4,
+            memory_experience_main_reuse_enabled=False,
+            research_tree_enabled=True,
+            research_tree_require_plans=True,
+        )
+        return SimpleNamespace(**{**base, **over})
+
+    def _tools(self, tmp_path, **over):
+        from EvoScientist import EvoScientist as evo
+
+        return evo._build_paper_tools(
+            cfg=self._cfg(**over), workspace=Workspace(tmp_path), work_dir=tmp_path
+        )
+
+    OFF = dict(
+        memory_paper_extraction_enabled=False,
+        memory_experience_search_enabled=False,
+        memory_paper_fulltext_enabled=False,
+        memory_experience_policy_enabled=False,
+        memory_experience_coach_enabled=False,
+    )
+
+    def test_no_experience_tool_reaches_the_agent(self, tmp_path) -> None:
+        registry, base = self._tools(tmp_path, **self.OFF)
+        names = set(registry) | {t.name for t in base}
+        assert not names & self.EXPERIENCE_TOOLS
+        assert {"tree_plan", "tree_analysis", "tree_status", "tree_history"} <= names
+
+    def test_the_switch_defaults_to_the_old_behaviour(self, tmp_path) -> None:
+        registry, base = self._tools(tmp_path)
+        assert {"enqueue_paper_experiences", "extract_paper_experiences"} <= set(registry)
+        assert {"enqueue_paper_experiences", "extract_paper_experiences"} <= {
+            t.name for t in base
+        }
+
+    @pytest.mark.parametrize("name", ["plan-writer", "node-analyst"])
+    def test_the_subagents_keep_only_the_tree_reading_tools(
+        self, tmp_path, name
+    ) -> None:
+        from EvoScientist.utils import resolve_subagent_tools
+
+        registry, _ = self._tools(tmp_path, **self.OFF)
+        sub = resolve_subagent_tools(TestSubagents._load(name), registry)
+        assert {t.name for t in sub["tools"]} == {
+            "think_tool",
+            "tree_status",
+            "tree_history",
+        }

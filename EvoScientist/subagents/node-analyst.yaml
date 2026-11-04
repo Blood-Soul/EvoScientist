@@ -30,8 +30,9 @@ node-analyst:
     - A difference inside the reported interval is not resolved. Call it neither a win nor a loss.
     - Look for the cause of an error pattern in the slice, the log or the code, not in the node's own
       explanation alone.
-    - Guidance from stored experience may arrive on its own. It is advisory. Verify a detail against
-      the record or the paper (`search_experience`, `read_paper`) before using it as a reason.
+    - Guidance from stored experience may arrive on its own (only if a coach is mounted on you). It
+      is advisory. Verify a detail against the record or the paper (`search_experience`,
+      `read_paper`) before using it as a reason.
 
     ## Output (Markdown, your final reply)
     # Analysis of <node id>
