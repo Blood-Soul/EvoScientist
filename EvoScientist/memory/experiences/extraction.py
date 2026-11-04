@@ -276,6 +276,40 @@ def load_experience_prompts() -> dict[str, str]:
 
 _JINA_RETRY_DELAYS_S = (2.0, 5.0)  # 3 attempts total
 
+_ARXIV_ID_RE = re.compile(
+    r"arxiv\.org/(?:abs|pdf)/([^?#\s]+?)(?:\.pdf)?(?:[?#].*)?$", re.IGNORECASE
+)
+
+
+def _arxiv_pdf_url(url: str) -> str:
+    """Return the arXiv PDF URL for an arxiv.org abs/pdf URL, else ''."""
+    match = _ARXIV_ID_RE.search(url)
+    return f"https://arxiv.org/pdf/{match.group(1)}" if match else ""
+
+
+def _pdf_bytes_to_text(data: bytes) -> str:
+    """Extract plain text from PDF bytes with pypdf (raises ImportError if absent)."""
+    import io
+
+    from pypdf import PdfReader
+
+    pages = [(p.extract_text() or "").strip() for p in PdfReader(io.BytesIO(data)).pages]
+    return "\n\n".join(t for t in pages if t)
+
+
+async def _download_arxiv_pdf_text(client: httpx.AsyncClient, pdf_url: str) -> str:
+    """Fetch an arXiv PDF and extract its text locally; '' when that is not possible.
+
+    Used only after Jina Reader failed, so environments that cannot reach Jina
+    (offline sandboxes that allow arxiv.org only) still get the paper body.
+    """
+    try:
+        response = await client.get(pdf_url)
+        response.raise_for_status()
+        return (await asyncio.to_thread(_pdf_bytes_to_text, response.content)).strip()
+    except Exception:  # noqa: BLE001 - any failure falls back to the direct fetch
+        return ""
+
 
 async def download_paper_text(url: str, *, timeout: float = 90.0) -> str:
     """Download full text through Jina Reader, with a direct-text fallback.
@@ -322,6 +356,9 @@ async def download_paper_text(url: str, *, timeout: float = 90.0) -> str:
                     break
                 await asyncio.sleep(delay)
         if reader_error is not None:
+            pdf_url = _arxiv_pdf_url(url)
+            text = await _download_arxiv_pdf_text(client, pdf_url) if pdf_url else ""
+        if reader_error is not None and not text:
             response = await client.get(url)
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").casefold()
