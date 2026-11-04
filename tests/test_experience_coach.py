@@ -938,16 +938,30 @@ class TestCoachTraceRecordsEverythingItDecides:
             "EvoScientist.memory.experiences.experience_library_stats",
             lambda **_: {"records": 9, "papers": 3},
         )
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.render_catalog",
+            lambda **_: {
+                "records": 9,
+                "map": "- topic (9)",
+                "candidate_ids": ["E-1", "E-2"],
+                "candidates": "E-1 [L1] a\nE-2 [L2] b",
+            },
+        )
+        brief = MagicMock()
+        brief.render.return_value = "- (metric) accuracy"
+        brief.to_dict.return_value = {"source": "model", "facts": [], "dropped": 0}
+        monkeypatch.setattr(
+            "EvoScientist.memory.policy.build_brief", AsyncMock(return_value=brief)
+        )
 
     @staticmethod
     def _decision(**over: Any) -> dict[str, Any]:
         return {
             "need": True,
             "reason": "choosing a rate",
-            "topic": "fine-tuning",
-            "method": "AdamW",
-            "task": "pick a learning rate",
-            "state": "",
+            "situation": "choosing a learning rate",
+            "pick": ["E-1"],
+            "purpose": "pick a learning rate",
         } | over
 
     @pytest.mark.asyncio
@@ -972,7 +986,8 @@ class TestCoachTraceRecordsEverythingItDecides:
             AIMessage(content="ok"),
         ]
         await _coach(tmp_path)._suggestion(messages)
-        records = self._read(tmp_path)
+        # the task brief is traced once per run, not per step
+        records = [r for r in self._read(tmp_path) if r["event"] != "coach_brief"]
         assert [r["event"] for r in records] == ["coach_step", "coach_inject"]
         step, inject = records
         assert step["call_id"] == inject["call_id"]
@@ -1048,20 +1063,21 @@ class TestCoachTraceRecordsEverythingItDecides:
                 )
 
         await decide_experience_need(
-            request_text="the original task",
-            recent_text="[ai] tried lr 1e-3",
-            library_text="9 records",
+            brief_text="- (metric) accuracy",
+            activity_text="[step 1]\n  did: execute: lr 1e-3",
+            library_map="- topic (9)",
+            candidates_text="E-1 [L1] a\nE-2 [L2] b",
+            allowed_ids=["E-1", "E-2"],
             model=Aux(),
-            prompt="REQ {request} / RECENT {recent} / LIB {library}",
+            prompt="B {brief} / A {activity} / M {library_map} / C {candidates}",
             memory_dir=tmp_path,
             call_id="abc123",
         )
         (gate,) = self._read(tmp_path)
         assert gate["event"] == "gate"
         assert gate["call_id"] == "abc123"
-        assert gate["request_text"] == "the original task"
-        assert gate["recent_text"] == "[ai] tried lr 1e-3"
-        assert gate["library_text"] == "9 records"
+        assert gate["activity_text"] == "[step 1]\n  did: execute: lr 1e-3"
+        assert gate["candidates_text"] == "E-1 [L1] a\nE-2 [L2] b"
         assert gate["usage"]["total_tokens"] == 15
         assert gate["seconds"] >= 0
         assert gate["need"] is True
