@@ -1084,7 +1084,7 @@ def test_paper_tools_are_always_included_by_the_tool_selector() -> None:
     assert "read_paper" in DEFAULT_ALWAYS_INCLUDE_TOOLS
 
 
-def test_only_research_and_planner_subagents_receive_the_paper_tools() -> None:
+def test_only_the_named_subagents_receive_the_paper_tools() -> None:
     from EvoScientist.EvoScientist import SUBAGENTS_CONFIG
     from EvoScientist.utils import load_subagents
 
@@ -1096,7 +1096,9 @@ def test_only_research_and_planner_subagents_receive_the_paper_tools() -> None:
         for agent in subagents
         if "search_paper_text" in (agent.get("_tool_names") or [])
     }
-    assert granted == {"research-agent", "planner-agent"}
+    # plan-writer and node-analyst (research tree) check guidance against the
+    # source papers, so they hold the same read-only paper tools.
+    assert granted == {"research-agent", "planner-agent", "plan-writer", "node-analyst"}
     for agent in subagents:
         if agent["name"] in granted:
             assert "read_paper" in agent["_tool_names"]

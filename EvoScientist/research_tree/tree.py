@@ -52,6 +52,15 @@ from .monitor import (
     stop_gpu_log,
     stop_ticker,
 )
+from .reports import (
+    MAX_PLAN_REVISIONS,
+    PLAN_DECISIONS,
+    render_analyses,
+    render_analysis_for_brief,
+    render_plans,
+    short,
+    write_report,
+)
 from .stats import Delta, complementarity, paired_delta, slice_table
 
 try:  # POSIX only; on other platforms calls are simply not serialised
@@ -84,8 +93,12 @@ class ResearchTree:
         root: str | Path,
         judge: Judge | None = None,
         now: Callable[[], float] = time.time,
+        require_plans: bool = False,
     ):
         self.root = Path(root).resolve()
+        # When on, an explore or refine node needs an accepted plan and a refine
+        # needs an analysis of its parent (see _check_plan).
+        self.require_plans = require_plans
         self.repo = Repo(self.root)
         self._judge = judge
         self.now = now
@@ -250,7 +263,9 @@ class ResearchTree:
                         "budget_minutes is required: the total minutes left for the whole task"
                     )
                 deadline = self.now() + budget * 60
-            self.repo.init(extra_ignore=[f"/{prediction_file}", f"/{deliverable}"])
+            self.repo.init(
+                extra_ignore=[f"/{prediction_file}", f"/{deliverable}", "/reports/"]
+            )
             st.update(
                 version=1,
                 started=self.now(),
@@ -268,6 +283,10 @@ class ResearchTree:
                 nodes={},
                 insights=[],
                 survey=[],
+                plans={},
+                analyses={},
+                next_plan=1,
+                next_analysis=1,
                 insight_mark=0,
                 finalized=False,
             )
@@ -404,6 +423,10 @@ class ResearchTree:
                 f"  {i['id']} [{i['status']}] {i['text']} (evidence: {', '.join(i['evidence']) or '-'})"
                 for i in st["insights"]
             ]
+        if st.get("plans"):
+            lines += ["Plans:", *render_plans(st["plans"])]
+        if st.get("analyses"):
+            lines += ["Analyses:", *render_analyses(st["analyses"])]
         nudge = self._insight_nudge(st)
         if nudge:
             lines.append(nudge)
@@ -479,6 +502,7 @@ class ResearchTree:
         reuse: str = "",
         avoid: str = "",
         stop_condition: str = "",
+        plan_id: str = "",
     ) -> str:
         if kind not in KINDS:
             raise TreeError(f"kind must be one of {', '.join(KINDS)}")
@@ -532,6 +556,7 @@ class ResearchTree:
                 raise TreeError(
                     f"based_on cites unknown or unfinished ids: {', '.join(unknown)}"
                 )
+            backing = self._check_plan(st, kind, parents, plan_id)
             if gpu and any(
                 n.get("gpu") for n in nodes.values() if n["status"] == "running"
             ):
@@ -575,13 +600,23 @@ class ResearchTree:
                 "conflicts": conflicts,
                 "cluster": cluster or None,
                 "component": component.strip(),
-                "plan": plan.strip(),
+                "plan": plan.strip()
+                or (f"follow the accepted plan {plan_id}, given below" if backing else ""),
+                "plan_id": plan_id or None,
                 "reuse": reuse.strip(),
                 "avoid": avoid.strip(),
                 "stop_condition": stop_condition.strip(),
             }
+            if backing is not None:
+                backing["node"] = nid
             self._log(
-                st, "node-start", node=nid, kind=kind, parents=parents, minutes=budget
+                st,
+                "node-start",
+                node=nid,
+                kind=kind,
+                parents=parents,
+                minutes=budget,
+                plan=plan_id or None,
             )
             deliver = (
                 "This is a pilot: it is not scored. Write what you observed in NODE_REPORT.md."
@@ -686,6 +721,12 @@ class ResearchTree:
             )
             if node.get(key)
         ]
+        backing = st.get("plans", {}).get(node.get("plan_id") or "")
+        plan_section = (
+            [f"### The accepted plan ({backing['id']}): build this", backing["text"], ""]
+            if backing
+            else []
+        )
         found = (
             "\n\n".join(render_event(e, compact=True) for e in shown)
             or "(nothing yet: this is the first step)"
@@ -694,6 +735,12 @@ class ResearchTree:
             found += "\n\nInsights that bear on it:\n" + "\n".join(
                 f"- {i['id']} [{i['status']}] {i['text']}" for i in insights
             )
+        for par in parents:
+            note = next(
+                (a for a in st.get("analyses", {}).values() if a["node"] == par), None
+            )
+            if note is not None:
+                found += "\n\n" + render_analysis_for_brief(note)
         if node["conflicts"]:
             found += (
                 "\n\nMerging the parents' code left conflicts in: "
@@ -724,6 +771,7 @@ class ResearchTree:
                 "### The step",
                 *blueprint,
                 "",
+                *plan_section,
                 "### What earlier steps found",
                 found,
                 "",
@@ -970,6 +1018,215 @@ class ResearchTree:
             out.append(nudge)
         out.append(f"{self._remaining(st)} min left.")
         return " ".join(out)
+
+    # -------------------------------------------------------- plans, analyses
+
+    def _check_plan(
+        self, st: dict, kind: str, parents: list[str], plan_id: str
+    ) -> dict | None:
+        """Refuse a node the report rules do not allow; return the plan backing it."""
+        plans = st.get("plans", {})
+        plan = None
+        if plan_id:
+            if kind not in ("explore", "refine"):
+                raise TreeError(
+                    f"a {kind} node does not take a plan: plans back explore and refine nodes"
+                )
+            plan = plans.get(plan_id)
+            if plan is None:
+                raise TreeError(
+                    f"no plan {plan_id}; plans: {', '.join(plans) or 'none (record one with tree_plan)'}"
+                )
+            if plan["status"] != "accepted":
+                raise TreeError(
+                    f"plan {plan_id} is {plan['status']}, not accepted: decide on it with tree_plan first"
+                )
+            holder = plan.get("node")
+            if holder and st["nodes"][holder]["status"] != "abandoned":
+                raise TreeError(
+                    f"plan {plan_id} already backs {holder}; write or revise another plan for a new node"
+                )
+            if set(plan["parents"]) != set(parents):
+                raise TreeError(
+                    f"plan {plan_id} was written from {', '.join(plan['parents']) or 'the root'} but this "
+                    f"{kind} node starts from {', '.join(parents) or 'the root'}: they must match"
+                )
+        if self.require_plans:
+            if kind in ("explore", "refine") and plan is None:
+                raise TreeError(
+                    f"{kind} nodes need an accepted plan: have the plan-writer write one for this "
+                    "direction, record it with tree_plan, accept it, then pass plan_id here"
+                )
+            if kind == "refine" and not any(
+                a["node"] == parents[0] for a in st.get("analyses", {}).values()
+            ):
+                raise TreeError(
+                    f"{parents[0]} has no analysis yet: have the node-analyst analyse it and record the "
+                    "result with tree_analysis before refining it"
+                )
+        return plan
+
+    def plan(
+        self,
+        *,
+        text: str = "",
+        cluster: str = "",
+        parents: list[str] | tuple[str, ...] = (),
+        experiences: list[str] | tuple[str, ...] = (),
+        plan_id: str = "",
+        decision: str = "",
+        reason: str = "",
+        title: str = "",
+    ) -> str:
+        """Record a plan (or rewrite a draft), or decide on one."""
+        if bool(text.strip()) == bool(decision):
+            raise TreeError(
+                "give either `text` (record or rewrite a plan) or `decision` (accepted, rejected or "
+                "revise), not both and not neither"
+            )
+        self.repo.exclude(["/reports/"])
+        with self._edit() as st:
+            plans = st.setdefault("plans", {})
+            if decision:
+                return self._decide_plan(plans, plan_id, decision, reason)
+            if plan_id:
+                found = plans.get(plan_id)
+                if found is None:
+                    raise TreeError(f"no plan {plan_id}")
+                if found["status"] != "draft":
+                    raise TreeError(
+                        f"plan {plan_id} is {found['status']}; only a draft can be rewritten"
+                    )
+                if found["rounds"] >= MAX_PLAN_REVISIONS:
+                    raise TreeError(
+                        f"plan {plan_id} has been rewritten {MAX_PLAN_REVISIONS} times already: accept or "
+                        "reject it, and start a new plan if the direction is still worth pursuing"
+                    )
+                found["rounds"] += 1
+                found["text"] = text.strip()
+                found["experiences"] = sorted(
+                    set(found["experiences"]) | set(experiences)
+                )
+                found["feedback"] = ""
+                write_report(self.root, "plans", plan_id, text, found["rounds"] + 1)
+                self._log(st, "plan-rewrite", plan=plan_id, round=found["rounds"])
+                return (
+                    f"{plan_id} rewritten (round {found['rounds']} of {MAX_PLAN_REVISIONS}); it is a draft "
+                    "again. Decide with tree_plan(plan_id, decision=...)."
+                )
+            families = {c["name"] for c in st.get("survey", [])}
+            if cluster and cluster not in families:
+                raise TreeError(
+                    f"cluster {cluster!r} is not a surveyed family; known: "
+                    f"{', '.join(sorted(families)) or 'none (record the survey with tree_survey first)'}"
+                )
+            parents = list(dict.fromkeys(parents))
+            for par in parents:
+                node = st["nodes"].get(par)
+                if (
+                    node is None
+                    or node["status"] != "done"
+                    or node.get("score") is None
+                ):
+                    raise TreeError(f"parent {par} must be a finished, scored node")
+            pid = f"P{st.setdefault('next_plan', 1)}"
+            st["next_plan"] += 1
+            plans[pid] = {
+                "id": pid,
+                "title": title.strip() or short(text.strip().splitlines()[0], 80),
+                "cluster": cluster or None,
+                "parents": parents,
+                "status": "draft",
+                "rounds": 0,
+                "text": text.strip(),
+                "experiences": sorted(set(experiences)),
+                "feedback": "",
+                "node": None,
+            }
+            write_report(self.root, "plans", pid, text, 1)
+            self._log(st, "plan", plan=pid, cluster=cluster or None, parents=parents)
+            return (
+                f"{pid} recorded as a draft at reports/plans/{pid}.md. Review it, then call "
+                f"tree_plan(plan_id='{pid}', decision='accepted'|'revise'|'rejected', reason=...)."
+            )
+
+    def _decide_plan(
+        self, plans: dict, plan_id: str, decision: str, reason: str
+    ) -> str:
+        if decision not in PLAN_DECISIONS:
+            raise TreeError(f"decision must be one of {', '.join(PLAN_DECISIONS)}")
+        found = plans.get(plan_id)
+        if found is None:
+            raise TreeError(f"no plan {plan_id or '(plan_id is required)'}")
+        if found["status"] != "draft":
+            raise TreeError(f"plan {plan_id} is already {found['status']}")
+        if decision != "accepted" and not reason.strip():
+            raise TreeError(f"say why in `reason` when the decision is {decision}")
+        if decision == "revise":
+            if found["rounds"] >= MAX_PLAN_REVISIONS:
+                raise TreeError(
+                    f"plan {plan_id} has been rewritten {MAX_PLAN_REVISIONS} times: accept or reject it"
+                )
+            found["feedback"] = reason.strip()
+            return (
+                f"{plan_id} sent back. Give the plan-writer this feedback, then record the new text with "
+                f"tree_plan(plan_id='{plan_id}', text=...):\n{reason.strip()}"
+            )
+        found["status"] = "accepted" if decision == "accepted" else "rejected"
+        found["decision_reason"] = reason.strip()
+        if decision == "accepted":
+            return f"{plan_id} accepted. Open the node with tree_new(plan_id='{plan_id}', ...)."
+        return f"{plan_id} rejected: {reason.strip()}"
+
+    def analysis(
+        self,
+        *,
+        node: str,
+        text: str,
+        strengths: list[str] | tuple[str, ...] = (),
+        flaws: list[str] | tuple[str, ...] = (),
+        improvements: list[str] | tuple[str, ...] = (),
+        experiences: list[str] | tuple[str, ...] = (),
+    ) -> str:
+        """Record the analysis of a finished node (a second call rewrites it)."""
+        if not text.strip():
+            raise TreeError("text is required: the analyst's report, as it came back")
+        if not (flaws or improvements):
+            raise TreeError(
+                "an analysis names at least one flaw or one improvement; if the node has none, say what "
+                "was checked and put the reason in `improvements` as 'nothing to change: ...'"
+            )
+        self.repo.exclude(["/reports/"])
+        with self._edit() as st:
+            found = st["nodes"].get(node)
+            if found is None or found["status"] == "running":
+                raise TreeError(
+                    f"{node} is not a finished node; finish it with tree_finish first"
+                )
+            analyses = st.setdefault("analyses", {})
+            old = next((a for a in analyses.values() if a["node"] == node), None)
+            if old is not None:
+                aid, revisions = old["id"], old["revisions"] + 1
+            else:
+                aid, revisions = f"A{st.setdefault('next_analysis', 1)}", 0
+                st["next_analysis"] += 1
+            record = {
+                "id": aid,
+                "node": node,
+                "strengths": [str(x) for x in strengths],
+                "flaws": [str(x) for x in flaws],
+                "improvements": [str(x) for x in improvements],
+                "experiences": sorted(set(experiences)),
+                "revisions": revisions,
+            }
+            analyses[aid] = record
+            found["analysis"] = aid
+            write_report(self.root, "analyses", aid, text, revisions + 1)
+            self._log(st, "analysis", analysis=aid, node=node)
+            return (
+                f"{aid} recorded for {node} at reports/analyses/{aid}.md: {len(record['flaws'])} flaws, "
+                f"{len(record['improvements'])} improvements. A refine of {node} starts from these."
+            )
 
     # ------------------------------------------------------------- insights
 

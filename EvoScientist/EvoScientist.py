@@ -316,6 +316,7 @@ def _configured_system_prompt(cfg, work_dir: str | Path) -> str:
         cwd=real_cwd,
         bash_on_windows=uses_bash(),
         research_tree=getattr(cfg, "research_tree_enabled", False),
+        research_tree_reports=getattr(cfg, "research_tree_require_plans", False),
     )
 
 
@@ -462,6 +463,7 @@ def _inject_subagent_middleware(
                 create_experience_coach_middleware(
                     memory_dir=memory_dir,
                     project_id=memory_middleware.project_id,
+                    agent=name,
                     model=None,
                     max_selected=memory_controls.experience_policy_max_selected,
                     recent_messages=memory_controls.experience_coach_recent_messages,
@@ -791,7 +793,10 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     if getattr(cfg, "research_tree_enabled", False):
         from .research_tree.tools import create_research_tree_tools
 
-        for tool in create_research_tree_tools(workspace.root):
+        for tool in create_research_tree_tools(
+            workspace.root,
+            require_plans=getattr(cfg, "research_tree_require_plans", False),
+        ):
             tool_registry[tool.name] = tool
             base_tools.append(tool)
 

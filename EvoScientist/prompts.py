@@ -492,6 +492,17 @@ For an end-to-end research task, one that comes with a statement of your working
 - **Your context is not the record.** The tree is. Before each decision re-read it instead of relying on memory of earlier steps.
 """
 
+RESEARCH_TREE_REPORTS = """## Plans and analyses
+
+This run asks for a written plan before an explore or refine node and a written analysis of a node before it is refined. Sub-agents write the documents, you decide what to do with them.
+
+- **Plan before a node.** For a direction you chose (a surveyed family, or the flaws of a finished node), delegate to `plan-writer` with the `task` tool. Its experience coach reads only the description you give it, so put in the description: the direction and its family, what the data looks like (sizes, columns, the metric, anything measured so far), the working conditions (GPU, minutes left from `tree_status`), and for a refinement the parent's id with its analysis (flaws and improvements). It returns a plan. Paste that plan unchanged into `tree_plan(text=..., cluster=..., parents=[...], experiences=[the ids it names])`. Read it critically: does it test one hypothesis, can it finish in the node's minutes, does it repeat a node that failed in `tree_status`? Then call `tree_plan(plan_id=..., decision='accepted' | 'revise' | 'rejected', reason=...)`. A plan can be sent back twice; after that accept or reject it.
+- **Open the node on the accepted plan.** `tree_new(plan_id=...)` for explore and refine nodes (merge and pilot take no plan). The plan's full text goes into the implementing sub-agent's brief. The implementer has no coach; it keeps `search_experience`.
+- **Analysis after a node.** After `tree_finish`, delegate to `node-analyst` with the node id and what to check (hypothesis, score and slices from `tree_history`). It returns what is worth keeping, the flaws and the improvements. Record it with `tree_analysis(node=..., text=..., strengths=[...], flaws=[...], improvements=[...], experiences=[...])`. A refine is refused until its parent has an analysis, and the next plan for that parent starts from those flaws.
+- **Paste, do not paraphrase.** The record should hold what the sub-agent wrote and you reviewed. Your own judgement goes into `reason` and into the next decision.
+- **Fill the library before the first plan.** The coach can only speak from stored experience. If `search_experience` finds little, survey with paper-navigator, extract at least three papers with paper-experience and wait for the extraction to finish before asking `plan-writer` for the first plan.
+"""
+
 # =============================================================================
 # Combined exports
 # =============================================================================
@@ -503,6 +514,7 @@ def get_system_prompt(
     cwd: str | None = None,
     bash_on_windows: bool = False,
     research_tree: bool = False,
+    research_tree_reports: bool = False,
 ) -> str:
     """Generate the complete static system prompt.
 
@@ -532,6 +544,9 @@ def get_system_prompt(
             so, and dangerous mode shows Windows paths with forward slashes.
         research_tree: Append :data:`RESEARCH_TREE`; set when the ``tree_*``
             tools are registered (config ``research_tree_enabled``).
+        research_tree_reports: With ``research_tree``, also append
+            :data:`RESEARCH_TREE_REPORTS`: the plan-writer / node-analyst flow
+            (config ``research_tree_require_plans``).
 
     Returns:
         Combined static system prompt string.
@@ -554,4 +569,6 @@ def get_system_prompt(
     ]
     if research_tree:
         sections.append(RESEARCH_TREE)
+        if research_tree_reports:
+            sections.append(RESEARCH_TREE_REPORTS)
     return "\n".join(sections)

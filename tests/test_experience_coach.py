@@ -1042,6 +1042,25 @@ class TestCoachTraceRecordsEverythingItDecides:
         assert step["call_id"] == skip["call_id"]
 
     @pytest.mark.asyncio
+    async def test_a_subagents_coach_labels_every_record_with_its_name(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "EvoScientist.memory.experiences.experience_library_stats",
+            lambda **_: {"records": 0},
+        )
+        sub_dir, main_dir = tmp_path / "sub", tmp_path / "main"
+        sub_dir.mkdir()
+        main_dir.mkdir()
+        goal = [HumanMessage(content="goal")]
+        await _coach(sub_dir, agent="plan-writer")._suggestion(goal)
+        await _coach(main_dir)._suggestion(goal)
+        labelled = self._read(sub_dir)
+        assert [r["event"] for r in labelled] == ["coach_step", "coach_skip"]
+        assert {r["agent"] for r in labelled} == {"plan-writer"}
+        assert all("agent" not in r for r in self._read(main_dir))
+
+    @pytest.mark.asyncio
     async def test_the_gate_record_holds_its_input_cost_and_answer(
         self, tmp_path
     ) -> None:

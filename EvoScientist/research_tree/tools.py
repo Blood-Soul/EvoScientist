@@ -120,7 +120,14 @@ class NewArgs(BaseModel):
         description="False for work that does not need the GPU; only one GPU node runs at a time.",
     )
     plan: str = Field(
-        description="What to build or change, concretely, in 2-5 sentences. It goes into the sub-agent's brief."
+        default="",
+        description="What to build or change, concretely, in 2-5 sentences. It goes into the sub-agent's brief. "
+        "May be left empty when plan_id names an accepted plan.",
+    )
+    plan_id: str = Field(
+        default="",
+        description="An accepted plan (P1, ...) from tree_plan. Its full text goes into the sub-agent's brief. "
+        "Required for explore and refine nodes when the harness asks for plans; not for merge or pilot.",
     )
     cluster: str = Field(
         default="",
@@ -177,6 +184,59 @@ class InsightArgs(BaseModel):
     )
 
 
+class PlanArgs(BaseModel):
+    text: str = Field(
+        default="",
+        description="The plan-writer's plan, pasted as it came back. Give this to record a new plan, or with "
+        "plan_id to rewrite a draft. Leave empty when you are deciding.",
+    )
+    cluster: str = Field(
+        default="", description="The surveyed mechanism family the plan belongs to."
+    )
+    parents: list[str] = Field(
+        default_factory=list,
+        description="Finished, scored nodes the plan starts from (empty for a new direction, one node for a refinement).",
+    )
+    experiences: list[str] = Field(
+        default_factory=list,
+        description="Ids of stored experience records the plan-writer says it used.",
+    )
+    title: str = Field(default="", description="Short name; defaults to the first line.")
+    plan_id: str = Field(
+        default="",
+        description="Existing plan (P1, ...) to rewrite (with text) or to decide on (with decision).",
+    )
+    decision: str = Field(
+        default="",
+        description="accepted, rejected or revise. Your judgement of the plan; revise sends it back (at most "
+        "2 rewrites per plan) and needs a reason that you pass to the plan-writer.",
+    )
+    reason: str = Field(
+        default="", description="Why, required for rejected and revise."
+    )
+
+
+class AnalysisArgs(BaseModel):
+    node: str = Field(description="The finished node that was analysed.")
+    text: str = Field(
+        description="The node-analyst's report, pasted as it came back."
+    )
+    strengths: list[str] = Field(
+        default_factory=list, description="What is worth keeping, one item each."
+    )
+    flaws: list[str] = Field(
+        default_factory=list, description="What is wrong or unproven, one item each."
+    )
+    improvements: list[str] = Field(
+        default_factory=list,
+        description="What to change next, one item each; a refine starts from these.",
+    )
+    experiences: list[str] = Field(
+        default_factory=list,
+        description="Ids of stored experience records the analyst says it used.",
+    )
+
+
 class NoArgs(BaseModel):
     pass
 
@@ -186,9 +246,14 @@ def create_research_tree_tools(
     *,
     judge: Judge | None = None,
     now: Callable[[], float] | None = None,
+    require_plans: bool = False,
 ) -> list[BaseTool]:
-    """Build the research-tree tools for the project at `root`."""
-    kwargs = {"judge": judge}
+    """Build the research-tree tools for the project at `root`.
+
+    With `require_plans`, explore and refine nodes need an accepted plan and a
+    refine needs an analysis of its parent.
+    """
+    kwargs = {"judge": judge, "require_plans": require_plans}
     if now is not None:
         kwargs["now"] = now
     tree = ResearchTree(root, **kwargs)
@@ -278,6 +343,21 @@ def create_research_tree_tools(
             "Record or update a lesson drawn from several nodes. Cite the nodes that show it; mark it contradicted "
             "when a later node refutes it. Insights can be cited by later nodes.",
             InsightArgs,
+        ),
+        tool(
+            lambda **a: tree.plan(**a),
+            "tree_plan",
+            "Record a plan the plan-writer sub-agent returned (paste it in `text`), or decide on one "
+            "(`plan_id` and `decision`: accepted, revise, rejected). A plan backs one explore or refine node: "
+            "pass its id to tree_new. Rewrites are limited to 2 per plan.",
+            PlanArgs,
+        ),
+        tool(
+            lambda **a: tree.analysis(**a),
+            "tree_analysis",
+            "Record the analysis the node-analyst sub-agent returned for a finished node: what is worth "
+            "keeping, the flaws, the improvements. A refine of that node starts from them.",
+            AnalysisArgs,
         ),
         tool(
             lambda **a: tree.finalize(),

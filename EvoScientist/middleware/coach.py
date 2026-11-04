@@ -114,8 +114,12 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         idle_trigger_steps: int = 12,
         recent_actions: int = 10,
         candidate_limit: int = 24,
+        agent: str = "",
     ) -> None:
         super().__init__()
+        # Which agent this coach serves ("" for the main agent); every trace
+        # record carries it, so coached subagents can be counted apart.
+        self._agent = agent
         self._memory_dir = Path(memory_dir).expanduser()
         self._project_id = project_id
         self._model = model
@@ -227,6 +231,8 @@ class ExperienceCoachMiddleware(AgentMiddleware):
     async def _trace(self, event: str, **fields: Any) -> None:
         from ..memory.policy.trace import emit_trace_async
 
+        if self._agent:
+            fields.setdefault("agent", self._agent)
         await emit_trace_async(self._memory_dir, event, **fields)
 
     async def _task_brief(self, statement: str) -> Any:
@@ -524,8 +530,9 @@ def create_experience_coach_middleware(
     max_selected: int = 4,
     recent_messages: int = 6,
     background: bool | None = None,
+    agent: str = "",
 ) -> ExperienceCoachMiddleware:
-    """Factory for the experience coach (main agent only).
+    """Factory for the experience coach (the main agent, or a named subagent).
 
     ``background`` defaults to on: the coach derives guidance beside the agent and
     makes it wait only when a derivation has been outstanding for several steps. Set
@@ -542,6 +549,7 @@ def create_experience_coach_middleware(
         max_selected=max_selected,
         recent_messages=recent_messages,
         background=background,
+        agent=agent,
     )
 
 

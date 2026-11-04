@@ -111,6 +111,8 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         "tree_new",
         "tree_finish",
         "tree_insight",
+        "tree_plan",
+        "tree_analysis",
         "tree_finalize",
     }
 )
