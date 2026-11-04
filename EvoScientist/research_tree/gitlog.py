@@ -191,9 +191,8 @@ class Repo:
 
     # ------------------------------------------------------------------ setup
 
-    def init(self, extra_ignore: list[str] | None = None) -> str:
-        if not (self.root / ".git").exists():
-            self.git("init", "--quiet")
+    def exclude(self, patterns: list[str]) -> None:
+        """Add patterns to the repository-wide exclude file (shared by every worktree)."""
         common = Path(self.git("rev-parse", "--git-common-dir"))
         exclude = (
             (common if common.is_absolute() else self.root / common)
@@ -202,10 +201,15 @@ class Repo:
         )
         exclude.parent.mkdir(parents=True, exist_ok=True)
         have = set(exclude.read_text().splitlines()) if exclude.exists() else set()
-        add = [p for p in [*IGNORE_PATTERNS, *(extra_ignore or [])] if p not in have]
+        add = [p for p in patterns if p not in have]
         if add:
             with open(exclude, "a") as fh:
                 fh.write("\n".join(add) + "\n")
+
+    def init(self, extra_ignore: list[str] | None = None) -> str:
+        if not (self.root / ".git").exists():
+            self.git("init", "--quiet")
+        self.exclude([*IGNORE_PATTERNS, *(extra_ignore or [])])
         if self.git("rev-parse", "--verify", "--quiet", "HEAD", check=False) == "":
             self.git("add", "-A")
             self.git("commit", "--quiet", "--allow-empty", "-m", "research root")

@@ -41,6 +41,7 @@ from .gitlog import (
     render_event,
     render_trajectory,
 )
+from .errors import TreeError
 from .judge import Judge, judge_from_env
 from .monitor import (
     kill_processes_under,
@@ -71,10 +72,6 @@ OVERRUN_GRACE_MINUTES = (
 )
 WATCH_SECONDS = 30.0
 RELATED_NODES = 2  # other nodes (besides the parents) put into a sub-agent's brief
-
-
-class TreeError(RuntimeError):
-    """A request the tree refuses; the message says what to do instead."""
 
 
 def _minutes(seconds: float) -> float:
