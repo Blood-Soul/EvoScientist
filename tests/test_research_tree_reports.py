@@ -298,7 +298,7 @@ def test_reports_mode_replaces_the_planner_agent_routes() -> None:
             assert "not used" in line or "Do not use" in line or "in place of planner-agent" in line, line
     assert "→ plan-writer" in on and "→ node-analyst" in on
     # no pressure to land a first node fast; a placeholder deliverable is allowed
-    assert "cheap, valid baseline" not in on and "a trivial one is fine" in on
+    assert "cheap, valid baseline" not in on and "placeholder deliverable" in on
 
 
 def test_the_prompt_section_follows_the_flag() -> None:
@@ -562,3 +562,118 @@ class TestFilesAsHandoff:
             tree.plan(plan_id=pid, text="too late")
         with pytest.raises(TreeError, match="already accepted"):
             tree.plan(plan_id=pid, decision="rejected", reason="late")
+
+
+class TestKeepingTheCoordinatorOnTheFlow:
+    """The first end-to-end run showed a prompt is not enough: the main agent built its own code in the
+    project root and never used the tree. The tools now say what is due next, and the coordinator cannot
+    write code files."""
+
+    def test_next_step_follows_the_record(self, strict) -> None:
+        tree, root, clock = strict
+        assert "tree_survey" in tree.status().splitlines()[-1]
+        tree.survey([{"name": "a", "mechanism": "m"}])
+        assert "plan-writer" in tree.status().splitlines()[-1]
+        tree.plan(text=PLAN)
+        assert "decide on the draft plan" in tree.status().splitlines()[-1] and "P1" in tree.status().splitlines()[-1]
+        tree.plan(plan_id="P1", decision="accepted")
+        assert "open a node on an accepted plan" in tree.status().splitlines()[-1]
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id="P1")
+        assert "n1 is being built" in tree.status().splitlines()[-1]
+        node = root / "nodes" / "n1"
+        (node / "holdout_predictions.csv").write_text("1\n" * 400)
+        (node / "submission.csv").write_text("d")
+        clock.advance(30)
+        tree.finish("n1", change="c", observation="o")
+        assert "node-analyst to analyse n1" in tree.status().splitlines()[-1]
+        tree.analysis(node="n1", text="t", flaws=["f"])
+        assert "plan-writer" in tree.status().splitlines()[-1]
+
+    def test_the_hints_are_only_for_runs_that_require_plans(self, tmp_path) -> None:
+        tree, *_ = make(tmp_path, require_plans=False)
+        assert "Next:" not in tree.status()
+
+    def test_init_tells_the_flow_in_reports_mode_only(self, tmp_path) -> None:
+        root = tmp_path / "a"
+        root.mkdir()
+        strict = ResearchTree(root, judge=FakeJudge(), now=Clock(), require_plans=True)
+        assert "You do not write code" in strict.init(budget_minutes=300)
+        root2 = tmp_path / "b"
+        root2.mkdir()
+        plain = ResearchTree(root2, judge=FakeJudge(), now=Clock())
+        assert "How this run goes" not in plain.init(budget_minutes=300)
+
+    def test_prompt_forbids_building_in_the_project_root(self) -> None:
+        text = get_system_prompt(research_tree=True, research_tree_reports=True)
+        assert "You do not build anything in the project root" in text
+        assert "cheap, valid baseline" not in text
+
+    @pytest.mark.parametrize(
+        "call,refused",
+        [
+            ({"name": "write_file", "args": {"file_path": "/x/src/prep.py"}}, True),
+            ({"name": "edit_file", "args": {"file_path": "train.sh"}}, True),
+            ({"name": "write_file", "args": {"file_path": "cfg/run.YAML"}}, True),
+            ({"name": "write_file", "args": {"file_path": "reports/drafts/plan-a.md"}}, False),
+            ({"name": "write_file", "args": {"file_path": "submission.csv"}}, False),
+            ({"name": "execute", "args": {"command": "python x.py"}}, False),
+            ({"name": "tree_new", "args": {}}, False),
+        ],
+    )
+    def test_guard_refuses_only_code_files(self, call, refused) -> None:
+        from EvoScientist.middleware.coordinator_guard import refuses
+
+        assert refuses(call) is refused
+
+    @pytest.mark.asyncio
+    async def test_guard_answers_with_an_error_message_and_lets_the_rest_through(self) -> None:
+        from types import SimpleNamespace
+
+        from EvoScientist.middleware.coordinator_guard import CoordinatorGuardMiddleware
+
+        guard = CoordinatorGuardMiddleware()
+        seen = []
+
+        async def handler(req):
+            seen.append(req)
+            return "passed"
+
+        blocked = SimpleNamespace(tool_call={"id": "c1", "name": "write_file", "args": {"file_path": "a.py"}})
+        out = await guard.awrap_tool_call(blocked, handler)
+        assert out.status == "error" and "nodes/<id>/" in out.content and not seen
+        assert guard.wrap_tool_call(blocked, lambda r: "sync").status == "error"
+        ok = SimpleNamespace(tool_call={"id": "c2", "name": "write_file", "args": {"file_path": "notes.md"}})
+        assert await guard.awrap_tool_call(ok, handler) == "passed" and guard.wrap_tool_call(ok, lambda r: "sync") == "sync"
+
+
+def _guard_present(require, *, for_async_subagent=False):
+    from unittest.mock import MagicMock, patch
+
+    from EvoScientist.EvoScientist import _get_default_middleware
+
+    with (
+        patch("EvoScientist.middleware.create_tool_selector_middleware", return_value=[]),
+        patch("EvoScientist.EvoScientist._ensure_chat_model") as chat,
+        patch("EvoScientist.EvoScientist._ensure_config") as config,
+    ):
+        cfg = MagicMock()
+        cfg.enable_ask_user = False
+        cfg.auto_mode = True
+        cfg.auxiliary_model = ""
+        cfg.auxiliary_provider = ""
+        cfg.research_tree_require_plans = require
+        config.return_value = cfg
+        chat.return_value = MagicMock(profile={"max_input_tokens": 200_000})
+        import tempfile
+
+        from EvoScientist.paths import Workspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mw = _get_default_middleware(workspace=Workspace(Path(tmp)), for_async_subagent=for_async_subagent)
+    return any(type(m).__name__ == "CoordinatorGuardMiddleware" for m in mw)
+
+
+def test_the_guard_is_on_the_main_agent_only_and_only_in_reports_mode() -> None:
+    assert _guard_present(True) is True
+    assert _guard_present(False) is False
+    assert _guard_present(True, for_async_subagent=True) is False

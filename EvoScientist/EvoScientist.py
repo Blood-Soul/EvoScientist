@@ -1305,6 +1305,11 @@ def _get_default_middleware(
                 memory_scheduler=memory_scheduler,
             )
         )
+    # A run whose research tree is mandatory: the coordinator does not write code files itself.
+    if getattr(cfg, "research_tree_require_plans", False) is True and not for_async_subagent:
+        from .middleware.coordinator_guard import CoordinatorGuardMiddleware
+
+        mw.append(CoordinatorGuardMiddleware())
 
     if cfg.enable_ask_user and not cfg.auto_mode and not for_async_subagent:
         from .middleware.ask_user import AskUserMiddleware

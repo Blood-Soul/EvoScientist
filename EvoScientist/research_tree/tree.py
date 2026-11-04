@@ -220,6 +220,40 @@ class ResearchTree:
         return late
 
     @staticmethod
+    def _next_step(st: dict) -> str:
+        """The one thing the record says is due next (reports mode), so the agent need not remember the flow."""
+        nodes = st["nodes"]
+        plans = st.get("plans", {})
+        analysed = {a["node"] for a in st.get("analyses", {}).values()}
+        running = [k for k, n in nodes.items() if n["status"] == "running"]
+        unanalysed = [
+            k
+            for k, n in nodes.items()
+            if n["status"] == "done" and n["kind"] != "pilot" and k not in analysed
+        ]
+        drafts = [k for k, p in plans.items() if p["status"] == "draft"]
+        ready = [k for k, p in plans.items() if p["status"] == "accepted" and not p.get("node")]
+        if not st.get("survey"):
+            return "Next: record the survey with tree_survey. Nothing is built before it."
+        if running:
+            return (
+                f"Next: {', '.join(running)} is being built by its sub-agent in its node directory; "
+                "close it with tree_finish when it is done."
+            )
+        if unanalysed:
+            return (
+                f"Next: ask node-analyst to analyse {', '.join(unanalysed)} and record it with "
+                "tree_analysis(node, path)."
+            )
+        if drafts:
+            return f"Next: read and decide on the draft plan(s) {', '.join(drafts)} (tree_plan with a decision)."
+        if ready:
+            return f"Next: open a node on an accepted plan with tree_new(plan_id=...): {', '.join(ready)}."
+        if not plans:
+            return "Next: ask plan-writer (task) for a plan for each of two or three directions, then record them with tree_plan(path)."
+        return "Next: ask plan-writer for a plan for the next direction, or finalize if the time is nearly up."
+
+    @staticmethod
     def _closed(st: dict) -> int:
         """Nodes that ended as a candidate (pilots are evidence, not candidates)."""
         return sum(
@@ -292,7 +326,19 @@ class ResearchTree:
             )
             self._log(st, "init", deadline=deadline, shared=list(shared))
             self._start_monitors()
-            return "Research tree initialised.\n\n" + self._status(st)
+            how = (
+                "\n\nHow this run goes (the tools refuse the shortcuts):\n"
+                "1. tree_survey: record the mechanism families you found.\n"
+                "2. Ask plan-writer (task) for a plan for each of two or three directions; record each with "
+                "tree_plan(path=...), read it, compare, decide.\n"
+                "3. tree_new(plan_id=...) opens a node and writes its brief; a sub-agent builds it inside "
+                "nodes/<id>/. You do not write code, and nothing is built in the project root.\n"
+                "4. tree_finish scores the node on the held-out rows; node-analyst reflects on it; "
+                "tree_analysis records that; then the next plan."
+                if self.require_plans
+                else ""
+            )
+            return "Research tree initialised.\n\n" + self._status(st) + how
 
     # --------------------------------------------------------------- survey
 
@@ -427,6 +473,8 @@ class ResearchTree:
             lines += ["Plans:", *render_plans(st["plans"])]
         if st.get("analyses"):
             lines += ["Analyses:", *render_analyses(st["analyses"])]
+        if self.require_plans:
+            lines.append(self._next_step(st))
         nudge = self._insight_nudge(st)
         if nudge:
             lines.append(nudge)
