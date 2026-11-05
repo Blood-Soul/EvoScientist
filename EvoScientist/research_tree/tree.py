@@ -207,7 +207,8 @@ class ResearchTree:
             )
         if unanalysed:
             parts.append(
-                f"ask node-analyst to analyse {', '.join(unanalysed)} and record it with tree_analysis(node, path)"
+                f"ask node-analyst to analyse {', '.join(unanalysed)} and write the plan that follows from it; record the "
+                "analysis with tree_analysis(node, path) and the plan with tree_plan(path, parents=[node])"
             )
         if parts:
             return "Next: " + "; ".join(parts) + "."

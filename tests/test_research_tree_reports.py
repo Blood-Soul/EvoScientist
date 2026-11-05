@@ -809,3 +809,78 @@ class TestCodeOnlyNodes:
         assert "tree_start" in text and "gpu=false" in text and "START.md" in text
         made = {t.name: t for t in create_research_tree_tools(Path("."))}
         assert "tree_start" in made and "node" in made["tree_start"].args
+
+
+class TestAnalysisAndNextPlanInOneRun:
+    """node-analyst writes the analysis and the plan that follows; the tools record each from its file."""
+
+    NEXT = "# Plan: fix the end label\n## What to build\n1. one line\n## Evidence\n- the choice (A1 flaw 1)\n## Experience used\nnone\n"
+
+    @pytest.fixture
+    def tools(self, tmp_path):
+        root = tmp_path / "ws"
+        root.mkdir()
+        clock = Clock()
+        made = {
+            t.name: t
+            for t in create_research_tree_tools(root, judge=FakeJudge(), now=clock, require_plans=True)
+        }
+        made["tree_init"].invoke({"budget_minutes": 600})
+        made["tree_survey"].invoke({"clusters": [{"name": "A", "mechanism": "m"}]})
+        d = root / "reports" / "drafts"
+        d.mkdir(parents=True)
+        (d / "plan-a.md").write_text(PLAN)
+        made["tree_plan"].invoke({"path": "reports/drafts/plan-a.md", "cluster": "A"})
+        made["tree_plan"].invoke({"plan_id": "P1", "decision": "accepted"})
+        made["tree_new"].invoke({"kind": "explore", "title": "t", "hypothesis": "h", "plan_id": "P1"})
+        n = root / "nodes" / "n1"
+        (n / "holdout_predictions.csv").write_text("1\n" * 400)
+        (n / "submission.csv").write_text("d")
+        clock.advance(30)
+        made["tree_finish"].invoke({"node": "n1", "change": "c", "observation": "o"})
+        return made, root
+
+    def test_the_two_files_of_one_analyst_are_recorded_and_the_refine_opens(self, tools) -> None:
+        made, root = tools
+        d = root / "reports" / "drafts"
+        (d / "analysis-n1.md").write_text(ANALYSIS)
+        (d / "plan-next-n1.md").write_text(self.NEXT)
+        assert "A1 recorded for n1" in made["tree_analysis"].invoke({"node": "n1", "path": "reports/drafts/analysis-n1.md"})
+        out = made["tree_plan"].invoke({"path": "reports/drafts/plan-next-n1.md", "parents": ["n1"], "cluster": "A"})
+        assert out.startswith("P2 recorded")
+        made["tree_plan"].invoke({"plan_id": "P2", "decision": "accepted"})
+        opened = made["tree_new"].invoke(
+            {"kind": "refine", "title": "r", "hypothesis": "h", "parents": ["n1"], "based_on": ["n1"], "plan_id": "P2"}
+        )
+        assert opened.startswith("Created n2")
+        brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
+        assert "fix the end label" in brief and "Analysis A1 of n1" in brief  # the plan and the analysis, together
+
+    def test_a_next_plan_without_the_analysis_still_cannot_open_a_refine(self, tools) -> None:
+        made, root = tools
+        (root / "reports" / "drafts" / "plan-next-n1.md").write_text(self.NEXT)
+        made["tree_plan"].invoke({"path": "reports/drafts/plan-next-n1.md", "parents": ["n1"], "cluster": "A"})
+        made["tree_plan"].invoke({"plan_id": "P2", "decision": "accepted"})
+        out = made["tree_new"].invoke(
+            {"kind": "refine", "title": "r", "hypothesis": "h", "parents": ["n1"], "based_on": ["n1"], "plan_id": "P2"}
+        )
+        assert out.startswith("ERROR: n1 has no analysis yet")
+
+    def test_the_hint_after_a_finished_node_names_both_files_to_record(self, tools) -> None:
+        made, _ = tools
+        last = made["tree_status"].invoke({}).splitlines()[-1]
+        assert "node-analyst to analyse n1 and write the plan that follows" in last
+        assert "tree_analysis(node, path)" in last and "tree_plan(path, parents=[node])" in last
+
+    def test_the_definitions_and_the_prompt_describe_the_merge(self) -> None:
+        text = get_system_prompt(research_tree=True, research_tree_reports=True)
+        assert "the two files to write" in text and "plan-next-<node>.md" in text
+        assert "ONE `code_interpreter` eval" in text and "start_async_task" in text
+        assert "subagentType" in text
+        from tests.test_research_tree_reports import TestSubagents
+
+        analyst = TestSubagents._load("node-analyst")["system_prompt"]
+        assert "### The next plan" in analyst and "plan-next-<node id>.md" in analyst
+        assert "may run small experiments" in analyst
+        writer = TestSubagents._load("plan-writer")["system_prompt"]
+        assert "states the result and the choice, not the story of the experiment" in writer

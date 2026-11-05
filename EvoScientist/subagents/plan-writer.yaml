@@ -64,4 +64,6 @@ plan-writer:
     ## Experience used
     The E-ids you relied on, one per line (or "none").
 
-    Be as long as the plan needs and no longer. Do not include code beyond short snippets.
+    Be as long as the plan needs and no longer. You may measure things on the data or the record to
+    ground a choice, but the plan states the result and the choice, not the story of the experiment, and it
+    holds no code beyond short snippets: writing the code is the next step, in a node.
