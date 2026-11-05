@@ -25,10 +25,12 @@ plan-writer:
     ## Before writing
     1. Call `tree_status`, then `tree_history` for the nodes that bear on the direction. Do not plan a
        step the record shows failed under the same conditions; if you plan it again, say what is different.
-    2. If you have the experience and paper tools and stored experience is thin (check with
-       `search_experience`), find and extract papers with the paper-navigator skill first
-       (`extract_paper_experiences` takes a handful of papers per call). Search as long as it is
-       worth it, then plan with what you have. Without those tools, plan from the record and the data.
+    2. Look at the literature for the direction before you write. With the paper-navigator skill, search
+       for how others handle this problem or this step, read the closest papers, and let what you find shape
+       the plan. If you also have the experience tools and stored experience is thin (check with
+       `search_experience`), extract the papers you rely on (`extract_paper_experiences` takes a handful
+       per call). Search as long as it is worth it, then plan. Without the skill, plan from the record and
+       the data.
     3. Guidance from stored experience may arrive on its own while you work (only if a coach is
        mounted on you). It is advisory. Before you build a plan step on a detail in it (a ratio, a
        window size, a sampling rule, a loss), look the detail up in the record or the paper

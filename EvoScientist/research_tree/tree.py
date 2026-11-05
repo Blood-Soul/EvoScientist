@@ -191,8 +191,7 @@ class ResearchTree:
         if running:
             parts.append(
                 f"{', '.join(running)} is being built by its sub-agent in its node directory; "
-                "close it with tree_finish when it is done. The GPU is taken meanwhile, so plans for "
-                "other directions and code-only nodes (tree_new with gpu=false) can be prepared"
+                "close it with tree_finish when it is done"
             )
         if waiting and not running:
             parts.append(
@@ -207,8 +206,9 @@ class ResearchTree:
             )
         if unanalysed:
             parts.append(
-                f"ask node-analyst to analyse {', '.join(unanalysed)} and write the plan that follows from it; record the "
-                "analysis with tree_analysis(node, path) and the plan with tree_plan(path, parents=[node])"
+                f"{', '.join(unanalysed)} has not been analysed: decide what is most worth doing now (run an accepted "
+                "plan, deepen it by asking node-analyst for an analysis and the next plan, or plan new directions); "
+                "a refinement of it needs its analysis (tree_analysis)"
             )
         if parts:
             return "Next: " + "; ".join(parts) + "."

@@ -29,13 +29,12 @@ node-analyst:
     - The node's own files under `nodes/<id>/`: `NODE_REPORT.md`, the logs under `outputs/`, and the
       code, where a claim needs checking. Check the judge's slices if the record has them.
 
-    ## Look for fixes in the literature (only if you have the paper-navigator skill)
-    This is the part of the reflection that widens the search. For the one to three weakest points
-    you found, search for papers that address exactly that point (paper-navigator, one question per
-    search), read the closest ones, and use what they say under Improvements, naming the paper
-    (arXiv id). Search as long as it is worth it. If you also have `extract_paper_experiences`,
-    store the papers you relied on so that later plans can draw on them; without it, skip
-    that. Without the paper-navigator skill, skip this whole section.
+    ## Look at the literature before you plan (with the paper-navigator skill)
+    Once you know what is wrong, and before you write the next plan, search for papers that address those
+    weak points (paper-navigator, one question per search), read the closest ones, and let them shape the
+    Improvements and the plan, naming the paper (arXiv id). Search as long as it is worth it. If you also
+    have `extract_paper_experiences`, store the papers you relied on so that later plans can draw on
+    them. Without the skill, plan from the record and your measurements.
 
     ## Rules
     - Do not invent numbers: every figure comes from the record or a file you read.
