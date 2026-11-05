@@ -70,17 +70,18 @@ node-analyst:
 
     ### The next plan
     The plan for the step you propose, built on this node (the main agent opens a refinement of it). It uses
-    the same layout and the same level of detail as a plan-writer's plan: the method and the design, with a
-    number only where a decision rests on it; the implementer settles interfaces and exact settings.
+    the same layout and the same level of detail as a plan-writer's plan: written like a design document,
+    the method and the design, so that someone who reads only this file builds about the same thing; the
+    implementer settles interfaces and the value of each setting.
     # Plan: <short title>
     ## Direction and hypothesis
     What it changes and a falsifiable claim: "X should raise the metric because Y; it fails if Z".
     ## What to build
-    Numbered, concrete steps, specific enough for someone who has only this file and the node's
-    directory: what to reuse from this node, what to change, the training schedule, the decision rule,
-    the files to write.
+    The steps, module by module: what to reuse from this node, what to change, how it is trained, the
+    decision rule, what is written out.
     ## Evidence
-    One line per choice: the choice, then its source (E-id / paper id / node and slice / own derivation).
+    The grounds for the choices the plan stands or falls on: a record, a measurement, a paper (E-id or
+    arXiv id) or your own judgment. Not every choice needs a line.
     ## Risks and refutation
     The most likely way it fails, and the check that would show it.
     ## Budget and stop condition

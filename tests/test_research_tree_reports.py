@@ -899,12 +899,18 @@ def test_planning_starts_from_the_literature_for_both_writers() -> None:
     assert "before you write the next plan" in analyst
 
 
-def test_plans_are_asked_for_method_and_design_not_interfaces_and_every_number() -> None:
+def test_plans_are_asked_for_a_design_document_not_interfaces_and_a_source_for_every_choice() -> None:
     writer = TestSubagents._load("plan-writer")["system_prompt"]
-    assert "explain the method and" in writer and "the design" in writer
-    assert "are for the implementer to" in writer and "A number belongs in the plan when a decision rests on it" in writer
+    assert "design document or a technical report" in writer
+    assert "does about the same thing" in writer and "are for the implementer to" in writer
+    assert "Specific enough that an engineer" not in writer
+    # the one rule that stays: no false citations; own judgment is allowed and needs no source line
+    assert "Never present a detail as coming from a paper or a record unless you have read it there" in writer
+    assert 'labelled "own derivation"' not in writer and "Every concrete choice" not in writer
+    assert "Not every choice needs a line" in writer
     analyst = TestSubagents._load("node-analyst")["system_prompt"]
     assert "the same level of detail as a plan-writer's plan" in analyst
+    assert "Not every choice needs a line" in analyst
     # a hint, not a cap: no word or minute limit appears in either definition
     import re
     for text in (writer, analyst):

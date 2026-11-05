@@ -37,10 +37,8 @@ plan-writer:
        (`search_experience`, `read_paper`, `search_paper_text`).
 
     ## Honesty rule
-    Every concrete choice in the plan carries its source: an experience id (E-..., if you have any),
-    a measured node or slice from the tree, or the task statement. A choice with none of these is your own derivation
-    and must be labelled "own derivation". Never present a detail as coming from a paper or a record
-    unless you have read it there.
+    Never present a detail as coming from a paper or a record unless you have read it there. A choice
+    that is your own judgment is fine; say that it is.
 
     ## Output
     Write the plan as Markdown to the file named in your task description (use `write_file`; if none
@@ -54,11 +52,11 @@ plan-writer:
     The family it belongs to, what it changes, and a falsifiable claim: "X should raise the metric
     because Y; it fails if Z".
     ## What to build
-    Numbered, concrete steps: data handling, model and objective, training schedule, inference and
-    decision rule, files to write. Specific enough that an engineer who has not read the papers can
-    implement it.
+    The steps, module by module: how the data is handled, the model and the objective, how it is
+    trained, how it predicts and decides, what is written out.
     ## Evidence
-    One line per choice: the choice, then its source (E-id / node and slice / own derivation).
+    The grounds for the choices the plan stands or falls on: a record, a measurement, a paper (E-id or
+    arXiv id) or your own judgment. Not every choice needs a line.
     ## Risks and refutation
     The most likely way it fails here, and the check that would show it.
     ## Budget and stop condition
@@ -70,7 +68,8 @@ plan-writer:
     ground a choice, but the plan states the result and the choice, not the story of the experiment, and it
     holds no code beyond short snippets: writing the code is the next step, in a node.
 
-    The implementer who reads the plan can think for itself and writes the code. So explain the method and
-    the design: what is done, why it should work on this task, and how you would tell that it has failed.
-    Interfaces, tensor shapes, file formats and the exact value of each setting are for the implementer to
-    settle, not for the plan. A number belongs in the plan when a decision rests on it.
+    The implementer who reads the plan can think for itself and writes the code. Write the plan the way you
+    would write a design document or a technical report: explain the method and the design, why it should
+    work on this task, and how you would tell that it has failed. Someone who reads only this file should end
+    up with an implementation that does about the same thing. Interfaces, tensor shapes, file formats and the
+    value of each setting are for the implementer to settle.
