@@ -581,10 +581,9 @@ class TestKeepingTheCoordinatorOnTheFlow:
 
     def test_next_step_follows_the_record(self, strict) -> None:
         tree, root, clock = strict
-        # no survey is required: the first thing due is a batch of independent plans
-        first = tree.status().splitlines()[-1]
-        assert "plan-writer" in first and "independent of one another" in first and "wait for all of them" in first
-        assert "tree_survey" not in first
+        assert "tree_survey" in tree.status().splitlines()[-1]
+        tree.survey([{"name": "a", "mechanism": "m"}])
+        assert "plan-writer" in tree.status().splitlines()[-1]
         tree.plan(text=PLAN)
         assert "decide on the draft plan" in tree.status().splitlines()[-1] and "P1" in tree.status().splitlines()[-1]
         tree.plan(plan_id="P1", decision="accepted")
@@ -775,8 +774,8 @@ class TestCodeOnlyNodes:
         tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
         busy = tree.status().splitlines()[-1]
         assert "n1 is being built" in busy and "prepared and waiting for the GPU: n2" in busy
+        assert "gpu=false" in busy
         assert "can be dropped with tree_finish(node, abandon_reason=...)" in busy
-        assert "gpu=false" not in busy  # the prompt no longer pushes preparing nodes while a node trains
 
     def test_a_prepared_node_is_closed_only_by_dropping_it(self, strict) -> None:
         tree, root, clock = strict
@@ -806,9 +805,8 @@ class TestCodeOnlyNodes:
         assert "abandoned" in git(root, "notes", "--ref=outcome", "show", "node/n2")
 
     def test_the_prompt_and_the_tool_say_how_it_works(self) -> None:
-        # the capability stays in the tools; the prompt does not tell the agent to use it while a node trains
         text = get_system_prompt(research_tree=True, research_tree_reports=True)
-        assert "tree_start" not in text and "While the GPU is busy" not in text
+        assert "tree_start" in text and "gpu=false" in text and "START.md" in text
         made = {t.name: t for t in create_research_tree_tools(Path("."))}
         assert "tree_start" in made and "node" in made["tree_start"].args
 
@@ -877,8 +875,8 @@ class TestAnalysisAndNextPlanInOneRun:
     def test_the_definitions_and_the_prompt_describe_the_merge(self) -> None:
         text = get_system_prompt(research_tree=True, research_tree_reports=True)
         assert "the two files to write" in text and "plan-next-<node>.md" in text
-        assert "start_async_task" in text and "subagentType" in text
-        assert "you wait for it, as a single agent waits for its own training" in text
+        assert "ONE `code_interpreter` eval" in text and "start_async_task" in text
+        assert "subagentType" in text
         from tests.test_research_tree_reports import TestSubagents
 
         analyst = TestSubagents._load("node-analyst")["system_prompt"]
@@ -888,19 +886,8 @@ class TestAnalysisAndNextPlanInOneRun:
         assert "states the result and the choice, not the story of the experiment" in writer
 
 
-def test_the_prompt_says_plans_first_wait_for_every_plan_and_hand_over_the_node_at_once() -> None:
+def test_the_prompt_says_wait_for_every_plan_and_hand_over_the_node_at_once() -> None:
     text = get_system_prompt(research_tree=True, research_tree_reports=True)
-    assert "Plans first, then one node" in text
-    assert "Wait until every plan has come back" in text and "the one that takes longest may be the best" in text
+    assert "Wait until every plan has come back" in text
+    assert "the plan that takes longest may be the best one" in text
     assert "hand the implementer its task in the very next step" in text
-    assert "tree_survey" in text and "optional" in text  # families may still be recorded, none are required
-
-
-def test_first_plans_are_to_be_independent_and_the_main_agent_checks_it() -> None:
-    text = get_system_prompt(research_tree=True, research_tree_reports=True)
-    assert "Choose directions that are independent of one another" in text
-    assert "check each one for such a dependency" in text
-    assert "keep it for after that node" in text
-    writer = TestSubagents._load("plan-writer")["system_prompt"]
-    assert "one of several candidates for the first node" in writer
-    assert "never the trained model, features or outputs of another plan" in writer

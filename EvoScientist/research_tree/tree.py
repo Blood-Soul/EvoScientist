@@ -185,11 +185,14 @@ class ResearchTree:
         ]
         drafts = [k for k, p in plans.items() if p["status"] == "draft"]
         ready = [k for k, p in plans.items() if p["status"] == "accepted" and not p.get("node")]
+        if not st.get("survey"):
+            return "Next: record the survey with tree_survey. Nothing is built before it."
         parts = []
         if running:
             parts.append(
                 f"{', '.join(running)} is being built by its sub-agent in its node directory; "
-                "close it with tree_finish when it is done"
+                "close it with tree_finish when it is done. The GPU is taken meanwhile, so plans for "
+                "other directions and code-only nodes (tree_new with gpu=false) can be prepared"
             )
         if waiting and not running:
             parts.append(
@@ -214,10 +217,7 @@ class ResearchTree:
         if ready:
             return f"Next: open a node on an accepted plan with tree_new(plan_id=...): {', '.join(ready)}."
         if not plans:
-            return (
-                "Next: ask plan-writer for a plan for each direction worth trying, independent of one another, "
-                "in one batch; wait for all of them, record each with tree_plan(path), compare, decide."
-            )
+            return "Next: ask plan-writer (task) for a plan for each direction worth trying, then record them with tree_plan(path)."
         return "Next: ask plan-writer for a plan for the next direction, or finalize if the time is nearly up."
 
     @staticmethod
@@ -291,10 +291,9 @@ class ResearchTree:
             self._start_monitors()
             how = (
                 "\n\nHow this run goes (the tools refuse the shortcuts):\n"
-                "1. Ask plan-writer (task) for a plan for each direction worth trying, independent of one "
-                "another, in one batch; wait for all of them.\n"
-                "2. Record each with tree_plan(path=...), read it, check it does not depend on another plan, "
-                "compare, decide.\n"
+                "1. tree_survey: record the mechanism families you found.\n"
+                "2. Ask plan-writer (task) for a plan for each direction worth trying; record each with "
+                "tree_plan(path=...), read it, compare, decide.\n"
                 "3. tree_new(plan_id=...) opens a node and writes its brief; a sub-agent builds it inside "
                 "nodes/<id>/. You do not write code, and nothing is built in the project root.\n"
                 "4. tree_finish scores the node on the held-out rows; node-analyst reflects on it; "
