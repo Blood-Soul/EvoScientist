@@ -814,6 +814,9 @@ class ResearchTree:
             "overwrite them if you improve.",
             "Work only inside this directory. Do not modify `data/`. Put checkpoints and logs under "
             f"`outputs/`.{outputs_note}",
+            "Use the GPU well: choose the batch size (and the number of data-loader workers) so that GPU memory "
+            "and compute are mostly in use instead of leaving the card half idle; check with a short test run "
+            "and `nvidia-smi` before the long run.",
             "Test the hypothesis of this step; do not drift into a different idea. If the stop condition is "
             "met, stop, write what you found, and finish.",
             "The full record of the steps above is in git: `git log --all` and `git show node/<id>` work from "
