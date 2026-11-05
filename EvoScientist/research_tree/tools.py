@@ -117,7 +117,9 @@ class NewArgs(BaseModel):
     )
     gpu: bool = Field(
         default=True,
-        description="False for work that does not need the GPU; only one GPU node runs at a time.",
+        description="Only one node holds the GPU at a time. False opens a code-only node: it holds no GPU "
+        "and has no running clock, so its code can be written while another node trains; hand it the GPU "
+        "later with tree_start, which also starts its budget.",
     )
     plan: str = Field(
         default="",
@@ -221,6 +223,14 @@ class AnalysisArgs(BaseModel):
         description="Workspace-relative path of the analysis file the node-analyst wrote. The tool reads the "
         "file and takes the items under '## Worth keeping', '## Flaws', '## Improvements' and "
         "'## Experience used'; do not paste the report."
+    )
+
+
+class StartArgs(BaseModel):
+    node: str = Field(description="A prepared code-only node (opened with gpu=false) to give the GPU.")
+    minutes: float | None = Field(
+        default=None,
+        description="Budget for the run from now. Defaults to the budget given at tree_new; clipped to the time left.",
     )
 
 
@@ -335,6 +345,13 @@ def create_research_tree_tools(
             "sub-agent verbatim. Refused without based_on once there is history, with a second GPU node, or "
             "without time.",
             NewArgs,
+        ),
+        tool(
+            lambda **a: tree.start(a.pop("node"), **a),
+            "tree_start",
+            "Give the GPU to a prepared code-only node (opened with tree_new gpu=false) and start its budget. "
+            "Refused while another node holds the GPU. The reply says what to hand the sub-agent that runs it.",
+            StartArgs,
         ),
         tool(
             lambda **a: tree.finish(a.pop("node"), **a),

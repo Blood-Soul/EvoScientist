@@ -687,3 +687,118 @@ def test_the_guard_is_on_the_main_agent_only_and_only_in_reports_mode() -> None:
     assert _guard_present(True) is True
     assert _guard_present(False) is False
     assert _guard_present(True, for_async_subagent=True) is False
+
+
+class TestCodeOnlyNodes:
+    """gpu=false opens a node that only gets code written: no GPU, no running clock, until tree_start."""
+
+    def _two_plans(self, tree):
+        tree.survey([{"name": "a", "mechanism": "m"}])
+        return new_plan(tree), new_plan(tree)
+
+    def test_a_code_only_node_does_not_hold_the_gpu_or_the_clock(self, strict) -> None:
+        tree, root, clock = strict
+        p1, p2 = self._two_plans(tree)
+        busy = tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
+        assert "Created n1" in busy and "It is code only" not in busy
+        # the GPU is taken, yet a second node can be opened code-only
+        out = tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
+        assert "Created n2" in out and "counts from tree_start" in out
+        clock.advance(200)  # a long time of code writing
+        status = tree.status()
+        assert "Prepared (code only, no GPU, no clock): n2" in status
+        assert "Running: n1" in status and "Running: n2" not in status
+        assert "n2 explore" in status and "prepared" in status
+        brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
+        assert "this step is code only for now" in brief and "START.md" in brief
+        assert "budget of 60 minutes from now" not in brief
+
+    def test_a_second_gpu_node_is_still_refused(self, strict) -> None:
+        tree, *_ = strict
+        p1, p2 = self._two_plans(tree)
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
+        with pytest.raises(TreeError, match="holds the GPU"):
+            tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2)
+
+    def test_start_needs_a_free_gpu_and_a_prepared_node(self, strict) -> None:
+        tree, root, clock = strict
+        p1, p2 = self._two_plans(tree)
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
+        tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
+        with pytest.raises(TreeError, match="n1 holds the GPU"):
+            tree.start("n2")
+        with pytest.raises(TreeError, match="not a prepared code-only node"):
+            tree.start("n1")  # on the GPU from the start
+        (root / "nodes" / "n1" / "holdout_predictions.csv").write_text("1\n" * 400)
+        (root / "nodes" / "n1" / "submission.csv").write_text("d")
+        clock.advance(30)
+        tree.finish("n1", change="c", observation="o")
+        assert "the GPU is free: start one of the prepared nodes (n2) with tree_start(node)" in tree.status().splitlines()[-1]
+        out = tree.start("n2", minutes=45)
+        assert "n2 started with a budget of 45 min" in out and "START.md" in out
+        assert "Running: n2 (explore) 0.0/45 min" in tree.status()
+        with pytest.raises(TreeError, match="not a prepared code-only node"):
+            tree.start("n2")  # already started
+        assert "## Started" in (root / "nodes" / "n2" / "BRIEF.md").read_text()
+
+    def test_the_budget_counts_from_tree_start(self, strict) -> None:
+        tree, root, clock = strict
+        p1, p2 = self._two_plans(tree)
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
+        tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
+        (root / "nodes" / "n1" / "holdout_predictions.csv").write_text("1\n" * 400)
+        (root / "nodes" / "n1" / "submission.csv").write_text("d")
+        clock.advance(40)
+        tree.finish("n1", change="c", observation="o")
+        clock.advance(25)  # the GPU sat idle: n2 had no clock
+        tree.start("n2", minutes=60)
+        clock.advance(10)
+        assert "Running: n2 (explore) 10.0/60 min" in tree.status()
+        node = root / "nodes" / "n2"
+        (node / "holdout_predictions.csv").write_text("1\n" * 200 + "0\n" * 200)
+        (node / "submission.csv").write_text("d")
+        clock.advance(5)
+        done = tree.finish("n2", change="c", observation="o")
+        assert "after 15.0 min (budget 60)" in done  # measured from tree_start, not from tree_new
+
+    def test_the_hint_names_the_prepared_nodes(self, strict) -> None:
+        tree, root, clock = strict
+        p1, p2 = self._two_plans(tree)
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
+        tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
+        busy = tree.status().splitlines()[-1]
+        assert "n1 is being built" in busy and "prepared and waiting for the GPU: n2" in busy
+        assert "gpu=false" in busy
+
+    def test_a_prepared_node_is_closed_only_by_dropping_it(self, strict) -> None:
+        tree, root, clock = strict
+        p1, p2 = self._two_plans(tree)
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
+        tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
+        with pytest.raises(TreeError, match="never started"):
+            tree.finish("n2", change="c", observation="o")
+        out = tree.finish("n2", change="-", observation="-", abandon_reason="not needed")
+        assert "n2 closed as abandoned" in out
+        # its plan is free again for another node (the abandoned node is history now, so cite it)
+        again = tree.new_node(
+            kind="explore", title="v", hypothesis="h", plan_id=p2, gpu=False, based_on=["n2"]
+        )
+        assert again.startswith("Created n3")
+
+    def test_finalize_closes_a_prepared_node_that_never_started(self, strict) -> None:
+        tree, root, clock = strict
+        p1, p2 = self._two_plans(tree)
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
+        tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
+        (root / "nodes" / "n1" / "holdout_predictions.csv").write_text("1\n" * 400)
+        (root / "nodes" / "n1" / "submission.csv").write_text("d")
+        clock.advance(30)
+        tree.finish("n1", change="c", observation="o")
+        tree.finalize()
+        assert "abandoned" in git(root, "notes", "--ref=outcome", "show", "node/n2")
+
+    def test_the_prompt_and_the_tool_say_how_it_works(self) -> None:
+        text = get_system_prompt(research_tree=True, research_tree_reports=True)
+        assert "tree_start" in text and "gpu=false" in text and "START.md" in text
+        made = {t.name: t for t in create_research_tree_tools(Path("."))}
+        assert "tree_start" in made and "node" in made["tree_start"].args

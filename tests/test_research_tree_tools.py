@@ -19,6 +19,7 @@ NAMES = [
     "tree_status",
     "tree_history",
     "tree_new",
+    "tree_start",
     "tree_finish",
     "tree_insight",
     "tree_plan",
