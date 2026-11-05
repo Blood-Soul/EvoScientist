@@ -540,8 +540,12 @@ class ResearchTree:
                 )
             unknown = [b for b in based_on if b not in known]
             if unknown:
+                plans_named = [b for b in unknown if b in st.get("plans", {})]
+                where = (
+                    f" ({', '.join(plans_named)}: a plan goes in plan_id, not in based_on)" if plans_named else ""
+                )
                 raise TreeError(
-                    f"based_on cites unknown or unfinished ids: {', '.join(unknown)}"
+                    f"based_on cites unknown or unfinished ids: {', '.join(unknown)}{where}"
                 )
             backing = self._check_plan(st, kind, parents, plan_id)
             if gpu and any(

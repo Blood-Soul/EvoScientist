@@ -791,6 +791,14 @@ class TestNextPlanFromTheAnalyst:
         assert opened.startswith("Created n2")
         assert "fix the end label" in (root / "nodes" / "n2" / "BRIEF.md").read_text()
 
+    def test_a_plan_id_in_based_on_is_told_where_it_belongs(self, tools) -> None:
+        made, _ = tools
+        out = made["tree_new"].invoke(
+            {"kind": "refine", "title": "r", "hypothesis": "h", "parents": ["n1"], "based_on": ["P1", "n1"], "plan_id": "P1"}
+        )
+        assert out.startswith("ERROR: based_on cites unknown or unfinished ids: P1")
+        assert "a plan goes in plan_id" in out
+
     def test_an_explore_and_a_refine_are_opened_the_same_way(self, tools) -> None:
         made, root = tools
         d = root / "reports" / "drafts"

@@ -109,7 +109,7 @@ class NewArgs(BaseModel):
     based_on: list[str] = Field(
         default_factory=list,
         description="Finished node ids and insight ids (I1, ...) whose evidence led to this step. Required once "
-        "there is history.",
+        "there is history. A plan (P1, ...) goes in plan_id, not here.",
     )
     minutes: float = Field(
         default=60.0,
