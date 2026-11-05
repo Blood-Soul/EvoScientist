@@ -220,53 +220,6 @@ def test_one_gpu_node_at_a_time_and_kind_rules(env):
         )
 
 
-def test_pilot_is_evidence_not_a_candidate(env):
-    tree, root, clock, judge = env
-    tree.init(budget_minutes=360)
-    n1 = do_node(
-        tree,
-        root,
-        clock,
-        minutes_used=10,
-        n_right=200,
-        kind="explore",
-        title="a",
-        hypothesis="h",
-        minutes=30,
-    )
-    tree.finish(n1, change="c", observation="o")
-    created = tree.new_node(
-        kind="pilot",
-        title="does X matter",
-        hypothesis="X changes the error mix",
-        parents=[n1],
-        minutes=100,
-    )
-    pilot = created.split()[1]
-    assert "budget of 20 min" in created  # a pilot is capped however much is asked for
-    clock.advance(8)
-    calls = judge.calls
-    msg = tree.finish(pilot, change="3-minute probe", observation="X moves 12% of rows")
-    assert judge.calls == calls  # a pilot is not scored
-    assert "closed as done" in msg
-    assert (
-        git(root, "notes", "--ref=outcome", "show", f"node/{pilot}")
-        == "evidence: pilot"
-    )
-    with pytest.raises(TreeError, match="finished, scored"):
-        tree.new_node(
-            kind="refine", title="r", hypothesis="h", parents=[pilot], gpu=False
-        )
-    # but later nodes can cite it
-    tree.new_node(kind="explore", title="b", hypothesis="h", based_on=[pilot])
-    # a pilot cannot become champion; finalize keeps its outcome
-    tree.finalize()
-    assert (
-        git(root, "notes", "--ref=outcome", "show", f"node/{pilot}")
-        == "evidence: pilot"
-    )
-
-
 def test_missing_prediction_fails_the_node_and_keeps_the_record(env):
     tree, root, clock, _ = env
     tree.init(budget_minutes=360)
@@ -334,8 +287,6 @@ def test_clock_limits_new_nodes(env):
     clock.advance(90)  # 30 min left, 15 reserved: 15 usable < 20
     with pytest.raises(TreeError, match="usable time"):
         tree.new_node(kind="explore", title="a", hypothesis="h")
-    out = tree.new_node(kind="pilot", title="p", hypothesis="h")
-    assert "budget of 15 min" in out  # clipped to the usable time
     assert "wrap up" in tree.status()
 
 
@@ -552,20 +503,6 @@ def test_insight_reminder_after_three_closed_nodes(env):
     assert "since the last insight" not in tree.status()
 
 
-def test_pilots_do_not_count_towards_the_insight_reminder(env):
-    tree, root, clock, _ = env
-    tree.init(budget_minutes=360)
-    n1, _ = close(tree, root, clock, 100, kind="explore", title="a", hypothesis="h")
-    for i in range(3):
-        nid = tree.new_node(
-            kind="pilot", title=f"p{i}", hypothesis="h", based_on=[n1], minutes=5
-        ).split()[1]
-        (root / "nodes" / nid / "NODE_REPORT.md").write_text("saw it")
-        clock.advance(5)
-        tree.finish(nid, change="c", observation="o")
-    assert "since the last insight" not in tree.status()
-
-
 @pytest.mark.skipif(not Path("/proc/self/cwd").exists(), reason="needs /proc")
 def test_closing_a_node_stops_what_it_left_running(env):
     tree, root, clock, _ = env
@@ -682,40 +619,20 @@ def test_every_tree_action_is_written_to_the_event_log(env):
     )
 
 
-@pytest.mark.skipif(not Path("/proc/self/cwd").exists(), reason="needs /proc")
-def test_a_node_past_its_budget_loses_its_processes_but_stays_open(env):
-    import json
-
+def test_a_node_past_its_budget_is_not_stopped(env):
+    """The budget is the agent's own estimate: running past it is noted in the status line and nothing is killed."""
     tree, root, clock, _ = env
     tree.init(budget_minutes=360)
-    nid = tree.new_node(kind="explore", title="a", hypothesis="h", minutes=30).split()[
-        1
-    ]
-    job = subprocess.Popen(["sleep", "300"], cwd=root / "nodes" / nid)
-    try:
-        clock.advance(31)  # past the budget but inside the grace period
-        assert tree.enforce_budgets() == []
-        assert job.poll() is None
-        clock.advance(2)  # now beyond budget plus grace
-        assert tree.enforce_budgets() == [nid]
-        assert job.wait(timeout=15) != 0
-        assert tree.enforce_budgets() == []  # once per node
-        assert "its processes were stopped" in tree.status()
-        events = [
-            json.loads(x)
-            for x in (root / ".research" / "events.jsonl").read_text().splitlines()
-        ]
-        timeout = next(e for e in events if e["event"] == "node-timeout")
-        assert timeout["node"] == nid
-        assert timeout["killed"] == 1
-        # the node is still open: the agent closes it with what it has
-        (root / "nodes" / nid / "holdout_predictions.csv").write_text(
-            accuracy_rows(200)
-        )
-        (root / "nodes" / nid / "submission.csv").write_text("d")
-        assert "closed as done" in tree.finish(nid, change="c", observation="o")
-    finally:
-        job.kill()
+    nid = tree.new_node(kind="explore", title="a", hypothesis="h", minutes=30).split()[1]
+    assert "past its budget" not in tree.status()
+    clock.advance(31)
+    assert "Running: %s (explore) 31.0/30 min (past its budget)" % nid in tree.status()
+    assert not hasattr(tree, "enforce_budgets")
+    clock.advance(60)  # far beyond any grace period: still open, nothing stopped
+    assert "past its budget" in tree.status()
+    (root / "nodes" / nid / "holdout_predictions.csv").write_text(accuracy_rows(200))
+    (root / "nodes" / nid / "submission.csv").write_text("d")
+    assert "closed as done" in tree.finish(nid, change="c", observation="o")
 
 
 # ---- the whole run can be replayed from what is saved ------------------------

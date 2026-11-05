@@ -163,12 +163,21 @@ class TestNodesNeedPlans:
         )
         assert "Created n2" in again
 
-    def test_pilot_and_merge_take_no_plan(self, strict) -> None:
-        tree, *_ = strict
+    def test_a_merge_takes_no_plan_and_pilot_is_gone(self, strict) -> None:
+        tree, root, clock = strict
+        n1 = first_node(tree, root, clock, new_plan(tree))
+        n2 = do_node(
+            tree, root, clock, minutes_used=30, n_right=210, shift=7, kind="explore",
+            title="other", hypothesis="h", plan_id=new_plan(tree), based_on=[n1],
+        )
+        tree.finish(n2, change="c", observation="o")
         pid = new_plan(tree)
         with pytest.raises(TreeError, match="does not take a plan"):
-            tree.new_node(kind="pilot", title="p", hypothesis="h", plan_id=pid)
-        assert "Created n1" in tree.new_node(kind="pilot", title="p", hypothesis="h")
+            tree.new_node(
+                kind="merge", title="m", hypothesis="h", parents=[n1, n2], based_on=[n1, n2], plan_id=pid
+            )
+        with pytest.raises(TreeError, match="kind must be one of explore, refine, merge"):
+            tree.new_node(kind="pilot", title="p", hypothesis="h")
 
     def test_a_refine_needs_a_matching_plan_and_an_analysis(self, strict) -> None:
         tree, root, clock = strict
@@ -236,7 +245,8 @@ class TestAnalyses:
 
     def test_a_running_node_cannot_be_analysed(self, strict) -> None:
         tree, *_ = strict
-        tree.new_node(kind="pilot", title="p", hypothesis="h")
+        pid = new_plan(tree)
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=pid)
         with pytest.raises(TreeError, match="not a finished node"):
             tree.analysis(node="n1", text="t", flaws=["f"])
 

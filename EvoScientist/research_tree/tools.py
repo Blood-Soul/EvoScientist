@@ -91,8 +91,7 @@ class HistoryArgs(BaseModel):
 class NewArgs(BaseModel):
     kind: str = Field(
         description=f"One of {', '.join(KINDS)}. explore: a new line from the root. refine: change one thing in a "
-        "finished node (one parent). merge: combine two or more finished nodes. pilot: a small time-boxed "
-        "experiment that only produces evidence for a decision; it is not scored."
+        "finished node (one parent). merge: combine two or more finished nodes."
     )
     title: str = Field(description="Short name of the step.")
     hypothesis: str = Field(
@@ -110,7 +109,7 @@ class NewArgs(BaseModel):
     based_on: list[str] = Field(
         default_factory=list,
         description="Finished node ids and insight ids (I1, ...) whose evidence led to this step. Required once "
-        "there is history. If the history does not bear on the step, run a pilot first and cite it.",
+        "there is history.",
     )
     minutes: float = Field(
         default=60.0,
@@ -128,7 +127,7 @@ class NewArgs(BaseModel):
     plan_id: str = Field(
         default="",
         description="An accepted plan (P1, ...) from tree_plan. Its full text goes into the sub-agent's brief. "
-        "Required for explore and refine nodes when the harness asks for plans; not for merge or pilot.",
+        "Required for explore and refine nodes when the harness asks for plans; not for merge.",
     )
     cluster: str = Field(
         default="",

@@ -13,10 +13,8 @@ Who writes what:
   deltas against the parent, the champion, the hash of the judge. Scores come
   from the frozen judge (:mod:`.judge`), never from the agent's own report.
 
-Pilot nodes (`kind="pilot"`) are small, time-boxed experiments whose only job
-is to produce evidence for a decision the history cannot settle yet. They are
-not scored and never become the champion, but they are events like any other
-and can be cited by later nodes.
+A node's time budget is the agent's to set. The tree does not stop a node that
+runs past it; it only says so in the status line.
 """
 
 from __future__ import annotations
@@ -48,9 +46,7 @@ from .monitor import (
     log_event,
     snapshot_node,
     start_gpu_log,
-    start_ticker,
     stop_gpu_log,
-    stop_ticker,
 )
 from .reports import (
     MAX_PLAN_REVISIONS,
@@ -70,16 +66,11 @@ except ImportError:  # pragma: no cover
 
 DEADLINE_ENV = "EVOSCIENTIST_TREE_DEADLINE_EPOCH"
 BUDGET_ENV = "EVOSCIENTIST_TREE_BUDGET_MINUTES"
-KINDS = ("explore", "refine", "merge", "pilot")
+KINDS = ("explore", "refine", "merge")
 CATEGORIES = ("method", "experiment", "ablation")
 INSIGHT_STATUS = ("open", "supported", "contradicted")
-PILOT_MINUTES = (3.0, 20.0)
 NODE_MAX_MINUTES = 180.0
 INSIGHT_EVERY = 3  # closed nodes after which the tools ask for an insight
-OVERRUN_GRACE_MINUTES = (
-    2.0  # past its budget a node keeps this long before its processes are stopped
-)
-WATCH_SECONDS = 30.0
 RELATED_NODES = 2  # other nodes (besides the parents) put into a sub-agent's brief
 
 
@@ -166,58 +157,6 @@ class ResearchTree:
 
     def _start_monitors(self) -> None:
         start_gpu_log(self.dir / "gpu.jsonl")
-        start_ticker(str(self.dir), self._tick, WATCH_SECONDS)
-
-    def _tick(self) -> bool:
-        if not self.state_path.exists():
-            return False  # the project is gone: end the ticker
-        try:
-            self.enforce_budgets()
-        except (TreeError, OSError, ValueError):
-            pass
-        return True
-
-    def enforce_budgets(self) -> list[str]:
-        """Stop the processes of nodes that ran past their budget plus a short grace.
-
-        A node's budget is a hard limit. The agent cannot be pre-empted, but
-        what it started in the node's directory (training, servers) can: with
-        those gone the sub-agent sees its commands fail and wraps up. The node
-        stays open until the agent closes it with tree_finish.
-        """
-        if not self.state_path.exists():
-            return []
-        st = json.loads(self.state_path.read_text())
-        if st.get("finalized"):
-            return []
-        late = [
-            nid
-            for nid, n in st["nodes"].items()
-            if n["status"] == "running"
-            and not n.get("timed_out")
-            and _minutes(self.now() - n["started"])
-            > n["budget_minutes"] + OVERRUN_GRACE_MINUTES
-        ]
-        killed = {
-            nid: kill_processes_under(self.repo.node_path(nid))
-            if self.repo.node_path(nid).is_dir()
-            else []
-            for nid in late
-        }
-        if late:
-            with self._edit() as st:
-                for nid in late:
-                    node = st["nodes"][nid]
-                    node["timed_out"] = True
-                    self._log(
-                        st,
-                        "node-timeout",
-                        node=nid,
-                        used=_minutes(self.now() - node["started"]),
-                        budget=node["budget_minutes"],
-                        killed=len(killed[nid]),
-                    )
-        return late
 
     @staticmethod
     def _next_step(st: dict) -> str:
@@ -229,7 +168,7 @@ class ResearchTree:
         unanalysed = [
             k
             for k, n in nodes.items()
-            if n["status"] == "done" and n["kind"] != "pilot" and k not in analysed
+            if n["status"] == "done" and k not in analysed
         ]
         drafts = [k for k, p in plans.items() if p["status"] == "draft"]
         ready = [k for k, p in plans.items() if p["status"] == "accepted" and not p.get("node")]
@@ -255,12 +194,8 @@ class ResearchTree:
 
     @staticmethod
     def _closed(st: dict) -> int:
-        """Nodes that ended as a candidate (pilots are evidence, not candidates)."""
-        return sum(
-            1
-            for n in st["nodes"].values()
-            if n["kind"] != "pilot" and n["status"] != "running"
-        )
+        """Nodes that have ended."""
+        return sum(1 for n in st["nodes"].values() if n["status"] != "running")
 
     def _insight_nudge(self, st: dict) -> str:
         since = self._closed(st) - st.get("insight_mark", 0)
@@ -435,16 +370,7 @@ class ResearchTree:
                 used = _minutes(self.now() - n["started"])
                 lines.append(
                     f"Running: {n['id']} ({n['kind']}) {used}/{n['budget_minutes']:.0f} min"
-                    + (
-                        " OVER BUDGET"
-                        + (
-                            "; its processes were stopped, close it with tree_finish"
-                            if n.get("timed_out")
-                            else ""
-                        )
-                        if used > n["budget_minutes"]
-                        else ""
-                    )
+                    + (" (past its budget)" if used > n["budget_minutes"] else "")
                 )
         lines.append("Nodes:" if nodes else "Nodes: none yet")
         for n in sorted(nodes.values(), key=lambda x: node_number(x["id"])):
@@ -574,14 +500,12 @@ class ResearchTree:
                 "explore": (0, 0),
                 "refine": (1, 1),
                 "merge": (2, 99),
-                "pilot": (0, 1),
             }[kind]
             if not arity[0] <= len(parents) <= arity[1]:
                 need = {
                     "explore": "no parents",
                     "refine": "exactly one parent",
                     "merge": "two or more parents",
-                    "pilot": "at most one parent",
                 }[kind]
                 raise TreeError(f"a {kind} node takes {need}")
             known = {k for k, n in nodes.items() if n["status"] != "running"} | {
@@ -590,8 +514,7 @@ class ResearchTree:
             if known and not based_on and not parents:
                 raise TreeError(
                     "based_on is required once there is history: cite the finished nodes or insights "
-                    "(ids from tree_status) that this step builds on. If nothing in the history bears "
-                    "on it, run a pilot first and cite that."
+                    "(ids from tree_status) that this step builds on."
                 )
             families = {c["name"] for c in st.get("survey", [])}
             if cluster and cluster not in families:
@@ -618,11 +541,7 @@ class ResearchTree:
                     "first (or pass gpu=false for work that needs no GPU)"
                 )
             usable = self._remaining(st) - st["reserve_minutes"]
-            lo, hi = (
-                PILOT_MINUTES
-                if kind == "pilot"
-                else (st["min_node_minutes"], NODE_MAX_MINUTES)
-            )
+            lo, hi = st["min_node_minutes"], NODE_MAX_MINUTES
             if usable < lo:
                 raise TreeError(
                     f"only {max(usable, 0):.0f} min of usable time left, a {kind} node needs at least "
@@ -667,9 +586,7 @@ class ResearchTree:
                 plan=plan_id or None,
             )
             deliver = (
-                "This is a pilot: it is not scored. Write what you observed in NODE_REPORT.md."
-                if kind == "pilot"
-                else f"Before the node ends it must contain `{st['prediction_file']}` (the held-out predictions "
+                f"Before the node ends it must contain `{st['prediction_file']}` (the held-out predictions "
                 f"that are scored), `{st['deliverable']}` (the deliverable) and `NODE_REPORT.md` "
                 "(what was done, what the errors look like, what you would try next)."
             )
@@ -807,8 +724,7 @@ class ResearchTree:
                 + ". Resolve them first (keep what served each parent's result)."
             )
         rules = [
-            f"You have {left:.0f} minutes from now (until about {until}); after that anything still running in this "
-            "directory is stopped and the node is closed. Test on a "
+            f"This step has a budget of {left:.0f} minutes from now (until about {until}). Test on a "
             "small slice first, start long training with `nohup <command> > outputs/train.log 2>&1 &` and check "
             "its log with separate short commands. Write predictions as soon as you have a model, then "
             "overwrite them if you improve.",
@@ -921,18 +837,15 @@ class ResearchTree:
         if path.is_dir():
             snap = snapshot_node(path, art, skip=tuple(st["shared"]))
             self._log(st, "node-snapshot", node=nid, **snap)
-        pilot = node["kind"] == "pilot"
         if abandon_reason:
             res: dict = {"error": f"abandoned: {abandon_reason}"}
-        elif pilot:
-            res = {}
         else:
             res = self._evaluate(st, art)
         scored = "score" in res and not res.get("error")
         status = (
             "abandoned"
             if abandon_reason
-            else ("done" if (pilot or scored) else "failed")
+            else ("done" if scored else "failed")
         )
         minutes = _minutes(self.now() - node["started"])
 
@@ -956,8 +869,6 @@ class ResearchTree:
         parent_d = {p: deltas[p] for p in node["parents"] if p in deltas}
         if status in ("failed", "abandoned"):
             outcome = f"abandoned: {res.get('error') or 'no result'}"
-        elif pilot:
-            outcome = "evidence: pilot"
         elif parent_d and all(d.better for d in parent_d.values()):
             outcome = "retained: better than " + ", ".join(
                 f"{p} ({d.text()})" for p, d in parent_d.items()
@@ -1448,5 +1359,4 @@ class ResearchTree:
             st["finalized"] = True
             self._log(st, "finalize", champion=champ, nodes=len(events))
             stop_gpu_log(self.dir / "gpu.jsonl")
-            stop_ticker(str(self.dir))
             return text
