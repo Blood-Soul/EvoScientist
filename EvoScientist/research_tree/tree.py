@@ -51,8 +51,6 @@ from .monitor import (
 from .reports import (
     MAX_PLAN_REVISIONS,
     PLAN_DECISIONS,
-    render_analyses,
-    render_analysis_for_brief,
     render_plans,
     short,
     write_report,
@@ -87,8 +85,7 @@ class ResearchTree:
         require_plans: bool = False,
     ):
         self.root = Path(root).resolve()
-        # When on, an explore or refine node needs an accepted plan and a refine
-        # needs an analysis of its parent (see _check_plan).
+        # When on, an explore or refine node needs an accepted plan (see _check_plan).
         self.require_plans = require_plans
         self.repo = Repo(self.root)
         self._judge = judge
@@ -173,15 +170,9 @@ class ResearchTree:
         """The one thing the record says is due next (reports mode), so the agent need not remember the flow."""
         nodes = st["nodes"]
         plans = st.get("plans", {})
-        analysed = {a["node"] for a in st.get("analyses", {}).values()}
         waiting = [k for k, n in nodes.items() if ResearchTree._waiting(n)]
         running = [
             k for k, n in nodes.items() if n["status"] == "running" and k not in waiting
-        ]
-        unanalysed = [
-            k
-            for k, n in nodes.items()
-            if n["status"] == "done" and k not in analysed
         ]
         drafts = [k for k, p in plans.items() if p["status"] == "draft"]
         ready = [k for k, p in plans.items() if p["status"] == "accepted" and not p.get("node")]
@@ -203,12 +194,6 @@ class ResearchTree:
             parts.append(
                 "a prepared node whose direction you no longer mean to run can be dropped with "
                 "tree_finish(node, abandon_reason=...), which frees its plan"
-            )
-        if unanalysed:
-            parts.append(
-                f"{', '.join(unanalysed)} has not been analysed: decide what is most worth doing now (run an accepted "
-                "plan, deepen it by asking node-analyst for an analysis and the next plan, or plan new directions); "
-                "a refinement of it needs its analysis (tree_analysis)"
             )
         if parts:
             return "Next: " + "; ".join(parts) + "."
@@ -281,9 +266,7 @@ class ResearchTree:
                 insights=[],
                 survey=[],
                 plans={},
-                analyses={},
                 next_plan=1,
-                next_analysis=1,
                 insight_mark=0,
                 finalized=False,
             )
@@ -296,8 +279,8 @@ class ResearchTree:
                 "tree_plan(path=...), read it, compare, decide.\n"
                 "3. tree_new(plan_id=...) opens a node and writes its brief; a sub-agent builds it inside "
                 "nodes/<id>/. You do not write code, and nothing is built in the project root.\n"
-                "4. tree_finish scores the node on the held-out rows; node-analyst reflects on it; "
-                "tree_analysis records that; then the next plan."
+                "4. tree_finish scores the node on the held-out rows; then the next plan, for an explore "
+                "or a refine node."
                 if self.require_plans
                 else ""
             )
@@ -432,8 +415,6 @@ class ResearchTree:
             ]
         if st.get("plans"):
             lines += ["Plans:", *render_plans(st["plans"])]
-        if st.get("analyses"):
-            lines += ["Analyses:", *render_analyses(st["analyses"])]
         if self.require_plans:
             lines.append(self._next_step(st))
         nudge = self._insight_nudge(st)
@@ -797,12 +778,6 @@ class ResearchTree:
             found += "\n\nInsights that bear on it:\n" + "\n".join(
                 f"- {i['id']} [{i['status']}] {i['text']}" for i in insights
             )
-        for par in parents:
-            note = next(
-                (a for a in st.get("analyses", {}).values() if a["node"] == par), None
-            )
-            if note is not None:
-                found += "\n\n" + render_analysis_for_brief(note)
         if node["conflicts"]:
             found += (
                 "\n\nMerging the parents' code left conflicts in: "
@@ -1093,7 +1068,7 @@ class ResearchTree:
         out.append(f"{self._remaining(st)} min left.")
         return " ".join(out)
 
-    # -------------------------------------------------------- plans, analyses
+    # ---------------------------------------------------------------- plans
 
     def _check_plan(
         self, st: dict, kind: str, parents: list[str], plan_id: str
@@ -1130,13 +1105,6 @@ class ResearchTree:
                 raise TreeError(
                     f"{kind} nodes need an accepted plan: have the plan-writer write one for this "
                     "direction, record it with tree_plan, accept it, then pass plan_id here"
-                )
-            if kind == "refine" and not any(
-                a["node"] == parents[0] for a in st.get("analyses", {}).values()
-            ):
-                raise TreeError(
-                    f"{parents[0]} has no analysis yet: have the node-analyst analyse it and record the "
-                    "result with tree_analysis before refining it"
                 )
         return plan
 
@@ -1255,57 +1223,6 @@ class ResearchTree:
         if decision == "accepted":
             return f"{plan_id} accepted. Open the node with tree_new(plan_id='{plan_id}', ...)."
         return f"{plan_id} rejected: {reason.strip()}"
-
-    def analysis(
-        self,
-        *,
-        node: str,
-        text: str,
-        strengths: list[str] | tuple[str, ...] = (),
-        flaws: list[str] | tuple[str, ...] = (),
-        improvements: list[str] | tuple[str, ...] = (),
-        experiences: list[str] | tuple[str, ...] = (),
-    ) -> str:
-        """Record the analysis of a finished node (a second call rewrites it)."""
-        if not text.strip():
-            raise TreeError("text is required: the analyst's report")
-        if not (flaws or improvements):
-            raise TreeError(
-                "the analysis needs bullet items under '## Flaws' or '## Improvements'; if the node has "
-                "none, say what was checked and put the reason under '## Improvements' as "
-                "'nothing to change: ...'"
-            )
-        self.repo.exclude(["/reports/"])
-        with self._edit() as st:
-            found = st["nodes"].get(node)
-            if found is None or found["status"] == "running":
-                raise TreeError(
-                    f"{node} is not a finished node; finish it with tree_finish first"
-                )
-            analyses = st.setdefault("analyses", {})
-            old = next((a for a in analyses.values() if a["node"] == node), None)
-            if old is not None:
-                aid, revisions = old["id"], old["revisions"] + 1
-            else:
-                aid, revisions = f"A{st.setdefault('next_analysis', 1)}", 0
-                st["next_analysis"] += 1
-            record = {
-                "id": aid,
-                "node": node,
-                "strengths": [str(x) for x in strengths],
-                "flaws": [str(x) for x in flaws],
-                "improvements": [str(x) for x in improvements],
-                "experiences": sorted(set(experiences)),
-                "revisions": revisions,
-            }
-            analyses[aid] = record
-            found["analysis"] = aid
-            write_report(self.root, "analyses", aid, text, revisions + 1)
-            self._log(st, "analysis", analysis=aid, node=node)
-            return (
-                f"{aid} recorded for {node} at reports/analyses/{aid}.md: {len(record['flaws'])} flaws, "
-                f"{len(record['improvements'])} improvements. A refine of {node} starts from these."
-            )
 
     # ------------------------------------------------------------- insights
 

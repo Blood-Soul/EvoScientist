@@ -217,15 +217,6 @@ class PlanArgs(BaseModel):
     )
 
 
-class AnalysisArgs(BaseModel):
-    node: str = Field(description="The finished node that was analysed.")
-    path: str = Field(
-        description="Workspace-relative path of the analysis file the node-analyst wrote. The tool reads the "
-        "file and takes the items under '## Worth keeping', '## Flaws', '## Improvements' and "
-        "'## Experience used'; do not paste the report."
-    )
-
-
 class StartArgs(BaseModel):
     node: str = Field(description="A prepared code-only node (opened with gpu=false) to give the GPU.")
     minutes: float | None = Field(
@@ -247,8 +238,7 @@ def create_research_tree_tools(
 ) -> list[BaseTool]:
     """Build the research-tree tools for the project at `root`.
 
-    With `require_plans`, explore and refine nodes need an accepted plan and a
-    refine needs an analysis of its parent.
+    With `require_plans`, explore and refine nodes need an accepted plan.
     """
     kwargs = {"judge": judge, "require_plans": require_plans}
     if now is not None:
@@ -289,17 +279,6 @@ def create_research_tree_tools(
             a["title"] = a.get("title") or plan_title(text)
             a["experiences"] = experience_ids(text)
         return tree.plan(**a)
-
-    def analysis_tool(**a) -> str:
-        text = read_draft(tree.root, a.pop("path", ""))
-        return tree.analysis(
-            node=a["node"],
-            text=text,
-            strengths=section_items(text, "Worth keeping", "Strengths"),
-            flaws=section_items(text, "Flaws"),
-            improvements=section_items(text, "Improvements"),
-            experiences=experience_ids(text),
-        )
 
     return [
         tool(
@@ -376,13 +355,6 @@ def create_research_tree_tools(
             "tree_new. A plan can be rewritten twice; an accepted plan no node uses yet can be rewritten or "
             "rejected as the record changes.",
             PlanArgs,
-        ),
-        tool(
-            analysis_tool,
-            "tree_analysis",
-            "Record the analysis file the node-analyst sub-agent wrote for a finished node (`node`, `path`): "
-            "what is worth keeping, the flaws, the improvements. A refine of that node starts from them.",
-            AnalysisArgs,
         ),
         tool(
             lambda **a: tree.finalize(),

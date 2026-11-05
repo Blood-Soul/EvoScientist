@@ -1,11 +1,9 @@
-"""Plans and analyses: the two documents around a node.
+"""Plans: the document before a node.
 
-A *plan* is written by a sub-agent (the plan-writer) for one direction and
-reviewed by the main agent before a node is opened on it. An *analysis* is
-written by another sub-agent (the node-analyst) after a node has been scored:
-what was worth keeping, what is wrong, what to change. The main agent records
-both with `tree_plan` and `tree_analysis`, pasting the sub-agent's text as it
-came back, so the reply it reviewed is the reply that is kept.
+A *plan* is written by a sub-agent (the plan-writer, or the node-analyst for a
+step that builds on a node it has read) for one direction and reviewed by the
+main agent before a node is opened on it. The main agent records it with
+`tree_plan`, so the document it reviewed is the document that is kept.
 
 Files live in `reports/` at the workspace root and are excluded from git, so
 they never mix into a node's commit. Whenever a document is rewritten the
@@ -94,7 +92,7 @@ def experience_ids(text: str) -> list[str]:
 
 
 def report_path(root: Path, kind: str, doc_id: str) -> Path:
-    """`reports/plans/P1.md` or `reports/analyses/A1.md`."""
+    """`reports/plans/P1.md`."""
     return root / REPORTS_DIR / kind / f"{doc_id}.md"
 
 
@@ -126,26 +124,3 @@ def render_plans(plans: dict[str, dict]) -> list[str]:
             f"{','.join(p['parents']) or 'root'}{rounds}{tail} | {short(p['title'], 80)}"
         )
     return lines
-
-
-def render_analyses(analyses: dict[str, dict]) -> list[str]:
-    lines = []
-    for a in sorted(analyses.values(), key=lambda a: int(a["id"][1:])):
-        lines.append(
-            f"  {a['id']} of {a['node']}: {len(a['flaws'])} flaws, "
-            f"{len(a['improvements'])} improvements"
-            + (f" | first flaw: {short(a['flaws'][0], 90)}" if a["flaws"] else "")
-        )
-    return lines
-
-
-def render_analysis_for_brief(a: dict) -> str:
-    """What a refine node's sub-agent is told about the parent's analysis."""
-    parts = [f"Analysis {a['id']} of {a['node']}:"]
-    if a["strengths"]:
-        parts.append("- worth keeping: " + "; ".join(a["strengths"]))
-    if a["flaws"]:
-        parts.append("- flaws: " + "; ".join(a["flaws"]))
-    if a["improvements"]:
-        parts.append("- improvements suggested: " + "; ".join(a["improvements"]))
-    return "\n".join(parts)

@@ -493,15 +493,15 @@ For an end-to-end research task, one that comes with a statement of your working
 - **Your context is not the record.** The tree is. Before each decision re-read it instead of relying on memory of earlier steps.
 """
 
-RESEARCH_TREE_REPORTS = """## Plans and analyses
+RESEARCH_TREE_REPORTS = """## Plans
 
-This run asks for a written plan before an explore or refine node and a written analysis of a node before it is refined. Sub-agents write these documents as files and report the path; you read them, judge them and record them with the tools. Do not copy their text into your own messages or tool arguments: the tools read the files, and the files are what is kept for audit and for the sub-agents that come after.
+This run asks for a written plan before an explore or refine node. Sub-agents write plans as files and report the path; you read them, judge them and record them with `tree_plan`. Do not copy their text into your own messages or tool arguments: the tools read the files, and the files are what is kept for audit and for the sub-agents that come after.
 
 - **Survey, then plans, then one node.** Survey normally and take the time it needs. From the families you found, pick the promising directions and ask `plan-writer` for a plan for each (one call per direction). Read the plans, compare them, accept those worth trying and open a node on the best one. The accepted plans you do not use yet stay available for later nodes; rewrite or reject them when the record changes.
-- **Asking plan-writer.** Delegate with the `task` tool. Put in the description: the direction and its family, what the data looks like (sizes, columns, the metric, anything measured so far), the working conditions (GPU, minutes left from `tree_status`), for a refinement the parent's id with its analysis, and the file to write (`reports/drafts/plan-<direction>.md`). If an experience coach is mounted on it, the coach reads only this description, so the facts must be in it.
+- **Asking plan-writer.** Delegate with the `task` tool. Put in the description: the direction and its family, what the data looks like (sizes, columns, the metric, anything measured so far), the working conditions (GPU, minutes left from `tree_status`), for a refinement the parent's id and what you know of it, and the file to write (`reports/drafts/plan-<direction>.md`). If an experience coach is mounted on it, the coach reads only this description, so the facts must be in it.
 - **Record and decide.** `tree_plan(path='reports/drafts/plan-<direction>.md', cluster=..., parents=[...])` records the file as a draft (P1, ...) and keeps a copy in `reports/plans/`. Read that copy in full: does it test one hypothesis, can it finish in the node's minutes, does it repeat a node that failed in `tree_status`? Then `tree_plan(plan_id=..., decision='accepted' | 'revise' | 'rejected', reason=...)`. Send a plan back with `revise` and your reason instead of editing it yourself; it can be rewritten twice.
 - **Open the node on the accepted plan.** `tree_new(plan_id=...)` for explore and refine nodes (a merge takes no plan). The plan and the brief go to the implementing sub-agent through `nodes/<id>/BRIEF.md`. The implementer has no coach; it keeps `search_experience`.
-- **After a node is closed.** Look at the record and decide what is worth doing next. It may be to carry out an accepted plan that has not run yet, to deepen the node you just closed, to merge nodes, or to ask `plan-writer` for plans for new directions; reflecting on the node you just closed is one choice among these, not a step you owe after every node. To deepen a node, delegate to `node-analyst` with the node id, what to check, and the two files to write (`reports/drafts/analysis-<node>.md` and `reports/drafts/plan-next-<node>.md`). It reads the node, runs small experiments on what the node saved to check its suspicions, finds what is worth keeping and what is wrong, looks at the literature for the weak points where you have paper tools, and writes the plan for the step that follows. Record the analysis with `tree_analysis(node=..., path=...)` and the plan with `tree_plan(path=..., parents=[<node>], cluster=...)`, read the plan as you read any plan, and decide. A refinement of a node is refused until that node has an analysis. When several plans are on the table, choose the one most worth running now.
+- **After a node is closed.** Look at the record and decide what is worth doing next. An explore node starts from the task and tries a direction of its own; a refine node starts from a node already built and changes it. Both are opened the same way, on an accepted plan, and both stay open to you. `plan-writer` writes a plan for a direction from the task and the record. `node-analyst` reads a finished node, runs small experiments on what it saved to check its suspicions, and writes the plan for a step that builds on it: delegate with the node id, what to check, and the file to write (`reports/drafts/plan-next-<node>.md`). Before a plan that builds on a node is written, that node has to be understood: what it did well, where it fell short and why (its error breakdown, its logs and what its saved outputs show), and, with the paper-navigator skill, what the literature says about those weak points. Do this yourself or leave it to `node-analyst`, which does it as part of writing the plan. Record any plan with `tree_plan(path=..., parents=[...], cluster=...)` (the parents are empty for a new direction), read it as you read any plan, and decide. You may ask for several plans at once and choose among them, run an accepted plan that has not run yet, or merge nodes.
 - **If you have the experience tools, fill the library before the first plan.** The coach can only speak from stored experience. If `search_experience` finds little, survey with paper-navigator, extract at least three papers with paper-experience and wait for the extraction to finish before asking `plan-writer` for the first plan.
 """
 
@@ -517,11 +517,11 @@ _PLANNER_ROUTES = (
     ),
     (
         "- If delegating planning to planner-agent, start your message with: `MODE: PLAN`.\n",
-        "- Planning is done by `plan-writer` in this run (see Plans and analyses); planner-agent is not used.\n",
+        "- Planning is done by `plan-writer` in this run (see Plans); planner-agent is not used.\n",
     ),
     (
         '- "Plan experimental stages" → planner-agent\n- "Reflect and update the plan after a stage" → planner-agent\n',
-        '- "Write the plan for one research direction" → plan-writer\n- "Analyse a finished node and propose what to change" → node-analyst\n',
+        '- "Write the plan for one research direction" → plan-writer\n- "Read a finished node and write the plan for a step that builds on it" → node-analyst\n',
     ),
 )
 _STAGE_REFLECTION = re.compile(
@@ -529,8 +529,8 @@ _STAGE_REFLECTION = re.compile(
 )
 _STAGE_REFLECTION_TREE = (
     "### Stage Reflection\n"
-    "In this run the reflection after each node is written by `node-analyst` (see Plans and "
-    "analyses). Do not use planner-agent for it.\n\n"
+    "In this run a step that builds on a finished node is planned by `node-analyst` (see Plans). "
+    "Do not use planner-agent for it.\n\n"
 )
 
 
