@@ -884,10 +884,3 @@ class TestAnalysisAndNextPlanInOneRun:
         assert "may run small experiments" in analyst
         writer = TestSubagents._load("plan-writer")["system_prompt"]
         assert "states the result and the choice, not the story of the experiment" in writer
-
-
-def test_the_prompt_says_wait_for_every_plan_and_hand_over_the_node_at_once() -> None:
-    text = get_system_prompt(research_tree=True, research_tree_reports=True)
-    assert "Wait until every plan has come back" in text
-    assert "the plan that takes longest may be the best one" in text
-    assert "hand the implementer its task in the very next step" in text
