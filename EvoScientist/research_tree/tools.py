@@ -71,7 +71,7 @@ class ClusterArgs(BaseModel):
 
 class SurveyArgs(BaseModel):
     clusters: list[ClusterArgs] = Field(
-        description="4-6 mechanism families: kinds of approach that differ in what they change, not in a "
+        description="Mechanism families: kinds of approach that differ in what they change, not in a "
         "hyperparameter. Calling again with a known name replaces that family."
     )
 
@@ -308,7 +308,7 @@ def create_research_tree_tools(
                 ]
             ),
             "tree_survey",
-            "Record the mechanism families found by your literature survey (4-6, each differing in what it "
+            "Record the mechanism families found by your literature survey (each differing in what it "
             "changes). Nodes then name their family in `cluster`, and tree_status shows which families were "
             "tried and which are still open.",
             SurveyArgs,

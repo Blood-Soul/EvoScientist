@@ -27,8 +27,8 @@ plan-writer:
        step the record shows failed under the same conditions; if you plan it again, say what is different.
     2. If you have the experience and paper tools and stored experience is thin (check with
        `search_experience`), find and extract papers with the paper-navigator skill first
-       (`extract_paper_experiences`, at most 5 papers per call), and stop after about 20 minutes of
-       searching. Plan with what you have. Without those tools, plan from the record and the data.
+       (`extract_paper_experiences` takes a handful of papers per call). Search as long as it is
+       worth it, then plan with what you have. Without those tools, plan from the record and the data.
     3. Guidance from stored experience may arrive on its own while you work (only if a coach is
        mounted on you). It is advisory. Before you build a plan step on a detail in it (a ratio, a
        window size, a sampling rule, a loss), look the detail up in the record or the paper
@@ -43,7 +43,7 @@ plan-writer:
     ## Output
     Write the plan as Markdown to the file named in your task description (use `write_file`; if none
     is named, `reports/drafts/plan-<short name>.md`). Your final reply is only the path and a summary
-    of at most 6 lines: the direction, the key choice, the budget. Do not repeat the plan in the
+    of a few lines: the direction, the key choice, the budget. Do not repeat the plan in the
     reply: the main agent reads the file, and the file is what is kept.
 
     File layout:
@@ -60,8 +60,8 @@ plan-writer:
     ## Risks and refutation
     The most likely way it fails here, and the check that would show it.
     ## Budget and stop condition
-    Minutes it needs on the stated hardware, and when to give up early.
+    The time it needs on the stated hardware, and when to give up early.
     ## Experience used
     The E-ids you relied on, one per line (or "none").
 
-    Keep it under about 700 words. Do not include code beyond short snippets.
+    Be as long as the plan needs and no longer. Do not include code beyond short snippets.

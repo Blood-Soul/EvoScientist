@@ -250,7 +250,7 @@ class ResearchTree:
         if ready:
             return f"Next: open a node on an accepted plan with tree_new(plan_id=...): {', '.join(ready)}."
         if not plans:
-            return "Next: ask plan-writer (task) for a plan for each of two or three directions, then record them with tree_plan(path)."
+            return "Next: ask plan-writer (task) for a plan for each direction worth trying, then record them with tree_plan(path)."
         return "Next: ask plan-writer for a plan for the next direction, or finalize if the time is nearly up."
 
     @staticmethod
@@ -329,7 +329,7 @@ class ResearchTree:
             how = (
                 "\n\nHow this run goes (the tools refuse the shortcuts):\n"
                 "1. tree_survey: record the mechanism families you found.\n"
-                "2. Ask plan-writer (task) for a plan for each of two or three directions; record each with "
+                "2. Ask plan-writer (task) for a plan for each direction worth trying; record each with "
                 "tree_plan(path=...), read it, compare, decide.\n"
                 "3. tree_new(plan_id=...) opens a node and writes its brief; a sub-agent builds it inside "
                 "nodes/<id>/. You do not write code, and nothing is built in the project root.\n"
@@ -351,7 +351,7 @@ class ResearchTree:
         """
         if not clusters:
             raise TreeError(
-                "clusters is empty: list 4-6 mechanism families, each a kind of approach that differs in what "
+                "clusters is empty: list the mechanism families, each a kind of approach that differs in what "
                 "it changes, not in a hyperparameter"
             )
         with self._edit() as st:
