@@ -775,6 +775,7 @@ class TestCodeOnlyNodes:
         busy = tree.status().splitlines()[-1]
         assert "n1 is being built" in busy and "prepared and waiting for the GPU: n2" in busy
         assert "gpu=false" in busy
+        assert "can be dropped with tree_finish(node, abandon_reason=...)" in busy
 
     def test_a_prepared_node_is_closed_only_by_dropping_it(self, strict) -> None:
         tree, root, clock = strict

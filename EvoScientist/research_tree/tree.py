@@ -200,6 +200,11 @@ class ResearchTree:
             )
         elif waiting:
             parts.append(f"prepared and waiting for the GPU: {', '.join(waiting)}")
+        if waiting:
+            parts.append(
+                "a prepared node whose direction you no longer mean to run can be dropped with "
+                "tree_finish(node, abandon_reason=...), which frees its plan"
+            )
         if unanalysed:
             parts.append(
                 f"ask node-analyst to analyse {', '.join(unanalysed)} and record it with tree_analysis(node, path)"
