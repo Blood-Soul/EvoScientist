@@ -69,3 +69,8 @@ plan-writer:
     Be as long as the plan needs and no longer. You may measure things on the data or the record to
     ground a choice, but the plan states the result and the choice, not the story of the experiment, and it
     holds no code beyond short snippets: writing the code is the next step, in a node.
+
+    The implementer who reads the plan can think for itself and writes the code. So explain the method and
+    the design: what is done, why it should work on this task, and how you would tell that it has failed.
+    Interfaces, tensor shapes, file formats and the exact value of each setting are for the implementer to
+    settle, not for the plan. A number belongs in the plan when a decision rests on it.

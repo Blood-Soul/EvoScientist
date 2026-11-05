@@ -897,3 +897,15 @@ def test_planning_starts_from_the_literature_for_both_writers() -> None:
     analyst = TestSubagents._load("node-analyst")["system_prompt"]
     assert analyst.index("Look at the literature before you plan") < analyst.index("## Rules")
     assert "before you write the next plan" in analyst
+
+
+def test_plans_are_asked_for_method_and_design_not_interfaces_and_every_number() -> None:
+    writer = TestSubagents._load("plan-writer")["system_prompt"]
+    assert "explain the method and" in writer and "the design" in writer
+    assert "are for the implementer to" in writer and "A number belongs in the plan when a decision rests on it" in writer
+    analyst = TestSubagents._load("node-analyst")["system_prompt"]
+    assert "the same level of detail as a plan-writer's plan" in analyst
+    # a hint, not a cap: no word or minute limit appears in either definition
+    import re
+    for text in (writer, analyst):
+        assert not re.search(r"\b(under|at most|no more than) \d+ (words|minutes|lines)\b", text)

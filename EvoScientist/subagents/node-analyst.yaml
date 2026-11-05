@@ -70,7 +70,8 @@ node-analyst:
 
     ### The next plan
     The plan for the step you propose, built on this node (the main agent opens a refinement of it). It uses
-    the same layout as a plan-writer's plan:
+    the same layout and the same level of detail as a plan-writer's plan: the method and the design, with a
+    number only where a decision rests on it; the implementer settles interfaces and exact settings.
     # Plan: <short title>
     ## Direction and hypothesis
     What it changes and a falsifiable claim: "X should raise the metric because Y; it fails if Z".
