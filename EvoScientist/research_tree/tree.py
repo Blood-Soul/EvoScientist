@@ -616,10 +616,16 @@ class ResearchTree:
                 minutes=budget,
                 plan=plan_id or None,
             )
+            files = (
+                f"`{st['prediction_file']}` (the held-out predictions that are scored), `{st['deliverable']}` "
+                "(the deliverable) and `NODE_REPORT.md` (what was done, what the errors look like, what you "
+                "would try next)"
+            )
             deliver = (
-                f"Before the node ends it must contain `{st['prediction_file']}` (the held-out predictions "
-                f"that are scored), `{st['deliverable']}` (the deliverable) and `NODE_REPORT.md` "
-                "(what was done, what the errors look like, what you would try next)."
+                f"Before the node ends it must contain {files}."
+                if gpu
+                else "For now, leave the code, a note of what you checked on the tiny slice, and `START.md`. "
+                f"The full run that produces {files} happens later, after the main agent starts this node."
             )
             brief = self._save_brief(nid, self._brief(st, nid, path, deliver))
             if self.require_plans:

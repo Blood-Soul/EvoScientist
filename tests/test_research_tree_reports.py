@@ -712,6 +712,12 @@ class TestCodeOnlyNodes:
         brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
         assert "this step is code only for now" in brief and "START.md" in brief
         assert "budget of 60 minutes from now" not in brief
+        # the deliverables do not contradict "do not train yet"
+        leave = brief[brief.index("### What you must leave"):]
+        assert "Before the node ends it must contain" not in leave
+        assert "leave the code" in leave and "START.md" in leave
+        busy = (root / "nodes" / "n1" / "BRIEF.md").read_text()
+        assert "Before the node ends it must contain `holdout_predictions.csv`" in busy[busy.index("### What you must leave"):]
 
     def test_a_second_gpu_node_is_still_refused(self, strict) -> None:
         tree, *_ = strict
