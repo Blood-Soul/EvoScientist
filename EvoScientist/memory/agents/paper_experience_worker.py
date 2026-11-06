@@ -29,7 +29,7 @@ from ._factory import resolve_memory_agent_paths
 
 # Papers extracted at the same time by one drain. Each is a download plus two or
 # three model calls; the limits that matter are the gateway and arXiv's rate.
-DRAIN_CONCURRENCY = 5
+DRAIN_CONCURRENCY = 8
 
 
 class PaperExperienceWorkerState(TypedDict, total=False):

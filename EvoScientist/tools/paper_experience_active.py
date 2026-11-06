@@ -29,7 +29,7 @@ from ..memory.runtime_context import runtime_project_id
 # Papers extracted at the same time within one call. Each paper is one download
 # and two or three model calls, so the limit is the gateway and arXiv's courtesy
 # rate, not this process.
-ACTIVE_EXTRACTION_CONCURRENCY = 5
+ACTIVE_EXTRACTION_CONCURRENCY = 8
 
 
 class ActivePaperItem(BaseModel):

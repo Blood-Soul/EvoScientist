@@ -28,6 +28,7 @@ from .memory import (
     EvoMemoryMiddleware,
     create_memory_middleware,
 )
+from .paper_autoqueue import create_paper_autoqueue_middleware
 from .memory_lifecycle import (
     EvoMemoryLifecycleMiddleware,
     create_memory_lifecycle_middleware,
@@ -75,6 +76,7 @@ __all__ = [
     "create_context_editing_middleware",
     "create_experience_coach_middleware",
     "create_memory_lifecycle_middleware",
+    "create_paper_autoqueue_middleware",
     "create_memory_middleware",
     "create_per_run_summarization_middleware",
     "create_proactive_mode_middleware",

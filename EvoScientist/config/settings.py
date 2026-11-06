@@ -443,6 +443,10 @@ class EvoScientistConfig:
     # (`enqueue_paper_experiences`, `extract_paper_experiences`). Off removes them from
     # the agent, for an arm that must not build any experience.
     memory_paper_extraction_enabled: bool = True
+    # Queue every paper a `scholar_search.py` call returns for experience extraction and
+    # drain the queue in-process, so the library no longer depends on the agent calling
+    # `enqueue_paper_experiences`. Needs `memory_paper_extraction_enabled`. Off by default.
+    memory_paper_autoqueue_enabled: bool = False
     memory_experience_search_enabled: bool = True
     # Experience-to-policy reuse. An `E-*` record is source-bound prose about
     # what one paper's authors did; injecting it directly makes an agent copy
@@ -1465,6 +1469,7 @@ _ENV_MAPPINGS = {
     "memory_observation_cache_max_files": "EVOSCIENTIST_MAX_CACHED_FILES",
     "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
     "memory_paper_extraction_enabled": "EVOSCIENTIST_MEMORY_PAPER_EXTRACTION_ENABLED",
+    "memory_paper_autoqueue_enabled": "EVOSCIENTIST_MEMORY_PAPER_AUTOQUEUE_ENABLED",
     "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",
     "memory_experience_search_enabled": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_SEARCH_ENABLED"
