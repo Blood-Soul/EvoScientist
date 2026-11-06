@@ -20,10 +20,11 @@ from ...utils import format_message_content
 from .schema import PolicyOutputError, normalize_policy
 from .trace import emit_trace_async
 
-# One record's JSON runs 4-5k characters. Four records plus the prompt stays
-# well inside an aux-model context while keeping every field the writer needs
-# (bindings, applicable_when, scope, evidence) intact rather than pre-trimmed.
-MAX_RECORD_CHARS = 6000
+# One record's JSON runs 4-5k characters, and some run longer. The writer is the
+# coach's view of the library, so it should read each selected record whole: this
+# cap is a guard against a runaway record, not a trim. Four records at this size
+# still sit well inside an aux-model context.
+MAX_RECORD_CHARS = 20000
 
 
 def _render_records(selected: Sequence[Mapping[str, Any]]) -> str:

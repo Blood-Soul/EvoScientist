@@ -472,6 +472,25 @@ class EvoScientistConfig:
     # last few steps; paying for the whole trajectory on the auxiliary model buys
     # context the gate does not use.
     memory_experience_coach_recent_messages: int = 6
+    # Whether the main agent takes part in experience reuse at all. False: no
+    # coach on it, no `apply_experience` in its tool set (nor in the general-purpose
+    # subagent that inherits it), and no reuse paragraph in its memory
+    # instructions. For runs where the main agent only coordinates and reuse
+    # belongs to subagents (`memory_experience_coach_subagents`).
+    memory_experience_main_reuse_enabled: bool = True
+    # The main agent holds `apply_experience` (the pull route) without a coach on
+    # it. Independent of `memory_experience_main_reuse_enabled`: that switch gives
+    # the main agent the coach (or, with the coach off, the tool); this one gives
+    # it the tool alone, so the coach can sit on the subagents while the main
+    # agent decides for itself when to call. A coached subagent still never holds
+    # the tool.
+    memory_experience_main_pull_enabled: bool = False
+    # Comma-separated subagent names that get their own coach, same middleware
+    # and same pipeline as the main agent's. The gate then reads that subagent's
+    # own trajectory, whose first human turn is the task the main agent handed
+    # it. A coached subagent must not also hold `apply_experience`: the two
+    # routes are mutually exclusive (see TestRouteExclusivity). Empty: none.
+    memory_experience_coach_subagents: str = ""
 
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
@@ -854,6 +873,9 @@ class MemoryControls:
     experience_policy_max_selected: int = 4
     experience_coach_enabled: bool = True
     experience_coach_recent_messages: int = 6
+    experience_main_reuse_enabled: bool = True
+    experience_main_pull_enabled: bool = False
+    experience_coach_subagents: tuple[str, ...] = ()
 
     @classmethod
     def from_config(cls, config: EvoScientistConfig) -> MemoryControls:
@@ -869,6 +891,13 @@ class MemoryControls:
             experience_coach_enabled=config.memory_experience_coach_enabled,
             experience_coach_recent_messages=(
                 config.memory_experience_coach_recent_messages
+            ),
+            experience_main_reuse_enabled=config.memory_experience_main_reuse_enabled,
+            experience_main_pull_enabled=config.memory_experience_main_pull_enabled,
+            experience_coach_subagents=tuple(
+                name.strip()
+                for name in str(config.memory_experience_coach_subagents or "").split(",")
+                if name.strip()
             ),
         )
 
@@ -1447,6 +1476,15 @@ _ENV_MAPPINGS = {
     "memory_experience_coach_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED",
     "memory_experience_coach_recent_messages": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES"
+    ),
+    "memory_experience_main_reuse_enabled": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_REUSE_ENABLED"
+    ),
+    "memory_experience_main_pull_enabled": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_PULL_ENABLED"
+    ),
+    "memory_experience_coach_subagents": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_SUBAGENTS"
     ),
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }

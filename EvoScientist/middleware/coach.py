@@ -126,6 +126,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         self._stats: dict[str, Any] | None = None
         self._stats_at: float = 0.0
         self._gate_prompt: str | None = None
+        self._summary_prompt: str | None = None
         self._brief: Any | None = None
         self._brief_for: str = ""
         self._last_picked: tuple[str, ...] | None = None
@@ -241,6 +242,13 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         await self._trace("coach_brief", **brief.to_dict())
         return brief
 
+    async def _load_summary_prompt(self) -> str:
+        if self._summary_prompt is None:
+            from ..memory.policy import load_summarize_prompt
+
+            self._summary_prompt = await load_summarize_prompt()
+        return self._summary_prompt
+
     async def _load_gate_prompt(self) -> str:
         if self._gate_prompt is None:
             from ..memory.policy import load_gate_prompt
@@ -270,12 +278,23 @@ class ExperienceCoachMiddleware(AgentMiddleware):
             render_catalog,
             render_suggestion,
             situation_terms,
+            summarize_activity,
         )
 
         try:
             brief = await self._task_brief(self._request_text(messages))
             brief_text = brief.render()
-            activity = render_activity(messages, actions=self._recent_actions)
+            raw_activity = render_activity(messages, actions=self._recent_actions)
+            # The gate and the writer read a short account of the recent steps,
+            # not the steps: a run of commands and clipped output says little
+            # about what the agent is trying to decide.
+            activity = await summarize_activity(
+                activity_text=raw_activity,
+                model=self._resolve_model(),
+                prompt=await self._load_summary_prompt(),
+                memory_dir=self._memory_dir,
+                call_id=call_id,
+            )
             catalog = await asyncio.to_thread(
                 render_catalog,
                 memory_dir=self._memory_dir,

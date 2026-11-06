@@ -741,8 +741,14 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
         # does that judgement on every step instead, so handing the main agent
         # the tool as well would only buy a second, worse-phrased route to the
         # same pipeline. With the coach off, the tool is the only route and the
-        # main agent keeps it.
-        if not getattr(cfg, "memory_experience_coach_enabled", True):
+        # main agent keeps it. With `memory_experience_main_reuse_enabled` off the
+        # main agent only coordinates: it gets neither route, and so neither does
+        # the general-purpose subagent that inherits its tools.
+        main_pull = getattr(cfg, "memory_experience_main_pull_enabled", False)
+        if main_pull or (
+            getattr(cfg, "memory_experience_main_reuse_enabled", True)
+            and not getattr(cfg, "memory_experience_coach_enabled", True)
+        ):
             base_tools.append(policy_tool)
 
     if os.environ.get("TAVILY_API_KEY"):
@@ -1147,14 +1153,25 @@ def _get_default_middleware(
         ),
         enable_paper_fulltext=memory_controls.paper_fulltext_enabled,
         enable_experience_search=memory_controls.experience_search_enabled,
-        enable_experience_policy=memory_controls.experience_policy_enabled,
+        # A main agent that only coordinates (`experience_main_reuse_enabled` off)
+        # is told about neither route: it has no coach and no tool to describe.
+        enable_experience_policy=(
+            memory_controls.experience_policy_enabled
+            and (
+                memory_controls.experience_main_reuse_enabled
+                or memory_controls.experience_main_pull_enabled
+                or for_async_subagent
+            )
+        ),
         # Must mirror the condition that appends the coach middleware below: the
         # two blocks describe mutually exclusive routes, so an agent told that
         # guidance arrives on its own has to be an agent the coach is actually
         # running for, and an agent told to call `apply_experience` has to be one
         # that holds it.
         enable_experience_coach=(
-            memory_controls.experience_coach_enabled and not for_async_subagent
+            memory_controls.experience_coach_enabled
+            and memory_controls.experience_main_reuse_enabled
+            and not for_async_subagent
         ),
         memory_scheduler=memory_scheduler,
         # First-contact intro: main agent only, and never in unattended runs.

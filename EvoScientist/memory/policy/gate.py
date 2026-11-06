@@ -243,6 +243,51 @@ def normalize_gate(
     }
 
 
+MAX_SUMMARY_CHARS = 1800
+
+
+async def summarize_activity(
+    *,
+    activity_text: str,
+    model: Any,
+    prompt: str,
+    memory_dir: str | Path | None = None,
+    call_id: str | None = None,
+) -> str:
+    """A short account of the recent steps, in place of the steps themselves.
+
+    The gate and the writer read this instead of the last few raw actions, which
+    are mostly commands and truncated output. If the summary call fails or comes
+    back empty the raw steps are returned unchanged: a coach with an uglier view
+    is better than a coach that stops.
+    """
+    if not activity_text or activity_text == "[no steps yet]":
+        return activity_text
+    started = time.monotonic()
+    try:
+        response = await model.ainvoke(
+            [
+                SystemMessage(content=prompt.format(activity=activity_text)),
+                HumanMessage(content="Summarise now."),
+            ]
+        )
+    except Exception:
+        logger.debug("Activity summary failed; using the raw steps", exc_info=True)
+        return activity_text
+    summary = strip_echo(format_message_content(response).strip())[:MAX_SUMMARY_CHARS]
+    if memory_dir is not None:
+        await emit_trace_async(
+            memory_dir,
+            "activity_summary",
+            call_id=call_id,
+            raw_chars=len(activity_text),
+            seconds=round(time.monotonic() - started, 2),
+            usage=response_usage(response),
+            summary=summary,
+        )
+    return summary or activity_text
+
+
 async def decide_experience_need(
     *,
     brief_text: str,
@@ -294,5 +339,6 @@ __all__ = [
     "render_activity",
     "render_library",
     "render_recent",
+    "summarize_activity",
     "strip_echo",
 ]

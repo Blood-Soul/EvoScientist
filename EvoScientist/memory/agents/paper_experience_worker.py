@@ -27,6 +27,11 @@ from ..papers import persist_paper_fulltext
 from ._factory import resolve_memory_agent_paths
 
 
+# Papers extracted at the same time by one drain. Each is a download plus two or
+# three model calls; the limits that matter are the gateway and arXiv's rate.
+DRAIN_CONCURRENCY = 5
+
+
 class PaperExperienceWorkerState(TypedDict, total=False):
     processed: int
     failed: int
@@ -50,55 +55,63 @@ async def drain_paper_experience_queue(
         await asyncio.to_thread(
             requeue_running_tasks, memory_dir=memory_dir, project_id=project_id
         )
-        processed = failed = 0
-        while task := await asyncio.to_thread(
-            claim_next_task, memory_dir=memory_dir, project_id=project_id
-        ):
-            try:
-                paper_text = await download_paper_text(task.url)
-                # Persist before extracting: the full text keeps its value if
-                # extraction fails, and a retry then reuses it instead of
-                # re-downloading. persist_paper_fulltext never raises, so a
-                # storage problem cannot fail a task whose real job is
-                # extraction.
-                await asyncio.to_thread(
-                    persist_paper_fulltext,
-                    memory_dir=memory_dir,
-                    project_id=project_id,
-                    paper_id=task.paper_id or task.url,
-                    url=task.url,
-                    title=task.title,
-                    paper_text=paper_text,
-                    domain_arxiv=task.domain_arxiv,
-                )
-                prompts = await asyncio.to_thread(load_experience_prompts)
-                payloads = await run_experience_extraction(
-                    paper_id=task.paper_id or task.url,
-                    paper_text=paper_text,
-                    prompts=prompts,
-                    model=model,
-                    domain_arxiv=task.domain_arxiv,
-                )
-                await asyncio.to_thread(
-                    store_paper_experiences,
-                    memory_dir=memory_dir,
-                    project_id=project_id,
-                    paper_id=task.paper_id or task.url,
-                    url=task.url,
-                    title=task.title,
-                    paper_text=paper_text,
-                    prompts=prompts,
-                    payloads=payloads,
-                    domain_arxiv=task.domain_arxiv,
-                )
-                await asyncio.to_thread(complete_task, memory_dir=memory_dir, task=task)
-                processed += 1
-            except Exception as exc:
-                await asyncio.to_thread(
-                    fail_task, memory_dir=memory_dir, task=task, error=str(exc)
-                )
-                failed += 1
-        return {"processed": processed, "failed": failed}
+        counts = {"processed": 0, "failed": 0}
+
+        async def work() -> None:
+            # claim_next_task moves a file with os.replace, so two workers never
+            # get the same task.
+            while task := await asyncio.to_thread(
+                claim_next_task, memory_dir=memory_dir, project_id=project_id
+            ):
+                try:
+                    paper_text = await download_paper_text(task.url)
+                    # Persist before extracting: the full text keeps its value if
+                    # extraction fails, and a retry then reuses it instead of
+                    # re-downloading. persist_paper_fulltext never raises, so a
+                    # storage problem cannot fail a task whose real job is
+                    # extraction.
+                    await asyncio.to_thread(
+                        persist_paper_fulltext,
+                        memory_dir=memory_dir,
+                        project_id=project_id,
+                        paper_id=task.paper_id or task.url,
+                        url=task.url,
+                        title=task.title,
+                        paper_text=paper_text,
+                        domain_arxiv=task.domain_arxiv,
+                    )
+                    prompts = await asyncio.to_thread(load_experience_prompts)
+                    payloads = await run_experience_extraction(
+                        paper_id=task.paper_id or task.url,
+                        paper_text=paper_text,
+                        prompts=prompts,
+                        model=model,
+                        domain_arxiv=task.domain_arxiv,
+                    )
+                    await asyncio.to_thread(
+                        store_paper_experiences,
+                        memory_dir=memory_dir,
+                        project_id=project_id,
+                        paper_id=task.paper_id or task.url,
+                        url=task.url,
+                        title=task.title,
+                        paper_text=paper_text,
+                        prompts=prompts,
+                        payloads=payloads,
+                        domain_arxiv=task.domain_arxiv,
+                    )
+                    await asyncio.to_thread(
+                        complete_task, memory_dir=memory_dir, task=task
+                    )
+                    counts["processed"] += 1
+                except Exception as exc:
+                    await asyncio.to_thread(
+                        fail_task, memory_dir=memory_dir, task=task, error=str(exc)
+                    )
+                    counts["failed"] += 1
+
+        await asyncio.gather(*(work() for _ in range(DRAIN_CONCURRENCY)))
+        return counts
     finally:
         await lock.release()
 

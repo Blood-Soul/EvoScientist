@@ -939,3 +939,98 @@ class TestCoachModelIsQuiet:
         assert model.tags == ["keep", TAG_NOSTREAM]
         assert model.disable_streaming is True
         assert base.tags == ["keep"]
+class TestActivitySummary:
+    """The gate and the writer read a short account of the steps, not the steps."""
+
+    @staticmethod
+    def _model(reply: str | Exception) -> Any:
+        class _Model:
+            async def ainvoke(self, _messages: Any) -> Any:
+                if isinstance(reply, Exception):
+                    raise reply
+                return AIMessage(content=reply)
+
+        return _Model()
+
+    @pytest.mark.asyncio
+    async def test_summary_replaces_the_steps(self) -> None:
+        from EvoScientist.memory.policy import summarize_activity
+
+        out = await summarize_activity(
+            activity_text="[step 1]\n  did: execute: python train.py",
+            model=self._model("The agent is training a reader."),
+            prompt="{activity}",
+        )
+        assert out == "The agent is training a reader."
+
+    @pytest.mark.asyncio
+    async def test_failure_falls_back_to_the_raw_steps(self) -> None:
+        from EvoScientist.memory.policy import summarize_activity
+
+        raw = "[step 1]\n  did: execute: python train.py"
+        out = await summarize_activity(
+            activity_text=raw, model=self._model(RuntimeError("down")), prompt="{activity}"
+        )
+        assert out == raw
+
+    @pytest.mark.asyncio
+    async def test_no_steps_costs_no_call(self) -> None:
+        from EvoScientist.memory.policy import summarize_activity
+
+        out = await summarize_activity(
+            activity_text="[no steps yet]",
+            model=self._model(RuntimeError("must not be called")),
+            prompt="{activity}",
+        )
+        assert out == "[no steps yet]"
+
+    def test_prompt_file_formats(self) -> None:
+        from EvoScientist.memory.policy.prompts import (
+            SUMMARIZE_PROMPT_FILENAME,
+            load_policy_prompt,
+        )
+
+        assert "x" in load_policy_prompt(SUMMARIZE_PROMPT_FILENAME).format(activity="x")
+
+
+class TestMainAgentPull:
+    """`memory_experience_main_pull_enabled`: apply_experience on the main agent, no coach on it."""
+
+    @staticmethod
+    def _tool_names(**over: Any) -> set[str]:
+        from EvoScientist import EvoScientist as evo
+
+        cfg = evo._ensure_config()
+        saved = {key: getattr(cfg, key) for key in over}
+        try:
+            for key, value in over.items():
+                setattr(cfg, key, value)
+            _, tools = evo._build_paper_tools(
+                cfg=cfg, workspace=Workspace(Path("/tmp")), work_dir="/tmp"
+            )
+        finally:
+            for key, value in saved.items():
+                setattr(cfg, key, value)
+        return {getattr(t, "name", "") for t in tools}
+
+    def test_switch_defaults_off_and_is_mapped(self) -> None:
+        from EvoScientist.config.settings import _ENV_MAPPINGS, EvoScientistConfig
+
+        assert EvoScientistConfig().memory_experience_main_pull_enabled is False
+        assert "memory_experience_main_pull_enabled" in _ENV_MAPPINGS
+
+    def test_pull_on_gives_the_main_agent_the_tool_beside_subagent_coaches(self) -> None:
+        names = self._tool_names(
+            memory_experience_coach_enabled=True,
+            memory_experience_main_reuse_enabled=False,
+            memory_experience_main_pull_enabled=True,
+        )
+        assert "apply_experience" in names
+
+    def test_pull_off_keeps_the_coordinator_without_it(self) -> None:
+        names = self._tool_names(
+            memory_experience_coach_enabled=True,
+            memory_experience_main_reuse_enabled=False,
+            memory_experience_main_pull_enabled=False,
+        )
+        assert "apply_experience" not in names
