@@ -25,7 +25,6 @@ MAX_PLAN_REVISIONS = 2  # rewrites of one plan after its first version
 PLAN_DECISIONS = ("accepted", "rejected", "revise")
 
 
-EXPERIENCE_ID = re.compile(r"\bE-[0-9a-f]{6,}\b")
 _HEADING = re.compile(r"^(#{1,6})\s*(.+?)\s*$")
 _BULLET = re.compile(r"^(?:[-*\u2022]|\d+[.)])\s+(.*)$")
 _EMPTY_ITEMS = {"none", "n/a", "nothing", "-"}
@@ -85,10 +84,6 @@ def plan_title(text: str) -> str:
     m = re.search(r"^#\s*Plan:\s*(.+?)\s*$", text, re.MULTILINE | re.IGNORECASE)
     return m.group(1) if m else ""
 
-
-def experience_ids(text: str) -> list[str]:
-    """E-ids named under `## Experience used`."""
-    return sorted(set(EXPERIENCE_ID.findall("\n".join(section_items(text, "Experience used")))))
 
 
 def report_path(root: Path, kind: str, doc_id: str) -> Path:

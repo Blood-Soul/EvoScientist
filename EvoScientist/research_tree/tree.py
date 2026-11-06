@@ -1131,7 +1131,6 @@ class ResearchTree:
         text: str = "",
         cluster: str = "",
         parents: list[str] | tuple[str, ...] = (),
-        experiences: list[str] | tuple[str, ...] = (),
         plan_id: str = "",
         decision: str = "",
         reason: str = "",
@@ -1176,9 +1175,6 @@ class ResearchTree:
                 found["rounds"] += 1
                 found["status"] = "draft"  # a rewritten plan is reviewed again
                 found["text"] = text.strip()
-                found["experiences"] = sorted(
-                    set(found["experiences"]) | set(experiences)
-                )
                 found["feedback"] = ""
                 write_report(self.root, "plans", plan_id, text, found["rounds"] + 1)
                 self._log(st, "plan-rewrite", plan=plan_id, round=found["rounds"])
@@ -1205,7 +1201,6 @@ class ResearchTree:
                 "status": "draft",
                 "rounds": 0,
                 "text": text.strip(),
-                "experiences": sorted(set(experiences)),
                 "feedback": "",
                 "node": None,
             }

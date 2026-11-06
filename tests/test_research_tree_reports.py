@@ -432,9 +432,6 @@ ANALYSIS = """# Analysis of n1
 ## Improvements
 1. train the null score on answer-free windows (E-0123456789ab)
 2. add a second epoch for the long plots
-## Experience used
-- E-0123456789ab
-- E-ffffffffffff
 """
 
 
@@ -459,7 +456,6 @@ class TestFilesAsHandoff:
 
     def test_sections_are_read_as_items(self) -> None:
         from EvoScientist.research_tree.reports import (
-            experience_ids,
             plan_title,
             section_items,
         )
@@ -468,8 +464,7 @@ class TestFilesAsHandoff:
         flaws = section_items(ANALYSIS, "Flaws")
         assert len(flaws) == 2 and "mostly long plots" in flaws[0]  # a wrapped line joins its item
         assert section_items(ANALYSIS, "Improvements")[1] == "add a second epoch for the long plots"
-        assert experience_ids(ANALYSIS) == ["E-0123456789ab", "E-ffffffffffff"]
-        assert section_items("## Experience used\nnone\n", "Experience used") == []
+        assert section_items("## Flaws\nnone\n", "Flaws") == []
         assert section_items("## Flaws\nonly prose here\n", "Flaws") == ["only prose here"]
         assert section_items(ANALYSIS, "Nope") == []
         assert plan_title("# Plan: shared-norm reader\n...") == "shared-norm reader"
@@ -489,15 +484,12 @@ class TestFilesAsHandoff:
         (root / "reports" / "drafts").mkdir(parents=True)
         return made, root, clock
 
-    def test_a_plan_file_gives_title_and_experience_ids(self, tools) -> None:
+    def test_a_plan_file_gives_its_title(self, tools) -> None:
         made, root, _ = tools
-        (root / "reports" / "drafts" / "p.md").write_text(
-            PLAN + "## Experience used\n- E-0123456789ab\n"
-        )
+        (root / "reports" / "drafts" / "p.md").write_text(PLAN)
         made["tree_plan"].invoke({"path": "reports/drafts/p.md"})
         state = (root / ".research" / "state.json").read_text()
         assert '"title": "shared-norm reader"' in state
-        assert "E-0123456789ab" in state
 
     def test_an_unused_accepted_plan_can_be_rewritten_a_used_one_cannot(self, strict) -> None:
         tree, root, _ = strict
@@ -752,7 +744,7 @@ class TestCodeOnlyNodes:
 class TestNextPlanFromTheAnalyst:
     """node-analyst writes one plan that builds on a node; tree_plan records it and a refine opens on it."""
 
-    NEXT = "# Plan: fix the end label\n## What to build\n1. one line\n## Evidence\n- the choice (n1 slice)\n## Experience used\nnone\n"
+    NEXT = "# Plan: fix the end label\n## What to build\n1. one line\n## Evidence\n- the choice (n1 slice)\n"
 
     @pytest.fixture
     def tools(self, tmp_path):

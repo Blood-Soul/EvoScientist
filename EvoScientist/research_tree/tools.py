@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from .gitlog import GitError
 from .judge import Judge
 from .monitor import _plain, journal_call
-from .reports import experience_ids, plan_title, read_draft, section_items
+from .reports import plan_title, read_draft, section_items
 from .tree import CATEGORIES, KINDS, ResearchTree, TreeError
 
 
@@ -276,7 +276,6 @@ def create_research_tree_tools(
             text = read_draft(tree.root, path)
             a["text"] = text
             a["title"] = a.get("title") or plan_title(text)
-            a["experiences"] = experience_ids(text)
         return tree.plan(**a)
 
     return [
