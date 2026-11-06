@@ -361,6 +361,7 @@ def _inject_subagent_middleware(
         create_experience_coach_middleware,
         create_memory_lifecycle_middleware,
         create_memory_middleware,
+        create_paper_autoqueue_middleware,
         create_per_run_summarization_middleware,
         create_runtime_context_middleware,
         default_memory_scheduler,
@@ -371,6 +372,10 @@ def _inject_subagent_middleware(
     memory_controls = MemoryControls.from_config(cfg)
     memory_dir = str(_paths_mod.MEMORIES_DIR)
     memory_scheduler = default_memory_scheduler()
+    autoqueue = bool(
+        getattr(cfg, "memory_paper_autoqueue_enabled", False)
+        and getattr(cfg, "memory_paper_extraction_enabled", True)
+    )
     for sa in subs:
         name = str(sa.get("name") or "sub-agent")
         source_type = MemorySourceType.SUBAGENT
@@ -467,6 +472,14 @@ def _inject_subagent_middleware(
                     model=None,
                     max_selected=memory_controls.experience_policy_max_selected,
                     recent_messages=memory_controls.experience_coach_recent_messages,
+                )
+            )
+        if autoqueue:
+            middleware.append(
+                create_paper_autoqueue_middleware(
+                    memory_dir=memory_dir,
+                    project_id=memory_middleware.project_id,
+                    workspace_root=workspace.root,
                 )
             )
         if memory_controls.worker_needed(MemoryObservationTarget.SUBAGENT_WORKER):
@@ -1300,6 +1313,18 @@ def _get_default_middleware(
                 model=tool_selector_model,
                 max_selected=memory_controls.experience_policy_max_selected,
                 recent_messages=memory_controls.experience_coach_recent_messages,
+            )
+        )
+    if getattr(cfg, "memory_paper_autoqueue_enabled", False) and getattr(
+        cfg, "memory_paper_extraction_enabled", True
+    ):
+        from .middleware import create_paper_autoqueue_middleware
+
+        mw.append(
+            create_paper_autoqueue_middleware(
+                memory_dir=memory_dir,
+                project_id=memory_middleware.project_id,
+                workspace_root=workspace.root,
             )
         )
     if memory_controls.worker_needed(worker_target):
