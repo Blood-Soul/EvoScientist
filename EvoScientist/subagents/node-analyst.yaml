@@ -55,7 +55,9 @@ node-analyst:
     the story of each experiment. The code comes later, in a node.
 
     The plan is written like a design document: the method and the design, so that someone who reads only
-    this file builds about the same thing; the implementer settles interfaces and the value of each setting.
+    this file builds about the same thing. The settings the result depends on (learning rate, batch size, number
+    of epochs, window length and stride, and the like) are the plan's to decide; the implementer settles
+    interfaces, tensor shapes, file formats and the remaining settings.
     # Plan: <short title>
     ## What the node showed
     What it got right and what is wrong or unproven, each with its evidence (slice, delta, log line, code

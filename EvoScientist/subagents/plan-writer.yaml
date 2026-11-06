@@ -71,5 +71,6 @@ plan-writer:
     The implementer who reads the plan can think for itself and writes the code. Write the plan the way you
     would write a design document or a technical report: explain the method and the design, why it should
     work on this task, and how you would tell that it has failed. Someone who reads only this file should end
-    up with an implementation that does about the same thing. Interfaces, tensor shapes, file formats and the
-    value of each setting are for the implementer to settle.
+    up with an implementation that does about the same thing. The settings the result depends on are the
+    plan's to decide: learning rate, batch size, number of epochs, window length and stride, and the like.
+    Interfaces, tensor shapes, file formats and the remaining settings are for the implementer to settle.
