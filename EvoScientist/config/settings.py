@@ -478,6 +478,13 @@ class EvoScientistConfig:
     # instructions. For runs where the main agent only coordinates and reuse
     # belongs to subagents (`memory_experience_coach_subagents`).
     memory_experience_main_reuse_enabled: bool = True
+    # The main agent holds `apply_experience` (the pull route) without a coach on
+    # it. Independent of `memory_experience_main_reuse_enabled`: that switch gives
+    # the main agent the coach (or, with the coach off, the tool); this one gives
+    # it the tool alone, so the coach can sit on the subagents while the main
+    # agent decides for itself when to call. A coached subagent still never holds
+    # the tool.
+    memory_experience_main_pull_enabled: bool = False
     # Comma-separated subagent names that get their own coach, same middleware
     # and same pipeline as the main agent's. The gate then reads that subagent's
     # own trajectory, whose first human turn is the task the main agent handed
@@ -880,6 +887,7 @@ class MemoryControls:
     experience_coach_enabled: bool = True
     experience_coach_recent_messages: int = 6
     experience_main_reuse_enabled: bool = True
+    experience_main_pull_enabled: bool = False
     experience_coach_subagents: tuple[str, ...] = ()
 
     @classmethod
@@ -898,6 +906,7 @@ class MemoryControls:
                 config.memory_experience_coach_recent_messages
             ),
             experience_main_reuse_enabled=config.memory_experience_main_reuse_enabled,
+            experience_main_pull_enabled=config.memory_experience_main_pull_enabled,
             experience_coach_subagents=tuple(
                 name.strip()
                 for name in str(config.memory_experience_coach_subagents or "").split(",")
@@ -1485,6 +1494,9 @@ _ENV_MAPPINGS = {
     ),
     "memory_experience_main_reuse_enabled": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_REUSE_ENABLED"
+    ),
+    "memory_experience_main_pull_enabled": (
+        "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_PULL_ENABLED"
     ),
     "memory_experience_coach_subagents": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_SUBAGENTS"

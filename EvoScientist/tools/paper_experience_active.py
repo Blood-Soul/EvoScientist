@@ -26,7 +26,10 @@ from ..memory.papers import (
 )
 from ..memory.runtime_context import runtime_project_id
 
-ACTIVE_EXTRACTION_CONCURRENCY = 2
+# Papers extracted at the same time within one call. Each paper is one download
+# and two or three model calls, so the limit is the gateway and arXiv's courtesy
+# rate, not this process.
+ACTIVE_EXTRACTION_CONCURRENCY = 5
 
 
 class ActivePaperItem(BaseModel):
@@ -42,8 +45,8 @@ class ActivePaperItem(BaseModel):
 class ExtractPaperExperiencesArgs(BaseModel):
     papers: list[ActivePaperItem] = Field(
         min_length=1,
-        max_length=5,
-        description="One to five papers selected for foreground extraction.",
+        max_length=10,
+        description="One to ten papers selected for foreground extraction.",
     )
     refresh: bool = Field(
         default=False,
@@ -207,7 +210,7 @@ def create_extract_paper_experiences_tool(
         coroutine=_extract_paper_experiences,
         name="extract_paper_experiences",
         description=(
-            "Immediately download one to five explicitly selected papers, extract "
+            "Immediately download one to ten explicitly selected papers, extract "
             "their L1 practical and L2 inductive experiences, persist them (and "
             "each paper's full text, for later `search_paper_text`) in the active "
             "project's store, and return the full payloads. Cached papers whose "

@@ -782,8 +782,10 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
         # main agent keeps it. With `memory_experience_main_reuse_enabled` off the
         # main agent only coordinates: it gets neither route, and so neither does
         # the general-purpose subagent that inherits its tools.
-        if getattr(cfg, "memory_experience_main_reuse_enabled", True) and not getattr(
-            cfg, "memory_experience_coach_enabled", True
+        main_pull = getattr(cfg, "memory_experience_main_pull_enabled", False)
+        if main_pull or (
+            getattr(cfg, "memory_experience_main_reuse_enabled", True)
+            and not getattr(cfg, "memory_experience_coach_enabled", True)
         ):
             base_tools.append(policy_tool)
 
@@ -1203,7 +1205,11 @@ def _get_default_middleware(
         # is told about neither route: it has no coach and no tool to describe.
         enable_experience_policy=(
             memory_controls.experience_policy_enabled
-            and (memory_controls.experience_main_reuse_enabled or for_async_subagent)
+            and (
+                memory_controls.experience_main_reuse_enabled
+                or memory_controls.experience_main_pull_enabled
+                or for_async_subagent
+            )
         ),
         # Must mirror the condition that appends the coach middleware below: the
         # two blocks describe mutually exclusive routes, so an agent told that
@@ -1211,7 +1217,9 @@ def _get_default_middleware(
         # running for, and an agent told to call `apply_experience` has to be one
         # that holds it.
         enable_experience_coach=(
-            memory_controls.experience_coach_enabled and not for_async_subagent
+            memory_controls.experience_coach_enabled
+            and memory_controls.experience_main_reuse_enabled
+            and not for_async_subagent
         ),
         memory_scheduler=memory_scheduler,
         # First-contact intro: main agent only, and never in unattended runs.

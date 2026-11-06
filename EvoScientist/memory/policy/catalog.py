@@ -33,7 +33,7 @@ from ..types import ObservationSearchMode
 
 MAP_TOPICS = 24
 DEFAULT_CANDIDATES = 24
-LINE_CHARS = 170
+LINE_CHARS = 360
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_\-]{3,}")
 # Words that appear in nearly every research step and carry no topic.

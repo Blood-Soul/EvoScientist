@@ -24,9 +24,15 @@ from .gate import (
     render_activity,
     render_library,
     render_recent,
+    summarize_activity,
 )
 from .pipeline import derive_policy
-from .prompts import load_gate_prompt, load_rerank_prompt, load_writer_prompt
+from .prompts import (
+    load_gate_prompt,
+    load_rerank_prompt,
+    load_summarize_prompt,
+    load_writer_prompt,
+)
 from .schema import BINDING_KINDS, VERDICTS, PolicyOutputError, normalize_policy
 from .select import (
     DEFAULT_MAX_SELECTED,
@@ -60,6 +66,7 @@ __all__ = [
     "load_cached_policy",
     "load_gate_prompt",
     "load_rerank_prompt",
+    "load_summarize_prompt",
     "load_writer_prompt",
     "normalize_gate",
     "normalize_policy",
@@ -73,6 +80,7 @@ __all__ = [
     "rerank_candidates",
     "situation_terms",
     "store_policy",
+    "summarize_activity",
     "synthesize_policy",
     "transferable_core",
 ]

@@ -27,7 +27,7 @@ SUGGESTION_CLOSE = "</experience_guidance>"
 # to inform. A policy longer than this is a sign the gate asked too broad a
 # question, not a reason to inject more.
 MAX_ITEMS = 6
-MAX_ITEM_CHARS = 300
+MAX_ITEM_CHARS = 700
 
 
 def _flatten(value: Any, limit: int = MAX_ITEM_CHARS) -> str:
