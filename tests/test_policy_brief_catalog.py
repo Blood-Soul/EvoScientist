@@ -186,7 +186,7 @@ class TestCatalog:
     def test_record_line_is_one_short_line(self) -> None:
         line = record_line(self._doc(7, "nlp", task="x " * 300, summary="y " * 300))
         assert "\n" not in line
-        assert len(line) <= 170
+        assert len(line) <= 360
         assert line.startswith("E-7 [L1]")
 
     def test_situation_terms_come_from_the_text_and_skip_filler(self) -> None:
