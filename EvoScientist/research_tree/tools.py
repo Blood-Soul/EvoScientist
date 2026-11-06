@@ -90,8 +90,10 @@ class HistoryArgs(BaseModel):
 
 class NewArgs(BaseModel):
     kind: str = Field(
+        default="",
         description=f"One of {', '.join(KINDS)}. explore: a new line from the root. refine: change one thing in a "
-        "finished node (one parent). merge: combine two or more finished nodes."
+        "finished node (one parent). merge: combine two or more finished nodes. Left out, it follows from the "
+        "parents: none is an explore, one a refine, several a merge.",
     )
     title: str = Field(description="Short name of the step.")
     hypothesis: str = Field(

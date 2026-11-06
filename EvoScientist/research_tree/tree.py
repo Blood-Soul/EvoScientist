@@ -478,9 +478,9 @@ class ResearchTree:
     def new_node(
         self,
         *,
-        kind: str,
         title: str,
         hypothesis: str,
+        kind: str = "",
         category: str = "method",
         parents: list[str] | tuple[str, ...] = (),
         based_on: list[str] | tuple[str, ...] = (),
@@ -494,6 +494,10 @@ class ResearchTree:
         stop_condition: str = "",
         plan_id: str = "",
     ) -> str:
+        if not kind:
+            # no parent starts a new line, one parent changes it, several combine
+            n_parents = len(set(parents))
+            kind = "explore" if n_parents == 0 else "refine" if n_parents == 1 else "merge"
         if kind not in KINDS:
             raise TreeError(f"kind must be one of {', '.join(KINDS)}")
         if category not in CATEGORIES:
@@ -527,6 +531,13 @@ class ResearchTree:
             known = {k for k, n in nodes.items() if n["status"] != "running"} | {
                 i["id"] for i in st["insights"]
             }
+            # a plan (P1, ...) goes in plan_id and a memory observation (O-...) is not a record of the tree:
+            # neither is evidence here, so they are left out of based_on and the reply says so
+            ignored = [
+                b for b in dict.fromkeys(based_on)
+                if b not in known and (b in st.get("plans", {}) or b.startswith("O-"))
+            ]
+            based_on = [b for b in based_on if b not in ignored]
             if known and not based_on and not parents:
                 raise TreeError(
                     "based_on is required once there is history: cite the finished nodes or insights "
@@ -537,15 +548,13 @@ class ResearchTree:
                 raise TreeError(
                     f"cluster {cluster!r} is not a surveyed family; known: "
                     f"{', '.join(sorted(families)) or 'none (record the survey with tree_survey first)'}"
+                    ". A new family is added with tree_survey."
                 )
             unknown = [b for b in based_on if b not in known]
             if unknown:
-                plans_named = [b for b in unknown if b in st.get("plans", {})]
-                where = (
-                    f" ({', '.join(plans_named)}: a plan goes in plan_id, not in based_on)" if plans_named else ""
-                )
                 raise TreeError(
-                    f"based_on cites unknown or unfinished ids: {', '.join(unknown)}{where}"
+                    f"based_on cites unknown or unfinished ids: {', '.join(unknown)} "
+                    "(it takes finished nodes and insights, ids from tree_status)"
                 )
             backing = self._check_plan(st, kind, parents, plan_id)
             if gpu and any(
@@ -641,6 +650,11 @@ class ResearchTree:
                             + ", ".join(conflicts)
                         ]
                         if conflicts
+                        else []
+                    ),
+                    *(
+                        [f"Left out of based_on (it takes finished nodes and insights; a plan goes in plan_id): {', '.join(ignored)}."]
+                        if ignored
                         else []
                     ),
                     f"When it is done, call tree_finish {nid}.",
@@ -1112,6 +1126,16 @@ class ResearchTree:
                 )
         return plan
 
+    @staticmethod
+    def _scored_parents(st: dict, parents: list[str] | tuple[str, ...]) -> list[str]:
+        """The parents of a plan: finished, scored nodes, each once."""
+        parents = list(dict.fromkeys(parents))
+        for par in parents:
+            node = st["nodes"].get(par)
+            if node is None or node["status"] != "done" or node.get("score") is None:
+                raise TreeError(f"parent {par} must be a finished, scored node")
+        return parents
+
     def plan(
         self,
         *,
@@ -1150,6 +1174,16 @@ class ResearchTree:
                         f"plan {plan_id} has been rewritten {MAX_PLAN_REVISIONS} times already: accept or "
                         "reject it, and start a new plan if the direction is still worth pursuing"
                     )
+                if cluster:
+                    families = {c["name"] for c in st.get("survey", [])}
+                    if cluster not in families:
+                        raise TreeError(
+                            f"cluster {cluster!r} is not a surveyed family; known: "
+                            f"{', '.join(sorted(families)) or 'none'}. A new family is added with tree_survey."
+                        )
+                    found["cluster"] = cluster
+                if parents:
+                    found["parents"] = self._scored_parents(st, parents)
                 found["rounds"] += 1
                 found["status"] = "draft"  # a rewritten plan is reviewed again
                 found["text"] = text.strip()
@@ -1160,7 +1194,8 @@ class ResearchTree:
                 write_report(self.root, "plans", plan_id, text, found["rounds"] + 1)
                 self._log(st, "plan-rewrite", plan=plan_id, round=found["rounds"])
                 return (
-                    f"{plan_id} rewritten (round {found['rounds']} of {MAX_PLAN_REVISIONS}); it is a draft "
+                    f"{plan_id} rewritten (round {found['rounds']} of {MAX_PLAN_REVISIONS}; from "
+                    f"{', '.join(found['parents']) or 'the root'}); it is a draft "
                     "again. Decide with tree_plan(plan_id, decision=...)."
                 )
             families = {c["name"] for c in st.get("survey", [])}
@@ -1168,16 +1203,9 @@ class ResearchTree:
                 raise TreeError(
                     f"cluster {cluster!r} is not a surveyed family; known: "
                     f"{', '.join(sorted(families)) or 'none (record the survey with tree_survey first)'}"
+                    ". A new family is added with tree_survey."
                 )
-            parents = list(dict.fromkeys(parents))
-            for par in parents:
-                node = st["nodes"].get(par)
-                if (
-                    node is None
-                    or node["status"] != "done"
-                    or node.get("score") is None
-                ):
-                    raise TreeError(f"parent {par} must be a finished, scored node")
+            parents = self._scored_parents(st, parents)
             pid = f"P{st.setdefault('next_plan', 1)}"
             st["next_plan"] += 1
             plans[pid] = {

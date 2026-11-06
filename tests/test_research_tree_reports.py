@@ -791,13 +791,53 @@ class TestNextPlanFromTheAnalyst:
         assert opened.startswith("Created n2")
         assert "fix the end label" in (root / "nodes" / "n2" / "BRIEF.md").read_text()
 
-    def test_a_plan_id_in_based_on_is_told_where_it_belongs(self, tools) -> None:
-        made, _ = tools
+    def test_a_plan_or_an_observation_in_based_on_is_left_out_and_said_so(self, tools) -> None:
+        made, root = tools
+        d = root / "reports" / "drafts"
+        (d / "plan-next.md").write_text(self.NEXT)
+        made["tree_plan"].invoke({"path": "reports/drafts/plan-next.md", "parents": ["n1"], "cluster": "A"})
+        made["tree_plan"].invoke({"plan_id": "P2", "decision": "accepted"})
         out = made["tree_new"].invoke(
-            {"kind": "refine", "title": "r", "hypothesis": "h", "parents": ["n1"], "based_on": ["P1", "n1"], "plan_id": "P1"}
+            {"title": "r", "hypothesis": "h", "parents": ["n1"], "plan_id": "P2",
+             "based_on": ["P2", "O-b9f64986cba9a35d", "n1"]}
         )
-        assert out.startswith("ERROR: based_on cites unknown or unfinished ids: P1")
-        assert "a plan goes in plan_id" in out
+        assert out.startswith("Created n2")
+        assert "Left out of based_on" in out and "P2" in out and "O-b9f64986cba9a35d" in out
+        # a made-up id is still refused
+        again = made["tree_new"].invoke(
+            {"title": "r", "hypothesis": "h", "parents": ["n1"], "based_on": ["n9"]}
+        )
+        assert again.startswith("ERROR: based_on cites unknown or unfinished ids: n9")
+
+    def test_kind_follows_from_the_parents_when_left_out(self, tools) -> None:
+        made, root = tools
+        d = root / "reports" / "drafts"
+        (d / "plan-b.md").write_text(PLAN)
+        made["tree_plan"].invoke({"path": "reports/drafts/plan-b.md", "cluster": "A"})
+        made["tree_plan"].invoke({"plan_id": "P2", "decision": "accepted"})
+        out = made["tree_new"].invoke({"title": "e", "hypothesis": "h", "plan_id": "P2", "based_on": ["n1"]})
+        assert out.startswith("Created n2 (explore)")
+
+    def test_a_rewrite_takes_the_new_parents_and_family(self, tools) -> None:
+        made, root = tools
+        d = root / "reports" / "drafts"
+        (d / "plan-b.md").write_text(PLAN)
+        made["tree_plan"].invoke({"path": "reports/drafts/plan-b.md", "cluster": "A"})  # P2, from the root
+        out = made["tree_plan"].invoke(
+            {"path": "reports/drafts/plan-b.md", "plan_id": "P2", "parents": ["n1"], "cluster": "A"}
+        )
+        assert "rewritten" in out and "from n1" in out
+        made["tree_plan"].invoke({"plan_id": "P2", "decision": "accepted"})
+        opened = made["tree_new"].invoke(
+            {"kind": "refine", "title": "r", "hypothesis": "h", "parents": ["n1"], "plan_id": "P2", "based_on": ["n1"]}
+        )
+        assert opened.startswith("Created n2 (refine)"), opened
+
+    def test_an_unknown_family_says_how_to_add_one(self, tools) -> None:
+        made, root = tools
+        (root / "reports" / "drafts" / "plan-c.md").write_text(PLAN)
+        out = made["tree_plan"].invoke({"path": "reports/drafts/plan-c.md", "cluster": "Z"})
+        assert out.startswith("ERROR: cluster 'Z' is not a surveyed family") and "added with tree_survey" in out
 
     def test_an_explore_and_a_refine_are_opened_the_same_way(self, tools) -> None:
         made, root = tools
