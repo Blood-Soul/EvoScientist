@@ -39,8 +39,8 @@ FINALIZE — rank, filter, hand off
 - `Q-narrow` — a specific mechanism / sub-question / method (angle: tagged)
 
 ```bash
-python scripts/scholar_search.py --query "<Q-broad>"  --limit 15 --sort-by relevance --output /tmp/pool.jsonl --append
-python scripts/scholar_search.py --query "<Q-narrow>" --limit 15 --sort-by relevance --output /tmp/pool.jsonl --append
+python /skills/paper-navigator/scripts/scholar_search.py --query "<Q-broad>"  --limit 15 --sort-by relevance --output ./pool.jsonl --append
+python /skills/paper-navigator/scripts/scholar_search.py --query "<Q-narrow>" --limit 15 --sort-by relevance --output ./pool.jsonl --append
 ```
 
 From Probe titles + tldrs, lift: recurring **named entities** (algorithm / benchmark / dataset / model names), **angle gaps** (Step-2 rubric tags not seen), and vocabulary from **adjacent communities**.
@@ -60,7 +60,7 @@ From Probe titles + tldrs, lift: recurring **named entities** (algorithm / bench
 **Action:**
 1. Write 2-3 queries covering different sub-topics / angles from the rubric. At least one query per sub-topic.
 2. For each query:
-   - `scholar_search --query "<q>" --limit 20 --sort-by relevance --output /tmp/pool.jsonl --append`
+   - `scholar_search --query "<q>" --limit 20 --sort-by relevance --output ./pool.jsonl --append`
    - If `S2_API_KEY` is set → parallel OK; if not → run sequentially (parallel S2 without key exhausts rate limit and falls back to lower-quality arXiv search; check with `echo $S2_API_KEY`).
 3. In parallel with the above, run `arxiv_monitor --keywords "<v1,v2,v3>" --match-mode flexible --days 365`. The scripts use a shared arXiv pacer, so concurrent agents will queue arXiv API requests instead of bursting.
 4. Deduplicate by `paperId` first, then normalised title (`--output --append` auto-dedupes by `paperId`).

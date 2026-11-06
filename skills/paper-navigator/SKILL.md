@@ -41,7 +41,7 @@ so enqueueing here would duplicate the work.
 
 ## Setup
 
-Scripts at `skills/paper-navigator/scripts/`. Run via `python skills/paper-navigator/scripts/<name>.py`.
+Scripts are at `/skills/paper-navigator/scripts/`. Run them by that path from the project directory: `python /skills/paper-navigator/scripts/<name>.py`. Do not `cd` into the skill folder, and write pool files inside the project (`./pool.jsonl`), not under `/tmp`.
 
 arXiv access (`arxiv_monitor`, `scholar_search` fallback) uses the DeepXiv SDK: `pip install deepxiv-sdk`, then `deepxiv token` once to provision a **free** API token (saved to `~/.env`). The skill reads the token from `DEEPXIV_API_TOKEN`/`DEEPXIV_TOKEN` in the environment, or from `./.env` / `~/.env`.
 
@@ -87,9 +87,9 @@ Ambiguous query (project nickname, codename, single capitalized word with zero h
 
 | Input | Command | Output |
 |---|---|---|
-| URL | `python scripts/fetch_paper.py --url <URL>` | Paper Card + reading notes (see `references/reading-strategy.md` for L1/L2/L3) |
-| Title quoted | `python scripts/match_paper_by_title.py --title "<title>"` (add `--fallback-search` for typos) | Paper Card |
-| Bare ID (arXiv / DOI / S2 / CorpusId) | `python scripts/fetch_paper.py --paper-id <ID> --metadata-only` | Paper Card |
+| URL | `python /skills/paper-navigator/scripts/fetch_paper.py --url <URL>` | Paper Card + reading notes (see `references/reading-strategy.md` for L1/L2/L3) |
+| Title quoted | `python /skills/paper-navigator/scripts/match_paper_by_title.py --title "<title>"` (add `--fallback-search` for typos) | Paper Card |
+| Bare ID (arXiv / DOI / S2 / CorpusId) | `python /skills/paper-navigator/scripts/fetch_paper.py --paper-id <ID> --metadata-only` | Paper Card |
 
 **Paper Card:**
 
@@ -145,11 +145,11 @@ Probe first to grasp the user's need comprehensively, then run up to **3 paper r
 - `Q-narrow` — a specific mechanism / sub-question / method (angle: tagged)
 
 ```bash
-python scripts/scholar_search.py --query "<Q-broad>"  --limit 15 --sort-by relevance --output /tmp/pool.jsonl --append
-python scripts/scholar_search.py --query "<Q-narrow>" --limit 15 --sort-by relevance --output /tmp/pool.jsonl --append
+python /skills/paper-navigator/scripts/scholar_search.py --query "<Q-broad>"  --limit 15 --sort-by relevance --output ./pool.jsonl --append
+python /skills/paper-navigator/scripts/scholar_search.py --query "<Q-narrow>" --limit 15 --sort-by relevance --output ./pool.jsonl --append
 ```
 
-`--output --append` auto-dedupes by `paperId` across rounds (built into the script), so a paper found by two queries is written once. Read `/tmp/pool.jsonl` to inspect (Step 4 triage). From Probe titles + tldrs, lift:
+`--output --append` auto-dedupes by `paperId` across rounds (built into the script), so a paper found by two queries is written once. Read `./pool.jsonl` to inspect (Step 4 triage). From Probe titles + tldrs, lift:
 - recurring **named entities** (algorithm / benchmark / dataset / model names),
 - **angle gaps** (Step-2 tags not seen),
 - vocabulary from **adjacent communities**.
@@ -186,9 +186,9 @@ python scripts/scholar_search.py --query "<Q-narrow>" --limit 15 --sort-by relev
 
 **Citation expansion** (ITERATIVE, or LIST after ≥3 All-core/Partial seeds):
 ```bash
-python scripts/citation_traverse.py --paper-id <SEED> --direction co-citation --limit 15 --output /tmp/pool.jsonl --append
-python scripts/citation_traverse.py --paper-id <SEED> --direction forward --limit 20 --min-citations 20 --year-min 2022 --output /tmp/pool.jsonl --append
-python scripts/recommend.py --positive <SEED1>,<SEED2> --limit 15 --output /tmp/pool.jsonl --append
+python /skills/paper-navigator/scripts/citation_traverse.py --paper-id <SEED> --direction co-citation --limit 15 --output ./pool.jsonl --append
+python /skills/paper-navigator/scripts/citation_traverse.py --paper-id <SEED> --direction forward --limit 20 --min-citations 20 --year-min 2022 --output ./pool.jsonl --append
+python /skills/paper-navigator/scripts/recommend.py --positive <SEED1>,<SEED2> --limit 15 --output ./pool.jsonl --append
 ```
 
 ### Step 4: Triage — All-core / Partial / Irrelevant
@@ -223,7 +223,7 @@ The per-criterion quotes collected here are exactly what the Step 6 Rank-1 bar a
 
 **Snippet upgrade** for borderline papers (abstract silent on a [core] criterion): batch-fetch real body text:
 ```bash
-python scripts/snippet_search.py --query "<criterion phrase>" \
+python /skills/paper-navigator/scripts/snippet_search.py --query "<criterion phrase>" \
   --paper-ids "CorpusId:1,CorpusId:2,..." --limit 50
 ```
 
