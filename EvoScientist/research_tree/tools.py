@@ -59,9 +59,6 @@ class ClusterArgs(BaseModel):
     mechanism: str = Field(
         description="What this family changes and why it should help on this task."
     )
-    sources: list[str] = Field(
-        default_factory=list, description="Papers behind it, as 'id title'."
-    )
     fit: str = Field(
         default="",
         description="How well it fits the working conditions (GPU, memory, time) and the rough cost of one try.",
@@ -165,7 +162,7 @@ class FinishArgs(BaseModel):
         default="", description="What this result suggests trying next."
     )
     source: str = Field(
-        default="", description="Paper or experience id the idea came from, if any."
+        default="", description="Where the idea came from, if that is worth recording (an earlier node, an observation, a measurement)."
     )
     abandon_reason: str = Field(
         default="",

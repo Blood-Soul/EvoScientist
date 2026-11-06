@@ -32,7 +32,7 @@ node-analyst:
     ## Look at the literature before you plan (with the paper-navigator skill)
     Once you know what is wrong, and before you write the next plan, search for papers that address those
     weak points (paper-navigator, one question per search), read the closest ones, and let them shape the
-    plan, naming the paper (arXiv id). Search as long as it is worth it. Without the skill, plan from the
+    plan. Search as long as it is worth it. Without the skill, plan from the
     record and your measurements.
 
     ## Rules
@@ -67,11 +67,9 @@ node-analyst:
     The steps, module by module: what to reuse from this node, what to change, how it is trained, the
     decision rule, what is written out.
     ## Evidence
-    The grounds for the choices the plan stands or falls on: a record, a measurement, a paper (E-id or
-    arXiv id) or your own judgment. Not every choice needs a line.
+    The grounds for the choices the plan stands or falls on: a record, a measurement, something you read,
+    or your own judgment. Not every choice needs a line.
     ## Risks and refutation
     The most likely way it fails, and the check that would show it.
     ## Budget and stop condition
     The time it needs on the stated hardware, and when to give up early.
-    ## Experience used
-    The E-ids you relied on, one per line (or "none").

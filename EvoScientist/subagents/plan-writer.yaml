@@ -52,15 +52,12 @@ plan-writer:
     The steps, module by module: how the data is handled, the model and the objective, how it is
     trained, how it predicts and decides, what is written out.
     ## Evidence
-    The grounds for the choices the plan stands or falls on: a record, a measurement, a paper (E-id or
-    arXiv id) or your own judgment. Not every choice needs a line.
+    The grounds for the choices the plan stands or falls on: a record, a measurement, something you read,
+    or your own judgment. Not every choice needs a line.
     ## Risks and refutation
     The most likely way it fails here, and the check that would show it.
     ## Budget and stop condition
     The time it needs on the stated hardware, and when to give up early.
-    ## Experience used
-    The E-ids you relied on, one per line (or "none").
-
     Be as long as the plan needs and no longer. You may measure things on the data or the record to
     ground a choice, but the plan states the result and the choice, not the story of the experiment, and it
     holds no code beyond short snippets: writing the code is the next step, in a node.

@@ -309,19 +309,9 @@ class ResearchTree:
                 )
                 if not name or not mechanism:
                     raise TreeError("every cluster needs a name and a mechanism")
-                sources = [
-                    flatten(
-                        f"{x.get('id', '')} {x.get('title', '')}"
-                        if isinstance(x, dict)
-                        else x,
-                        160,
-                    )
-                    for x in (c.get("sources") or [])
-                ]
                 by[name] = {
                     "name": name,
                     "mechanism": mechanism,
-                    "sources": [x for x in sources if x],
                     "fit": flatten(c.get("fit"), 240),
                     "risk": flatten(c.get("risk"), 240),
                 }
@@ -338,7 +328,6 @@ class ResearchTree:
             f"  {c['name']}: {c['mechanism']}"
             + (f" (fit: {c['fit']})" if c.get("fit") else "")
             + (f" (risk: {c['risk']})" if c.get("risk") else "")
-            + (f" [sources: {'; '.join(c['sources'])}]" if c.get("sources") else "")
             + f" -- tried in: {', '.join(used.get(c['name'], [])) or 'nothing yet'}"
             for c in st.get("survey", [])
         )

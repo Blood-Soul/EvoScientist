@@ -191,7 +191,6 @@ def test_survey_then_a_node_in_a_family_through_the_tools(tools):
                 {
                     "name": "abstain",
                     "mechanism": "calibrate a no-answer threshold",
-                    "sources": ["2101.1 P"],
                 }
             ]
         }

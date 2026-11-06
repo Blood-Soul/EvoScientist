@@ -398,7 +398,6 @@ def test_survey_families_are_recorded_validated_and_tracked(env):
             {
                 "name": "abstain",
                 "mechanism": "calibrate a no-answer threshold",
-                "sources": ["2101.1 A paper"],
             },
             {"name": "long-ctx", "mechanism": "window the long plots", "risk": "slow"},
         ]
