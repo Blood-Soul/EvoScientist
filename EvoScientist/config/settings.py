@@ -511,6 +511,8 @@ class EvoScientistConfig:
     # (written by the `plan-writer` sub-agent), and a refine needs an analysis of its
     # parent (written by `node-analyst`). Off keeps the tree as it was.
     research_tree_require_plans: bool = False
+    # The main agent may run sub-agents in the background (task_start / task_collect) instead of waiting on `task`.
+    research_tree_background_tasks: bool = False
 
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
@@ -1497,6 +1499,7 @@ _ENV_MAPPINGS = {
     "memory_experience_coach_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED",
     "research_tree_enabled": "EVOSCIENTIST_RESEARCH_TREE_ENABLED",
     "research_tree_require_plans": "EVOSCIENTIST_RESEARCH_TREE_REQUIRE_PLANS",
+    "research_tree_background_tasks": "EVOSCIENTIST_RESEARCH_TREE_BACKGROUND_TASKS",
     "memory_experience_coach_recent_messages": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES"
     ),

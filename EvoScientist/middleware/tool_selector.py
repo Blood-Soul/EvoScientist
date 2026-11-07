@@ -56,6 +56,9 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         # this tool. Never hide it when adaptive selection is active.
         "enqueue_paper_experiences",
         "task",
+        # Background sub-agents (config research_tree_background_tasks): the prompt directs plans through them.
+        "task_start",
+        "task_collect",
         "write_todos",
         "skill_manager",
         "ask_user",

@@ -505,6 +505,17 @@ This run asks for a written plan before an explore or refine node. Sub-agents wr
 - **After a node is closed.** Look at the record and decide what is worth doing next. An explore node starts from the task and tries a direction of its own; a refine node starts from a node already built and changes it. Both are opened the same way, on an accepted plan, and both stay open to you. `plan-writer` writes a plan for a direction from the task and the record. `node-analyst` reads a finished node, runs small experiments on what it saved to check its suspicions, and writes the plan for a step that builds on it: delegate with the node id, what to check, and the file to write (`reports/drafts/plan-next-<node>.md`). Before a plan that builds on a node is written, that node has to be understood: what it did well, where it fell short and why (its error breakdown, its logs and what its saved outputs show), and, with the paper-navigator skill, what the literature says about those weak points. Do this yourself or leave it to `node-analyst`, which does it as part of writing the plan. Record any plan with `tree_plan(path=..., parents=[...], cluster=...)` (the parents are empty for a new direction), read it as you read any plan, and decide. You may ask for several plans at once and choose among them, run an accepted plan that has not run yet, or merge nodes.
 """
 
+RESEARCH_TREE_BACKGROUND = """## Work that runs while you decide
+
+`task` waits for the sub-agent. `task_start(subagent_type, description)` starts the same sub-agent and returns a job id at once; `task_collect(wait_minutes)` returns the replies of the jobs that have finished and says which are still running. Nothing limits how long a job may run; what bounds it is the clock in `tree_status`.
+
+- **The rule that keeps the run moving:** whenever an accepted plan exists and no node is running, open a node on it. Do not wait for a plan you do not need yet.
+- **Plans and nodes overlap.** Ask for the first plans with `task_start` (one job per direction). When the first plan you would accept is back, record it, open the node on it, and leave the other jobs running: their plans are for the nodes that follow, and a plan that builds on a node's result is written after that node has finished. A plan that needs more time than the first node takes is not a delay.
+- **Do not poll.** Call `task_collect` with a `wait_minutes` when there is nothing else to do, and between nodes. A job still running when you call again is not lost.
+- **Read what comes back as you read any reply:** the files it names are the work; open them.
+"""
+
+
 # =============================================================================
 # Combined exports
 # =============================================================================
@@ -548,6 +559,7 @@ def get_system_prompt(
     bash_on_windows: bool = False,
     research_tree: bool = False,
     research_tree_reports: bool = False,
+    research_tree_background: bool = False,
 ) -> str:
     """Generate the complete static system prompt.
 
@@ -606,4 +618,6 @@ def get_system_prompt(
         sections.append(RESEARCH_TREE)
         if research_tree_reports:
             sections.append(RESEARCH_TREE_REPORTS)
+        if research_tree_background:
+            sections.append(RESEARCH_TREE_BACKGROUND)
     return "\n".join(sections)

@@ -317,6 +317,7 @@ def _configured_system_prompt(cfg, work_dir: str | Path) -> str:
         bash_on_windows=uses_bash(),
         research_tree=getattr(cfg, "research_tree_enabled", False),
         research_tree_reports=getattr(cfg, "research_tree_require_plans", False),
+        research_tree_background=getattr(cfg, "research_tree_background_tasks", False),
     )
 
 
@@ -1351,6 +1352,12 @@ def _get_default_middleware(
         from .middleware.coordinator_guard import CoordinatorGuardMiddleware
 
         mw.append(CoordinatorGuardMiddleware())
+
+    # The coordinator may hand a sub-agent work and carry on (task_start / task_collect).
+    if getattr(cfg, "research_tree_background_tasks", False) is True and not for_async_subagent:
+        from .middleware.background_tasks import BackgroundTaskMiddleware
+
+        mw.append(BackgroundTaskMiddleware(workspace.root))
 
     if cfg.enable_ask_user and not cfg.auto_mode and not for_async_subagent:
         from .middleware.ask_user import AskUserMiddleware

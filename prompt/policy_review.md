@@ -47,6 +47,7 @@ Return only a JSON object:
 - **Tie it to the plan.** `about` must point at something the plan actually says. Do not give general advice.
 - **A finding from another task is evidence, not an instruction.** Write what the source found, not that it will work here. Source numbers (window sizes, ratios, learning rates) are provenance only; do not turn them into recommendations for this task's values.
 - **The task text is the only authority on what is required or forbidden.** Do not claim a requirement that the task text does not state.
+- **Review the design, not the engineering.** The plan is a design document; the implementer writes the code and settles the engineering. Suggest changes to the method: what is modelled, how the objective and the decision are built, what is compared, what could make it fail. Do not suggest code-level or tooling detail: file layouts, caching, batching, seeds, grids of constants, log formats, or minute-by-minute schedules.
 - **Prefer the few suggestions that would change the outcome.** Order them by how much they would matter, most first, and give at most {max_suggestions}.
 - Do not repeat a point the plan already handles unless you mark it `confirm`.
 - Output nothing except the JSON object.
