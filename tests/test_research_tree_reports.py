@@ -309,6 +309,7 @@ class TestSubagents:
             memory_experience_coach_enabled=True,
             memory_experience_policy_max_selected=4,
             memory_experience_main_reuse_enabled=False,
+            memory_plan_review_enabled=True,   # the YAMLs grant `review_plan`; the arm that uses them turns it on
             research_tree_enabled=True,
             research_tree_require_plans=True,
         )
@@ -316,6 +317,10 @@ class TestSubagents:
             cfg=cfg, workspace=Workspace(tmp_path), work_dir=tmp_path
         )
         assert granted <= set(registry)
+        # with the switch off the tool is not registered, so a YAML that grants it is skipped with a warning
+        cfg.memory_plan_review_enabled = False
+        off, _ = evo._build_paper_tools(cfg=cfg, workspace=Workspace(tmp_path), work_dir=tmp_path)
+        assert "review_plan" not in off
 
     def test_neither_writes_to_the_tree(self) -> None:
         for name in ("plan-writer", "node-analyst"):
