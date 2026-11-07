@@ -12,6 +12,7 @@ from .experience_search import (
 from .paper_experience_active import create_extract_paper_experiences_tool
 from .paper_experience_queue import create_paper_experience_queue_tool
 from .paper_rag import create_read_paper_tool, create_search_paper_text_tool
+from .plan_review import create_review_plan_tool
 from .search import fetch_webpage_content, tavily_search
 from .skill_manager import make_skill_manager_tool
 from .think import think_tool
@@ -22,6 +23,7 @@ __all__ = [
     "create_list_experience_tool",
     "create_paper_experience_queue_tool",
     "create_read_paper_tool",
+    "create_review_plan_tool",
     "create_search_experience_tool",
     "create_search_paper_text_tool",
     "fetch_webpage_content",

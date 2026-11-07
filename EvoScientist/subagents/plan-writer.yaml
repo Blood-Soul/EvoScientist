@@ -1,10 +1,9 @@
 plan-writer:
   description: "Write one executable, falsifiable plan for a single research direction, from the task's data facts, the research tree's record and stored experience. Returns the plan as text; it does not implement anything."
-  # Experience reaches this agent through the coach (memory_experience_coach_subagents),
-  # not through apply_experience: the two routes are mutually exclusive, so the pull
-  # tool is deliberately not granted. The read-only experience and paper tools stay,
-  # so a detail in the guidance can be checked against its source. The extraction
-  # tools let it fill an empty library before writing.
+  # Experience reaches this agent after the plan is written: `review_plan` reads the finished
+  # plan against the library and returns suggestions that cite their records. The read-only
+  # experience and paper tools stay, so a cited record can be checked. The step-by-step coach
+  # (memory_experience_coach_subagents) is left off for this agent.
   tools:
     [
       think_tool,
@@ -14,6 +13,7 @@ plan-writer:
       read_paper,
       extract_paper_experiences,
       enqueue_paper_experiences,
+      review_plan,
       tree_status,
       tree_history,
     ]
@@ -28,10 +28,13 @@ plan-writer:
     2. Look at the literature for the direction before you write. With the paper-navigator skill, search
        for how others handle this problem or this step, read the closest papers, and let what you find shape
        the plan. Search as long as it is worth it, then plan. Without the skill, plan from the record and the data.
-    3. Guidance from stored experience may arrive on its own while you work (only if a coach is
-       mounted on you). It is advisory. Before you build a plan step on a detail in it (a ratio, a
-       window size, a sampling rule, a loss), look the detail up in the record or the paper
-       (`search_experience`, `read_paper`, `search_paper_text`).
+    3. Write the plan file first, from the record, the data and what you read. Then call `review_plan` once
+       with the plan file's path and your task description. It reads the plan next to the task and the stored
+       experience and returns suggestions, each citing the experience records it rests on. They are advice:
+       take a suggestion and revise the plan file, or refuse it. For each one, check the cited record first
+       (`read_memory`, `search_paper_text`, `read_paper`) if the suggestion would change a choice the plan
+       stands on. Say in your final reply which suggestions you took and which you refused, with a reason for
+       each refusal. Do not call `review_plan` again after you revise.
 
     ## Honesty rule
     Never present a detail as coming from a paper or a record unless you have read it there. A choice

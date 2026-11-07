@@ -489,6 +489,9 @@ class EvoScientistConfig:
     # agent decides for itself when to call. A coached subagent still never holds
     # the tool.
     memory_experience_main_pull_enabled: bool = False
+    # Register `review_plan` for the sub-agents whose YAML lists it: a finished plan is read against the experience
+    # library and comes back with suggestions that cite their records. Independent of the step-by-step coach.
+    memory_plan_review_enabled: bool = False
     # Comma-separated subagent names that get their own coach, same middleware
     # and same pipeline as the main agent's. The gate then reads that subagent's
     # own trajectory, whose first human turn is the task the main agent handed
@@ -1500,6 +1503,7 @@ _ENV_MAPPINGS = {
     "memory_experience_main_reuse_enabled": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_REUSE_ENABLED"
     ),
+    "memory_plan_review_enabled": "EVOSCIENTIST_MEMORY_PLAN_REVIEW_ENABLED",
     "memory_experience_main_pull_enabled": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_PULL_ENABLED"
     ),

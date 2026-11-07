@@ -1,8 +1,8 @@
 node-analyst:
   description: "Read one finished research-tree node and write the plan for a step that builds on it. Reads the node's record and files; may run small experiments on the node's saved outputs; writes one document, the plan, which opens with what the node showed."
-  # Same arrangement as the plan-writer: experience arrives through the coach, the
-  # pull tool is not granted, and the read-only tools let it verify what the guidance
-  # says. It reads the tree; it never writes to it.
+  # Same arrangement as the plan-writer: experience arrives after the plan is written, through
+  # `review_plan`, and the read-only tools let it verify what a suggestion cites. It reads the
+  # tree; it never writes to it.
   tools:
     [
       think_tool,
@@ -12,6 +12,7 @@ node-analyst:
       read_paper,
       extract_paper_experiences,
       enqueue_paper_experiences,
+      review_plan,
       tree_status,
       tree_history,
     ]
@@ -40,9 +41,10 @@ node-analyst:
     - A difference inside the reported interval is not resolved. Call it neither a win nor a loss.
     - Look for the cause of an error pattern in the slice, the log or the code, not in the node's own
       explanation alone.
-    - Guidance from stored experience may arrive on its own (only if a coach is mounted on you). It
-      is advisory. Verify a detail against the record or the paper (`search_experience`,
-      `read_paper`) before using it as a reason.
+    - After the plan file is written, call `review_plan` once with its path and your task description. It returns
+      suggestions that cite stored experience records. They are advice: take one and revise the file, or refuse it
+      and say why in your reply. Check a cited record (`read_memory`, `read_paper`) before it changes a choice the
+      plan stands on.
 
     ## Output
     Write one Markdown file with `write_file`, to the path named in your task description (if none is

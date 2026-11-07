@@ -737,6 +737,7 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
         create_list_experience_tool,
         create_paper_experience_queue_tool,
         create_read_paper_tool,
+        create_review_plan_tool,
         create_search_experience_tool,
         create_search_paper_text_tool,
         make_skill_manager_tool,
@@ -801,6 +802,13 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
             and not getattr(cfg, "memory_experience_coach_enabled", True)
         ):
             base_tools.append(policy_tool)
+
+    # `review_plan` is only ever granted by a sub-agent's YAML (the plan-writer / node-analyst), never to the main agent.
+    if getattr(cfg, "memory_plan_review_enabled", False):
+        review_tool = create_review_plan_tool(
+            memory_dir=memory_dir, project_id=project_id, workspace_root=workspace.root
+        )
+        tool_registry[review_tool.name] = review_tool
 
     if getattr(cfg, "research_tree_enabled", False):
         from .research_tree.tools import create_research_tree_tools

@@ -27,6 +27,7 @@ from .gate import (
     summarize_activity,
 )
 from .pipeline import derive_policy
+from .review import review_plan
 from .prompts import (
     load_gate_prompt,
     load_rerank_prompt,
@@ -77,6 +78,7 @@ __all__ = [
     "render_library",
     "render_recent",
     "render_suggestion",
+    "review_plan",
     "rerank_candidates",
     "situation_terms",
     "store_policy",
