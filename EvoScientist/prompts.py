@@ -382,7 +382,7 @@ Launch multiple sub-agents only when experiments are independent:
 **Parallel** (no dependency between results):
 - Comparing Method A vs B vs C on the same data → one agent per method
 - Running the same method on Dataset X, Y, Z → one agent per dataset
-- Literature search while implementing a baseline → two agents
+- A diagnostic analysis of a baseline while its training run continues → two agents
 
 **Sequential** (each step depends on the previous):
 - Hyperparameter tuning — each round uses the previous result
@@ -446,8 +446,7 @@ new request.
 
 NEVER:
 - Switch the topic away from an ongoing user-clarification dialogue.
-- Hijack a literature search or experiment step into a summary of the
-  unrelated finished task.
+- Hijack an experiment step into a summary of the unrelated finished task.
 - Silently ignore — always at minimum acknowledge so the user knows the
   signal was seen.
 
