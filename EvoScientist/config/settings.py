@@ -423,8 +423,7 @@ class EvoScientistConfig:
     # This branch is the research tree with literature search (paper-navigator);
     # the experience system is the same code behind its switches. By default
     # those switches are off: no experience tools, no coach, no plan review, no
-    # paper-to-experience extraction. An arm that compares against the
-    # experience system turns them on in its config, without changing branches.
+    # paper-to-experience extraction.
     # Paper full-text RAG. Experience records compress a paper into judgements;
     # the full text keeps the verifiable evidence behind them. When enabled,
     # text already downloaded for experience extraction is also persisted,
