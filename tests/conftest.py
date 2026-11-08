@@ -89,6 +89,22 @@ def pytest_runtest_protocol(item, nextitem):
         for name, value in saved.items():
             if os.environ.get(name) != value:
                 os.environ[name] = value
+        _stop_background_threads()
+
+
+def _stop_background_threads() -> None:
+    """Stop daemon samplers a test started; restoring the environment cannot.
+
+    A research tree starts a GPU sampler on a daemon thread that keeps calling
+    ``subprocess.run`` for the life of the process. Left behind, it lands in
+    the next test's subprocess fake, so a test that counts calls sees commands
+    it never issued.
+    """
+    try:
+        from EvoScientist.research_tree.monitor import stop_all_gpu_logs
+    except ImportError:  # builds without the research tree
+        return
+    stop_all_gpu_logs()
 
 
 def _is_loopback(host: str) -> bool:

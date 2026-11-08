@@ -420,11 +420,11 @@ class EvoScientistConfig:
     # large workspaces.
     memory_observation_cache_max_files: int = 2048
     # --- What this branch runs by default -----------------------------------
-    # This branch is the research tree with literature search (paper-navigator)
-    # and no experience system. The experience modules are present, but every
-    # switch that would let them act in a run is off by default: no experience
-    # tools, no coach, no plan review, no paper-to-experience extraction. Turn
-    # one on only when the run is meant to compare against the experience arm.
+    # This branch is the research tree with literature search (paper-navigator);
+    # the experience system is the same code behind its switches. By default
+    # those switches are off: no experience tools, no coach, no plan review, no
+    # paper-to-experience extraction. An arm that compares against the
+    # experience system turns them on in its config, without changing branches.
     # Paper full-text RAG. Experience records compress a paper into judgements;
     # the full text keeps the verifiable evidence behind them. When enabled,
     # text already downloaded for experience extraction is also persisted,

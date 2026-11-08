@@ -276,6 +276,26 @@ def test_reports_mode_replaces_the_planner_agent_routes() -> None:
     assert "cheap, valid baseline" not in on and "placeholder deliverable" in on
 
 
+def test_reports_mode_rewrites_the_staged_plan_and_code_mode_blocks() -> None:
+    plain = get_system_prompt(research_tree=True)
+    on = get_system_prompt(research_tree=True, research_tree_reports=True)
+    # the single-agent blocks stay in the tree-without-plans profile
+    assert "Save the plan to `todos.md`" in plain
+    assert "success_criteria.md" in plain
+    assert "Before any code delegation, you MUST complete the Code Generation Mode Selection below." in plain
+    assert "- Update `todos.md` to reflect new iterations." in plain
+    # reports mode: the plan is the tree's, and node code comes with tree_new's brief
+    assert "Save the plan to `todos.md`" not in on
+    assert "Use `write_todos` to track the execution plan" not in on
+    assert "`success_criteria.md` for success signals" not in on
+    assert "Code Generation Mode Selection" not in on
+    assert "ask the user which code generation mode" not in on
+    assert "- Update `todos.md` to reflect new iterations." not in on
+    assert "The tree is the plan." in on
+    assert "does not stop to ask which code-generation mode" in on
+    assert "recorded by the node it closed (`tree_finish`)" in on
+
+
 def test_the_prompt_section_follows_the_flag() -> None:
     off = get_system_prompt(research_tree=True)
     on = get_system_prompt(research_tree=True, research_tree_reports=True)
@@ -607,6 +627,8 @@ def _guard_present(require, *, for_async_subagent=False):
         cfg.auto_mode = True
         cfg.auxiliary_model = ""
         cfg.auxiliary_provider = ""
+        cfg.code_interpreter_timeout = 60.0
+        cfg.code_interpreter_max_result_chars = 10_000
         cfg.research_tree_require_plans = require
         config.return_value = cfg
         chat.return_value = MagicMock(profile={"max_input_tokens": 200_000})

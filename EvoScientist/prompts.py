@@ -544,12 +544,41 @@ _STAGE_REFLECTION_TREE = (
     "In this run a step that builds on a finished node is planned by `node-analyst` (see Plans). "
     "Do not use planner-agent for it.\n\n"
 )
+# The staged-plan block and the code-generation mode question describe the single-agent
+# flow: a plan saved to todos.md, and a user asked to pick a code-agent mode. In a tree run
+# the plan is a file written by plan-writer and recorded with tree_plan, and node code is
+# delegated with tree_new's brief, so both blocks are replaced rather than left to conflict.
+_STEP2 = re.compile(
+    r"## Step 2: Plan \(Recommended Structure\).*?(?=## Step 3: Execute & Debug)", re.S
+)
+_TREE_STEP2 = """## Step 2: Plan (tree flow)
+- The tree is the plan. A direction is written up by `plan-writer` as a file under `reports/drafts/`, recorded with `tree_plan`, and opened as a node with `tree_new(plan_id=...)` after you accept it.
+- Do not keep a second staged plan: `todos.md`, `plan.md` and `success_criteria.md` are not part of this run, and `write_todos` does not replace `tree_status`.
+- Put the data facts and the working conditions in the plan-writer's task description. If a direction matches an installed skill, name the skill there and ask the plan-writer to read its `SKILL.md`.
+
+"""
+_CODE_MODE = re.compile(
+    r"Before any code delegation, you MUST complete the Code Generation Mode Selection below\.\n\n"
+    r"### Code Generation Mode Selection.*?(?=### Task Delegation)",
+    re.S,
+)
+_TREE_CODE_MODE = """Node implementation is delegated to `code-agent` with the brief from `tree_new`, in the node directory. This run does not stop to ask which code-generation mode to use: delegate to `code-agent` directly. If the task or the working conditions call for iterative coding, say `experiment-iterative-coder` when you hand the brief over; otherwise the default is used.
+
+"""
+_UPDATE_TODOS = "- Update `todos.md` to reflect new iterations.\n"
+_TREE_UPDATE_TODOS = (
+    "- Each iteration is recorded by the node it closed (`tree_finish`) and by the insights "
+    "you keep current (`tree_insight`); do not copy them into `todos.md`.\n"
+)
 
 
 def _for_tree_reports(text: str) -> str:
-    """The old planner-agent routes, replaced by the plan-writer / node-analyst ones."""
+    """Replace the single-agent planning text with the tree's plan / node flow."""
     for old, new in _PLANNER_ROUTES:
         text = text.replace(old, new)
+    text = _STEP2.sub(_TREE_STEP2, text)
+    text = _CODE_MODE.sub(_TREE_CODE_MODE, text)
+    text = text.replace(_UPDATE_TODOS, _TREE_UPDATE_TODOS)
     return _STAGE_REFLECTION.sub(_STAGE_REFLECTION_TREE, text)
 
 

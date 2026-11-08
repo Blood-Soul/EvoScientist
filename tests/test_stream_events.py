@@ -2302,3 +2302,19 @@ class TestModelRetryRollback:
         assert self._retries(out)[0]["discarded"]["text_chars"] == len("HalfST")
         assert self._done(out)["response"] == "Answer."
         assert self._screen(out) == "Answer."
+
+
+class TestBackgroundJobCompletion:
+    """A job's completion signal names the `task_start` call, not a namespace."""
+
+    def test_a_job_is_resolved_by_its_triggering_call_and_closed_once(self) -> None:
+        from EvoScientist.stream.events import _SubagentRegistry
+
+        registry = _SubagentRegistry()
+        registry.register(("tools", "bg"), "plan-writer", "a plan", "call-1")
+        info = registry.resolve_tool_call("call-1")
+        assert info is not None and info.name == "plan-writer"
+        assert registry.mark_ended(info.instance_id) is True
+        assert registry.mark_ended(info.instance_id) is False  # the fallback must not repeat it
+        assert registry.resolve_tool_call("call-2") is None
+        assert registry.resolve_tool_call("") is None

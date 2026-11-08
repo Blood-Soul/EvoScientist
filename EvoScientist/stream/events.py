@@ -416,6 +416,7 @@ class _SubagentInfo:
     path: tuple[str, ...]
     name: str
     description: str = ""
+    trigger_call_id: str = ""
 
     @property
     def instance_id(self) -> str:
@@ -459,14 +460,37 @@ class _SubagentRegistry:
 
     def __init__(self) -> None:
         self._by_path: dict[tuple[str, ...], _SubagentInfo] = {}
+        self._ended: set[str] = set()
         self._changed = asyncio.Event()
         self._closed = False
 
-    def register(self, path: tuple[str, ...], name: str, description: str = "") -> None:
+    def register(
+        self,
+        path: tuple[str, ...],
+        name: str,
+        description: str = "",
+        tool_call_id: str = "",
+    ) -> None:
         if not path:
             return
-        self._by_path[path] = _SubagentInfo(path, name, description)
+        self._by_path[path] = _SubagentInfo(path, name, description, tool_call_id)
         self._changed.set()
+
+    def resolve_tool_call(self, tool_call_id: str) -> _SubagentInfo | None:
+        """The sub-agent a ``task`` call started, for a completion signal that names only the call."""
+        if not tool_call_id:
+            return None
+        for info in self._by_path.values():
+            if info.trigger_call_id == tool_call_id:
+                return info
+        return None
+
+    def mark_ended(self, instance_id: str) -> bool:
+        """Record a sub-agent's end once; False means it was already reported."""
+        if instance_id in self._ended:
+            return False
+        self._ended.add(instance_id)
+        return True
 
     def close(self) -> None:
         self._closed = True
@@ -701,6 +725,11 @@ class _V3EventProcessor:
             # wait for.
             if payload is not None and payload.get("type") == "goal_state":
                 return self._process_goal_event(payload)
+            # A background job's end names the tool call that started it, not
+            # its namespace; resolving by namespace would wait for the run to
+            # end, which is exactly what this signal exists to avoid.
+            if payload is not None and payload.get("type") == "background_job_finished":
+                return self._process_background_job_finished(payload)
             if drafting:
                 return []
             subagent = (
@@ -708,6 +737,24 @@ class _V3EventProcessor:
             )
             return self._process_custom_event(_event_data(event), subagent)
         return []
+
+    def _process_background_job_finished(
+        self, payload: RawMap
+    ) -> list[dict[str, Any]]:
+        """Close the sub-agent a finished background job started, at its real completion time."""
+        tool_call_id = payload.get("tool_call_id")
+        if not isinstance(tool_call_id, str):
+            return []
+        info = self.subagents.resolve_tool_call(tool_call_id)
+        if info is None or not self.subagents.mark_ended(info.instance_id):
+            return []
+        return [
+            self.emitter.subagent_end(
+                info.name,
+                instance_id=info.instance_id,
+                paused=payload.get("status") == "interrupted",
+            ).data
+        ]
 
     def _process_rubric_event(self, kind: str, payload: Any) -> list[dict[str, Any]]:
         if kind == "rubric_evaluation_deferred":
@@ -1579,12 +1626,19 @@ async def stream_agent_events(
                     await result
             finally:
                 # A nested run that stopped at a pause goes on with the turn.
-                paused = getattr(subagent, "status", None) == "interrupted"
-                await queue.put(
-                    emitter.subagent_end(
-                        name, instance_id=instance_id, paused=paused
-                    ).data
-                )
+                status = getattr(subagent, "status", None)
+                paused = status == "interrupted"
+                # A background job reports its own end from the job's stream
+                # writer; this is the fallback for a foreground task and for a
+                # job whose signal was lost. `output()` can return while the
+                # handle is still "started" (a background job is not a task of
+                # the parent graph), so only a real terminal status closes it.
+                if status != "started" and subagents.mark_ended(instance_id):
+                    await queue.put(
+                        emitter.subagent_end(
+                            name, instance_id=instance_id, paused=paused
+                        ).data
+                    )
 
         subagent_iter: AsyncIterator[Any] = aiter(stream.subagents)
 
@@ -1616,7 +1670,7 @@ async def stream_agent_events(
                             tool_call_id=trigger_call_id,
                         ).data
                     )
-                    subagents.register(path, name, description)
+                    subagents.register(path, name, description, trigger_call_id)
                     completion_tasks.append(
                         asyncio.create_task(
                             _await_subagent_done(subagent, name, instance_id)

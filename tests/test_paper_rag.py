@@ -161,7 +161,7 @@ def _fresh_fulltext_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the module-level settings cache from leaking between tests.
 
     The storage switch is turned on here rather than left to the branch default:
-    ``tree-papers`` ships it off (the papers arm has no experience system), so a
+    the tree branch ships it off (the default arm has no experience system), so a
     test that exercises persistence would otherwise test the disabled path.
     """
     from EvoScientist.memory.papers import persist as persist_module

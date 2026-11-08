@@ -1551,7 +1551,7 @@ class TestExperienceCoachConfig:
 
     def test_defaults(self):
         config = EvoScientistConfig()
-        # Off by default on the tree-papers branch; the switch still turns it on.
+        # Off by default on the tree branch; the switch still turns it on.
         assert config.memory_experience_coach_enabled is False
         assert config.memory_experience_coach_recent_messages == 6
 

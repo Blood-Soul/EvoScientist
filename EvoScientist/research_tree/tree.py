@@ -863,6 +863,22 @@ class ResearchTree:
                 abandon_reason=abandon_reason,
             )
 
+    def _publish(self, st: dict, nid: str) -> list[str]:
+        """Put a champion's scored file and deliverable at the project root.
+
+        The scored file matters as much as the deliverable: the harness scores
+        the root copy, so leaving the previous node's predictions there while
+        the champion's deliverable is copied would score one node and claim
+        another. Both are kept together.
+        """
+        copied: list[str] = []
+        for name in dict.fromkeys((st["prediction_file"], st["deliverable"])):
+            src = self.dir / "artifacts" / nid / name
+            if src.is_file():
+                shutil.copy2(src, self.root / name)
+                copied.append(name)
+        return copied
+
     def _evaluate(self, st: dict, art: Path) -> dict:
         pred, deliv = art / st["prediction_file"], art / st["deliverable"]
         if not pred.is_file():
@@ -974,7 +990,7 @@ class ResearchTree:
         became_best = False
         if scored and (champ is None or (champ in deltas and deltas[champ].better)):
             st["champion"] = nid
-            shutil.copy2(art / st["deliverable"], self.root / st["deliverable"])
+            self._publish(st, nid)
             became_best = True
 
         slices = (
@@ -1367,9 +1383,7 @@ class ResearchTree:
                 self.repo.set_outcome(e.sha, final)
             events = self._events()
             if champ:
-                src = self.dir / "artifacts" / champ / st["deliverable"]
-                if src.is_file():
-                    shutil.copy2(src, self.root / st["deliverable"])
+                self._publish(st, champ)
                 self.repo.tag_final(
                     events[champ].sha,
                     f"final solution: {champ} {events[champ].subject} "

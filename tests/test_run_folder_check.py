@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -426,6 +427,7 @@ async def _runtime_run(assistant_id: str, thread_id: str, configurable=None) -> 
             assistant_id,
             {"config": {"configurable": configurable or {}}},
             thread_id=thread_id,
+            run_id=uuid4(),
             metadata={},
             prevent_insert_if_inflight=False,
             if_not_exists="create",

@@ -109,7 +109,7 @@ def test_a_node_end_to_end_through_the_tools(tools):
 
 
 def test_config_flag_defaults_off_and_maps_to_env():
-    # The tree-papers branch runs the tree by default; the switch still turns it off.
+    # The tree branch runs the tree by default; the switch still turns it off.
     assert EvoScientistConfig().research_tree_enabled is True
     assert (
         _ENV_MAPPINGS["research_tree_enabled"] == "EVOSCIENTIST_RESEARCH_TREE_ENABLED"
@@ -130,6 +130,18 @@ def test_prompt_section_only_when_enabled():
         "tree_finalize",
     ):
         assert name in RESEARCH_TREE
+
+
+def test_abandoning_a_node_needs_no_change_or_observation() -> None:
+    from pydantic import ValidationError
+
+    from EvoScientist.research_tree.tools import FinishArgs
+
+    args = FinishArgs.model_validate({"node": "n2", "abandon_reason": "the loop never trained"})
+    assert args.change and args.observation  # filled, so the record is not blank
+
+    with pytest.raises(ValidationError):
+        FinishArgs.model_validate({"node": "n1"})  # a scored node still says what changed
 
 
 def test_tools_registered_only_when_enabled(tmp_path, monkeypatch):

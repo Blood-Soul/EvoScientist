@@ -109,6 +109,7 @@ def test_full_run_records_facts_from_the_judge(env):
     assert "champion" in msg
     assert "score 0.5000" in msg
     assert (root / "submission.csv").read_text() == "v1"
+    assert (root / "holdout_predictions.csv").read_text() == accuracy_rows(200)
 
     # the score in the record is the judge's, whatever the agent wrote
     log = git(root, "log", "-1", "--format=%B", "node/n1")
@@ -137,6 +138,7 @@ def test_full_run_records_facts_from_the_judge(env):
     msg = tree.finish(n2, change="new head", observation="improved", next_step="")
     assert "new champion" in msg
     assert (root / "submission.csv").read_text() == "v2"
+    assert (root / "holdout_predictions.csv").read_text() == accuracy_rows(320)
     assert git(root, "notes", "--ref=outcome", "show", "node/n1").startswith(
         "superseded by n2"
     )
@@ -178,6 +180,32 @@ def test_full_run_records_facts_from_the_judge(env):
     )
     assert "### n2" in text
     assert (root / "TRAJECTORY.md").is_file()
+    assert (root / "submission.csv").read_text() == "v2"
+    assert (root / "holdout_predictions.csv").read_text() == accuracy_rows(320)
+
+
+def test_finalize_puts_the_champion_files_at_the_root_together(env):
+    """The harness scores the root prediction file; it must belong to the champion, not to a node the agent copied."""
+    tree, root, clock, _judge = env
+    tree.init(budget_minutes=360)
+    n1 = do_node(
+        tree, root, clock, minutes_used=30, n_right=200,
+        kind="explore", title="baseline", hypothesis="a floor", minutes=60, deliverable="v1",
+    )
+    tree.finish(n1, change="baseline", observation="ok", next_step="")
+    n2 = do_node(
+        tree, root, clock, minutes_used=40, n_right=320,
+        kind="refine", title="better", hypothesis="lifts", parents=[n1], based_on=[n1],
+        minutes=60, deliverable="v2",
+    )
+    tree.finish(n2, change="better", observation="ok", next_step="")
+    # The agent copied a later, non-champion node's predictions over the root file.
+    (root / "holdout_predictions.csv").write_text(accuracy_rows(400))
+    (root / "submission.csv").write_text("stale")
+
+    tree.finalize()
+
+    assert (root / "holdout_predictions.csv").read_text() == accuracy_rows(320)
     assert (root / "submission.csv").read_text() == "v2"
 
 

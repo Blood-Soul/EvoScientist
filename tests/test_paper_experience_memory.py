@@ -47,7 +47,7 @@ from EvoScientist.tools.paper_experience_queue import (
 def _full_text_storage_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """Turn the full-text switch on for this module, whatever the branch default.
 
-    ``tree-papers`` ships the experience switches off; these tests exercise the
+    The tree branch ships the experience switches off; these tests exercise the
     extraction tool's full-text backfill and would otherwise never reach it.
     """
     from EvoScientist.memory.papers import persist as persist_module
@@ -974,6 +974,85 @@ async def test_extraction_uses_auxiliary_model_when_model_is_omitted(
 
     assert calls == 2
     assert result["l1"]["paper_id"] == "paper-1"
+
+
+@pytest.mark.asyncio
+async def test_paper_text_with_lone_surrogates_reaches_the_model_as_valid_utf8() -> None:
+    seen: list[str] = []
+
+    class Model:
+        async def ainvoke(self, messages):
+            text = messages[1].content
+            text.encode("utf-8")  # raises UnicodeEncodeError before the fix
+            seen.append(text)
+            return SimpleNamespace(content=json.dumps(_payload("paper-1", "ok")))
+
+    result = await run_experience_extraction(
+        paper_id="paper-1",
+        paper_text="before \ud835 after",
+        prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+        model=Model(),
+    )
+
+    assert len(seen) == 2 and "before" in seen[0] and "after" in seen[0]
+    assert result["l1"]["experiences"][0]["narrative"] == "ok"
+
+
+def test_a_parsed_reply_never_keeps_lone_surrogates() -> None:
+    parsed = parse_experience_json(
+        '{"paper_id": "paper-1", "experiences": [{"narrative": "x \\ud835 y"}]}',
+        level="l1",
+    )
+    narrative = parsed["experiences"][0]["narrative"]
+    narrative.encode("utf-8")  # the record is stored and written as UTF-8
+    assert "x" in narrative and "y" in narrative
+
+
+@pytest.mark.asyncio
+async def test_a_reply_cut_off_before_the_json_closed_is_retried_once() -> None:
+    calls: list[str] = []
+
+    class Model:
+        async def ainvoke(self, messages):
+            level = "l1" if messages[0].content == "l1 prompt" else "l2"
+            first = level not in calls
+            calls.append(level)
+            if level == "l2" and first:
+                return SimpleNamespace(
+                    content='{"paper_id": "paper-1", "experiences": [{"narrative": "cut'
+                )
+            return SimpleNamespace(content=json.dumps(_payload("paper-1", f"{level} result")))
+
+    result = await run_experience_extraction(
+        paper_id="paper-1",
+        paper_text="paper text",
+        prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+        model=Model(),
+    )
+
+    assert calls.count("l1") == 1 and calls.count("l2") == 2
+    assert result["l2"]["experiences"][0]["narrative"] == "l2 result"
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_is_not_cut_off_is_not_retried() -> None:
+    calls = 0
+
+    class Model:
+        async def ainvoke(self, messages):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(content='{"paper_id": "paper-1", "experiences": "nope"}')
+
+    with pytest.raises(ExperienceOutputError, match="experiences"):
+        await run_experience_extraction(
+            paper_id="paper-1",
+            paper_text="paper text",
+            prompts={"l1": "l1 prompt", "l2": "l2 prompt"},
+            model=Model(),
+        )
+
+    assert calls == 2  # one per level, no retry for a well-formed but invalid reply
 
 
 @pytest.mark.asyncio

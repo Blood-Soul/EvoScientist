@@ -167,6 +167,21 @@ def stop_gpu_log(path: Path) -> None:
         stop.set()
 
 
+def stop_all_gpu_logs() -> None:
+    """Stop every GPU sampling thread.
+
+    The threads are daemons and normally live as long as the process; this is
+    for teardown paths (tests, a process that reuses the module) where a
+    sampler left running would keep calling ``subprocess.run`` after its tree
+    is gone.
+    """
+    with _gpu_lock:
+        stops = list(_gpu_threads.values())
+        _gpu_threads.clear()
+    for stop in stops:
+        stop.set()
+
+
 def log_event(path: Path, started: float, now: float, event: str, **data) -> None:
     """Append a tree action to the event log. Never raises: the log must not break a run."""
     try:

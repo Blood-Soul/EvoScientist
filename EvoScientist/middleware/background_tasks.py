@@ -161,19 +161,44 @@ class BackgroundTaskMiddleware(AgentMiddleware):
     def _unreported(self) -> list[dict[str, Any]]:
         return [j for j in self.jobs.values() if j["status"] != "running" and not j["reported"]]
 
-    def _new_job(self, sub: str, desc: str) -> dict[str, Any]:
+    def _new_job(self, sub: str, desc: str, tool_call_id: str = "") -> dict[str, Any]:
         with self._lock:
             self._n += 1
             rec = {"id": f"bg-{self._n}", "n": self._n, "subagent": sub, "description": desc[:300],
+                   "tool_call_id": tool_call_id,
                    "started": self.now(), "status": "running", "reported": False, "text": ""}
             self.jobs[rec["id"]] = rec
         self._write(rec)
         return rec
 
-    def _finish(self, rec: dict[str, Any], text: str, status: str) -> None:
+    def _finish(self, rec: dict[str, Any], text: str, status: str, writer=None) -> None:
         with self._lock:
             rec.update(status=status, text=text, finished=self.now(), reported=False)
         self._write(rec)
+        self._announce(rec, writer)
+
+    @staticmethod
+    def _announce(rec: dict[str, Any], writer) -> None:
+        """Tell the run's event stream that this job is over, while the run is still live.
+
+        A background job is not a task of the parent graph, so LangGraph cannot
+        close its sub-agent handle from a task result: left to the handle, the
+        end arrives only at run teardown and the UI shows every finished
+        sub-agent as running for the rest of the run. The stream writer is the
+        one channel still open inside the job. Never raises: a missing or
+        closed stream is not a reason to lose the job's reply.
+        """
+        if writer is None:
+            return
+        try:
+            writer({
+                "type": "background_job_finished",
+                "job": rec["id"],
+                "tool_call_id": rec.get("tool_call_id") or "",
+                "status": rec["status"],
+            })
+        except Exception:
+            pass
 
     def _take_finished(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -219,19 +244,20 @@ class BackgroundTaskMiddleware(AgentMiddleware):
     async def _start_async(self, subagent_type: str, description: str, runtime: ToolRuntime) -> str:
         if (err := self._check_start(subagent_type, description)) is not None:
             return err
-        rec = self._new_job(subagent_type, description)
+        rec = self._new_job(subagent_type, description, runtime.tool_call_id)
         run = self._task_tool.coroutine
         rt = self._job_runtime(runtime, rec["id"])
+        writer = getattr(runtime, "stream_writer", None)
 
         async def job() -> None:
             try:
                 self._finish(rec, _text_of(await run(description=description, subagent_type=subagent_type, runtime=rt)),
-                             "done")
+                             "done", writer)
             except asyncio.CancelledError:
-                self._finish(rec, "The job was cancelled before it returned.", "lost")
+                self._finish(rec, "The job was cancelled before it returned.", "lost", writer)
                 raise
             except Exception as e:  # a failed sub-agent is a result the coordinator has to see
-                self._finish(rec, f"The sub-agent failed: {type(e).__name__}: {e}", "failed")
+                self._finish(rec, f"The sub-agent failed: {type(e).__name__}: {e}", "failed", writer)
 
         self._handles[rec["id"]] = asyncio.get_running_loop().create_task(job())
         return self._started_text(rec)
@@ -239,15 +265,16 @@ class BackgroundTaskMiddleware(AgentMiddleware):
     def _start_sync(self, subagent_type: str, description: str, runtime: ToolRuntime) -> str:
         if (err := self._check_start(subagent_type, description)) is not None:
             return err
-        rec = self._new_job(subagent_type, description)
+        rec = self._new_job(subagent_type, description, runtime.tool_call_id)
         run = self._task_tool.func
         rt = self._job_runtime(runtime, rec["id"])
+        writer = getattr(runtime, "stream_writer", None)
 
         def job() -> None:
             try:
-                self._finish(rec, _text_of(run(description=description, subagent_type=subagent_type, runtime=rt)), "done")
+                self._finish(rec, _text_of(run(description=description, subagent_type=subagent_type, runtime=rt)), "done", writer)
             except Exception as e:
-                self._finish(rec, f"The sub-agent failed: {type(e).__name__}: {e}", "failed")
+                self._finish(rec, f"The sub-agent failed: {type(e).__name__}: {e}", "failed", writer)
 
         t = threading.Thread(target=contextvars.copy_context().run, args=(job,), daemon=True)
         self._handles[rec["id"]] = t

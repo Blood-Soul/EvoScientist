@@ -98,7 +98,10 @@ async def test_two_jobs_overlap_and_their_replies_come_back_through_collect(tmp_
     model.sub_seconds = {"A": 1.0, "B": 2.0}
     agent = _agent(tmp_path, model)
     t0 = time.monotonic()
-    events = [e async for e in stream_agent_events(agent, "go", "t1")]
+    stamped = []
+    async for e in stream_agent_events(agent, "go", "t1"):
+        stamped.append((time.monotonic(), e))
+    events = [e for _, e in stamped]
     elapsed = time.monotonic() - t0
 
     starts = _tool_results(events, "task_start")
@@ -114,6 +117,15 @@ async def test_two_jobs_overlap_and_their_replies_come_back_through_collect(tmp_
     spans = {d: (a, b) for d, a, b in model.sub_spans}
     assert spans["B"][0] < spans["A"][1]                                      # B started before A finished
     assert elapsed < 3.0                                                      # not 1.0 + 2.0 in sequence
+
+    # Each job's sub-agent is closed when the job finishes, not when the run
+    # ends: A's end precedes the collect that returns A, and B's precedes B's.
+    end_times = [t for t, e in stamped if e.get("type") == "subagent_end"]
+    collect_done = [t for t, e in stamped
+                    if e.get("type") == "tool_result" and e.get("name") == "task_collect"]
+    assert len(end_times) == 2 and len(collect_done) == 2
+    assert end_times[0] < end_times[1] < collect_done[1]
+    assert end_times[0] < collect_done[0]
     assert next(e for e in events if e["type"] == "done")["response"] == "All done."
     state = await agent.aget_state({"configurable": {"thread_id": "t1"}})
     assert not state.next and not state.tasks                                 # nothing left parked

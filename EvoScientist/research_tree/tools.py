@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .gitlog import GitError
 from .judge import Judge
@@ -168,6 +168,16 @@ class FinishArgs(BaseModel):
         default="",
         description="Set to drop the node without scoring it (dead end, no longer needed).",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _abandon_needs_no_narrative(cls, values):
+        """Dropping a node without scoring it has nothing to report as a change or an observation."""
+        if isinstance(values, dict) and str(values.get("abandon_reason") or "").strip():
+            values = dict(values)
+            values["change"] = values.get("change") or "(none: the node was abandoned)"
+            values["observation"] = values.get("observation") or "(none: see abandon_reason)"
+        return values
 
 
 class InsightArgs(BaseModel):
@@ -335,7 +345,7 @@ def create_research_tree_tools(
             "tree_finish",
             "Close a node. The held-out predictions are scored by the frozen judge; the score, deltas against the "
             "parent and champion, and the outcome are written by this tool. You supply the narrative. An improved "
-            "champion's deliverable is copied to the project root.",
+            "champion's scored predictions and deliverable are copied to the project root.",
             FinishArgs,
         ),
         tool(
@@ -357,8 +367,8 @@ def create_research_tree_tools(
         tool(
             lambda **a: tree.finalize(),
             "tree_finalize",
-            "End the run: settle every node's outcome, tag the final solution, make sure the champion's deliverable "
-            "is at the project root, and write TRAJECTORY.md. Do not call it while a node is running.",
+            "End the run: settle every node's outcome, tag the final solution, make sure the champion's scored "
+            "predictions and deliverable are at the project root, and write TRAJECTORY.md. Do not call it while a node is running.",
             NoArgs,
         ),
     ]
