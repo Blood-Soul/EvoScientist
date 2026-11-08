@@ -695,23 +695,20 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
 
     memory_dir = str(_paths_mod.MEMORIES_DIR)
     project_id = resolve_project_id(workspace.root)
-    paper_queue_tool = create_paper_experience_queue_tool(
-        memory_dir=memory_dir, project_id=project_id
-    )
-    paper_extract_tool = create_extract_paper_experiences_tool(
-        memory_dir=memory_dir, project_id=project_id
-    )
-    tool_registry = {
-        "think_tool": think_tool,
-        paper_queue_tool.name: paper_queue_tool,
-        paper_extract_tool.name: paper_extract_tool,
-    }
-    base_tools = [
-        think_tool,
-        make_skill_manager_tool(workspace, work_dir=work_dir),
-        paper_queue_tool,
-        paper_extract_tool,
-    ]
+    tool_registry = {"think_tool": think_tool}
+    base_tools = [think_tool, make_skill_manager_tool(workspace, work_dir=work_dir)]
+    # Papers -> experience records. Off for an arm that must not build experience.
+    if getattr(cfg, "memory_paper_extraction_enabled", True):
+        for tool in (
+            create_paper_experience_queue_tool(
+                memory_dir=memory_dir, project_id=project_id
+            ),
+            create_extract_paper_experiences_tool(
+                memory_dir=memory_dir, project_id=project_id
+            ),
+        ):
+            tool_registry[tool.name] = tool
+            base_tools.append(tool)
 
     # Retrieval over `E-*`, registered alongside the extraction tools: a store
     # that can be written but not read is worse than one that is absent,
