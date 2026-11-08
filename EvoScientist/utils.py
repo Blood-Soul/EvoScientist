@@ -17,6 +17,63 @@ from rich.text import Text
 logger = logging.getLogger(__name__)
 console = Console()
 
+# Tools whose registration depends on a run switch: the same YAML serves arms
+# that turn the experience / paper pipeline on and off. A YAML that lists one
+# is not making a typo when the switch is off, so the skip is expected and is
+# logged at DEBUG; anything else not in the registry is still a warning.
+OPTIONAL_SUBAGENT_TOOLS = frozenset(
+    {
+        "apply_experience",
+        "search_experience",
+        "list_experience",
+        "search_paper_text",
+        "read_paper",
+        "extract_paper_experiences",
+        "enqueue_paper_experiences",
+        "review_plan",
+    }
+)
+
+
+def _render_prompt_sections(
+    subagent: dict[str, Any], tools: list[Any]
+) -> dict[str, Any]:
+    """Fill the spec's ``{{section}}`` placeholders from ``prompt_sections``.
+
+    A section is kept when every tool its ``requires`` entry names is in the
+    resolved tool list (default: the section's own key); otherwise the
+    placeholder becomes an empty string. This is how one YAML serves both
+    arms: the prompt a run actually gets is assembled from the tools that run
+    registered, rather than carrying conditional wording the model has to
+    interpret.
+
+    ``prompt_sections`` may map a section to a plain string (then the section
+    key is the required tool) or to ``{requires: [...], text: "..."}``.
+    """
+    sections = subagent.pop("_prompt_sections", None) or {}
+    available = {
+        tool if isinstance(tool, str) else getattr(tool, "name", "")
+        for tool in tools
+    }
+    prompt = str(subagent.get("system_prompt") or "")
+    for name, section in sections.items():
+        if isinstance(section, str):
+            text, requires = section, [name]
+        else:
+            text = str(section.get("text") or "")
+            requires = [str(r) for r in (section.get("requires") or [name])]
+        keep = all(required in available for required in requires)
+        prompt = prompt.replace("{{" + name + "}}", text if keep else "")
+
+    if "{{" in prompt:
+        raise ValueError(
+            f"Subagent {subagent.get('name')!r}: system_prompt still has an "
+            "unrendered section placeholder; every {{section}} needs an entry "
+            "in prompt_sections"
+        )
+    subagent["system_prompt"] = prompt
+    return subagent
+
 
 def resolve_subagent_tools(
     subagent: dict[str, Any], tool_registry: dict[str, Any]
@@ -24,12 +81,18 @@ def resolve_subagent_tools(
     """Resolve deferred YAML tool names while preserving injected tool objects."""
     tool_names = subagent.pop("_tool_names", None)
     if tool_names is None:
-        return subagent
+        return _render_prompt_sections(subagent, list(subagent.get("tools", [])))
 
     resolved = list(subagent.get("tools", []))
     for tool_name in tool_names:
         if tool_name in tool_registry:
             resolved.append(tool_registry[tool_name])
+        elif tool_name in OPTIONAL_SUBAGENT_TOOLS:
+            logger.debug(
+                "Subagent %r: optional tool %r is off in this run, skipping",
+                subagent.get("name"),
+                tool_name,
+            )
         else:
             logger.warning(
                 "Subagent %r: tool %r not in registry, skipping",
@@ -37,7 +100,7 @@ def resolve_subagent_tools(
                 tool_name,
             )
     subagent["tools"] = resolved
-    return subagent
+    return _render_prompt_sections(subagent, resolved)
 
 
 def format_message_content(message):
@@ -236,6 +299,32 @@ def load_subagents(
 
         if "skills" in spec:
             subagent["skills"] = spec["skills"]
+
+        # Conditional prompt blocks: rendered by ``resolve_subagent_tools``
+        # against the tools this run actually registered. Kept internal (an
+        # underscore key) until then, like ``_tool_names``.
+        if "prompt_sections" in spec:
+            sections = spec["prompt_sections"]
+            if not isinstance(sections, dict):
+                raise ValueError(
+                    f"Subagent {name!r}: 'prompt_sections' must be a mapping of "
+                    f"section name to text, got {type(sections).__name__}"
+                )
+            for section_name, section in sections.items():
+                if not isinstance(section, (str, dict)):
+                    raise ValueError(
+                        f"Subagent {name!r}: prompt section {section_name!r} must be "
+                        f"text or a {{requires, text}} mapping, got "
+                        f"{type(section).__name__}"
+                    )
+                if isinstance(section, dict) and not isinstance(
+                    section.get("text", ""), str
+                ):
+                    raise ValueError(
+                        f"Subagent {name!r}: prompt section {section_name!r} "
+                        "'text' must be a string"
+                    )
+            subagent["_prompt_sections"] = sections
 
         # Defer YAML-name resolution until the caller decides whether this
         # spec will run in-process. Async specs are replaced by remote graph

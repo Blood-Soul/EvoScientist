@@ -118,7 +118,17 @@ def test_config_flag_defaults_off_and_maps_to_env():
 
 def test_prompt_section_only_when_enabled():
     assert RESEARCH_TREE.strip() not in get_system_prompt()
-    assert RESEARCH_TREE.strip() in get_system_prompt(research_tree=True)
+    # the tree bullets that name tools are included when those tools are present
+    assert RESEARCH_TREE.strip() in get_system_prompt(
+        research_tree=True,
+        available_tools=[
+            "search_experience",
+            "apply_experience",
+            "search_paper_text",
+            "read_paper",
+        ],
+    )
+    assert "Stored experience" not in get_system_prompt(research_tree=True)
     for name in (
         "tree_init",
         "tree_survey",

@@ -165,6 +165,50 @@ def test_factory_never_arms_hitl_interrupt_on(
 
 
 @patch("EvoScientist.EvoScientist._ensure_chat_model")
+@patch("EvoScientist.EvoScientist._ensure_config")
+def test_inject_subagent_gates_experience_on_the_yaml_tool_names(
+    mock_config, mock_model, workspace
+):
+    """YAML tools are still names here (`_tool_names`), not objects.
+
+    Reading `tools` would see the empty placeholder and suppress the experience
+    instructions for every subagent that grants the tools by name.
+    """
+    mock_model.return_value = MagicMock(profile={"max_input_tokens": 200_000})
+    cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
+    cfg.memory_profile_enabled = False
+    cfg.memory_observations_enabled = True
+    cfg.memory_observation_writer = MemoryObservationWriter.ALL
+    cfg.memory_workers_enabled = False
+    cfg.memory_paper_autoqueue_enabled = False
+    cfg.memory_experience_search_enabled = True
+    cfg.memory_experience_policy_enabled = True
+    cfg.memory_experience_coach_enabled = False
+    cfg.memory_experience_coach_subagents = ""
+    cfg.auxiliary_model = ""
+    cfg.auxiliary_provider = ""
+    mock_config.return_value = cfg
+
+    from EvoScientist.EvoScientist import _inject_subagent_middleware
+
+    subs = [
+        {
+            "name": "planner-agent",
+            "tools": [],
+            "_tool_names": ["think_tool", "search_experience", "apply_experience"],
+        }
+    ]
+
+    _inject_subagent_middleware(subs, workspace=workspace)
+
+    middleware = _single_middleware(subs[0], "EvoMemoryMiddleware")
+    assert middleware._enable_experience_search is True
+    assert middleware._enable_experience_policy is True
+
+
+@patch("EvoScientist.EvoScientist._ensure_chat_model")
 def test_inject_subagent_adds_memory_middleware(mock_model, workspace):
     mock_model.return_value = MagicMock(profile={"max_input_tokens": 200_000})
 

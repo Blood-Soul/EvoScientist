@@ -296,6 +296,86 @@ def test_reports_mode_rewrites_the_staged_plan_and_code_mode_blocks() -> None:
     assert "recorded by the node it closed (`tree_finish`)" in on
 
 
+def test_a_tree_run_keeps_one_report_and_drops_the_single_agent_template() -> None:
+    single = get_system_prompt()
+    tree = [
+        get_system_prompt(research_tree=True),
+        get_system_prompt(research_tree=True, research_tree_reports=True),
+    ]
+    # the single-agent flow still writes final_report.md from the template
+    assert "Write the final report to `final_report.md`" in single
+    assert "Experiment Report Template" in single
+    # a tree run reports through TRAJECTORY.md; writing a second report is refused by the prompt
+    for text in tree:
+        assert "Write the final report to `final_report.md`" not in text
+        assert "Experiment Report Template" not in text
+        assert "Do not also write `final_report.md`" in text
+        assert "TRAJECTORY.md` is the report" in text
+        assert "tree_finalize" in text
+        assert "Confirm `tree_finalize` published the champion's deliverable" in text
+
+
+def test_the_tree_bullets_follow_the_main_agents_tools() -> None:
+    none = get_system_prompt(research_tree=True)
+    assert "Stored experience" not in none
+    assert "Use the literature where a step is stuck" not in none
+    assert "(only if you have" not in none
+
+    search_only = get_system_prompt(
+        research_tree=True,
+        available_tools=["search_experience", "list_experience", "read_paper"],
+    )
+    assert "Stored experience" in search_only
+    assert "Look something up when a decision calls for it." in search_only
+    assert "apply_experience" not in search_only
+
+    policy_only = get_system_prompt(
+        research_tree=True, available_tools=["apply_experience"]
+    )
+    assert "Stored experience" in policy_only
+    assert "Apply it when the result will shape the decision." in policy_only
+    assert "search_experience" not in policy_only
+
+    full = get_system_prompt(
+        research_tree=True,
+        available_tools=[
+            "search_experience",
+            "apply_experience",
+            "search_paper_text",
+            "read_paper",
+        ],
+    )
+    assert (
+        "and `apply_experience` turns that into guidance bound to your task"
+        in full
+    )
+    assert "Use the literature where a step is stuck" in full
+
+
+def test_the_configured_prompt_reads_the_built_tool_list(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from EvoScientist.EvoScientist import _configured_system_prompt
+
+    cfg = SimpleNamespace(
+        dangerous_mode=False,
+        research_tree_enabled=True,
+        research_tree_require_plans=False,
+        research_tree_background_tasks=False,
+    )
+
+    def tool(name: str):
+        return SimpleNamespace(name=name)
+
+    with_experience = _configured_system_prompt(
+        cfg, tmp_path, [tool("search_experience"), tool("apply_experience")]
+    )
+    assert "Stored experience" in with_experience
+    without = _configured_system_prompt(cfg, tmp_path, [tool("tree_status")])
+    assert "Stored experience" not in without
+    assert "Use the literature where a step is stuck" not in without
+
+
 def test_the_prompt_section_follows_the_flag() -> None:
     off = get_system_prompt(research_tree=True)
     on = get_system_prompt(research_tree=True, research_tree_reports=True)
@@ -342,6 +422,12 @@ class TestSubagents:
         off, _ = evo._build_paper_tools(cfg=cfg, workspace=Workspace(tmp_path), work_dir=tmp_path)
         assert "review_plan" not in off
 
+    @pytest.mark.parametrize("name", ["planner-agent", "research-agent"])
+    def test_the_agents_that_do_the_work_can_pull_experience(self, name) -> None:
+        # the coach is not installed on subagents in this design: an agent that must
+        # apply the stored policy pulls it itself
+        assert "apply_experience" in set(self._load(name)["_tool_names"])
+
     def test_neither_writes_to_the_tree(self) -> None:
         for name in ("plan-writer", "node-analyst"):
             granted = set(self._load(name)["_tool_names"])
@@ -378,7 +464,7 @@ class TestSubagents:
 
 
 class TestArmWithoutExperience:
-    """Tree flow with the whole experience system off: same prompts, fewer tools."""
+    """Tree flow with the whole experience system off: same YAML, fewer tools and prompt blocks."""
 
     EXPERIENCE_TOOLS = {
         "enqueue_paper_experiences",
@@ -446,6 +532,53 @@ class TestArmWithoutExperience:
             "tree_status",
             "tree_history",
         }
+
+    def test_the_review_step_is_rendered_only_when_the_tool_is_on(self, tmp_path) -> None:
+        from EvoScientist.utils import resolve_subagent_tools
+
+        on_registry, _ = self._tools(tmp_path, memory_plan_review_enabled=True)
+        on = resolve_subagent_tools(TestSubagents._load("plan-writer"), on_registry)
+        assert "Then call `review_plan` once" in on["system_prompt"]
+        analyst_on = resolve_subagent_tools(
+            TestSubagents._load("node-analyst"), on_registry
+        )
+        assert "After the plan file is written" in analyst_on["system_prompt"]
+
+        off_registry, _ = self._tools(tmp_path, **self.OFF)
+        for name in ("plan-writer", "node-analyst"):
+            off = resolve_subagent_tools(TestSubagents._load(name), off_registry)
+            assert "review_plan" not in off["system_prompt"]
+            # the placeholder is gone, not left as an empty bullet
+            assert "- \n" not in off["system_prompt"]
+
+    def test_enqueue_is_agent_driven_only_without_paper_autoqueue(self, tmp_path) -> None:
+        from EvoScientist.utils import resolve_subagent_tools
+
+        # autoqueue off: the search results are not queued in code, so the agent
+        # keeps the tool and the prompt tells it the fixed post-selection step
+        manual_registry, _ = self._tools(tmp_path)
+        manual = resolve_subagent_tools(
+            TestSubagents._load("research-agent"), manual_registry
+        )
+        assert "enqueue_paper_experiences" in {t.name for t in manual["tools"]}
+        assert (
+            "call `enqueue_paper_experiences` yourself exactly once"
+            in " ".join(manual["system_prompt"].split())
+        )
+
+        # autoqueue on: every scholar_search result is queued by the middleware,
+        # so the tool is not registered here and the prompt block drops out; the
+        # skill skips its manual step when the tool is absent
+        auto_registry, _ = self._tools(
+            tmp_path, memory_paper_autoqueue_enabled=True
+        )
+        assert "enqueue_paper_experiences" not in auto_registry
+        auto = resolve_subagent_tools(
+            TestSubagents._load("research-agent"), auto_registry
+        )
+        assert "enqueue_paper_experiences" not in {t.name for t in auto["tools"]}
+        assert "enqueue_paper_experiences" not in auto["system_prompt"]
+        assert "`paper-navigator` is a skill, not a sub-agent" in auto["system_prompt"]
 
 
 ANALYSIS = """# Analysis of n1

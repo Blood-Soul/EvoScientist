@@ -307,7 +307,7 @@ def _load_mcp_tools_cached(
 # =============================================================================
 
 
-def _configured_system_prompt(cfg, work_dir: str | Path) -> str:
+def _configured_system_prompt(cfg, work_dir: str | Path, tools=()) -> str:
     # In dangerous mode the agent works on the real filesystem; give it the real
     # cwd so it can use absolute paths instead of the virtual `/` workspace root.
     real_cwd = str(resolve_virtual_path(work_dir, "/")) if cfg.dangerous_mode else None
@@ -318,6 +318,7 @@ def _configured_system_prompt(cfg, work_dir: str | Path) -> str:
         research_tree=getattr(cfg, "research_tree_enabled", False),
         research_tree_reports=getattr(cfg, "research_tree_require_plans", False),
         research_tree_background=getattr(cfg, "research_tree_background_tasks", False),
+        available_tools=tools,
     )
 
 
@@ -415,7 +416,7 @@ def _inject_subagent_middleware(
             # which is wrong guidance for a subagent whose YAML does not grant it.
             enable_experience_search=(
                 memory_controls.experience_search_enabled
-                and "search_experience" in (sa.get("tools") or [])
+                and "search_experience" in granted
             ),
             # Gated on the subagent actually holding the tool: the instructions
             # tell it to route reuse through `apply_experience`, which is wrong
@@ -423,7 +424,7 @@ def _inject_subagent_middleware(
             # subagent is told that guidance arrives on its own instead.
             enable_experience_policy=(
                 memory_controls.experience_policy_enabled
-                and ("apply_experience" in (sa.get("tools") or []) or coached)
+                and ("apply_experience" in granted or coached)
             ),
             enable_experience_coach=coached,
             memory_scheduler=memory_scheduler,
@@ -752,14 +753,25 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     base_tools = [think_tool, make_skill_manager_tool(workspace, work_dir=work_dir)]
     # Papers -> experience records. Off for an arm that must not build experience.
     if getattr(cfg, "memory_paper_extraction_enabled", True):
-        for tool in (
-            create_paper_experience_queue_tool(
-                memory_dir=memory_dir, project_id=project_id
-            ),
+        paper_tools = [
             create_extract_paper_experiences_tool(
                 memory_dir=memory_dir, project_id=project_id
             ),
-        ):
+        ]
+        # The queue tool is the agent-driven route: `paper-navigator` calls it
+        # when the final paper set is settled. With autoqueue on, the middleware
+        # queues every `scholar_search.py` result in code, so exposing the tool
+        # would only add a second route the agent has to remember — and a second
+        # thing to tell it in the prompt. The skill already skips its manual
+        # step when the tool is absent.
+        if not getattr(cfg, "memory_paper_autoqueue_enabled", False):
+            paper_tools.insert(
+                0,
+                create_paper_experience_queue_tool(
+                    memory_dir=memory_dir, project_id=project_id
+                ),
+            )
+        for tool in paper_tools:
             tool_registry[tool.name] = tool
             base_tools.append(tool)
 
@@ -874,7 +886,7 @@ def _build_base_kwargs(
         "backend": base_backend,
         "subagents": subs,
         "middleware": base_middleware,
-        "system_prompt": _configured_system_prompt(cfg, work_dir),
+        "system_prompt": _configured_system_prompt(cfg, work_dir, base_tools),
         "skills": list(DEFAULT_SKILL_SOURCES),
     }
 
@@ -973,7 +985,7 @@ def load_mcp_and_build_kwargs(
         "backend": base_backend,
         "subagents": subs,
         "middleware": base_middleware,
-        "system_prompt": _configured_system_prompt(cfg, work_dir),
+        "system_prompt": _configured_system_prompt(cfg, work_dir, base_tools),
         "skills": list(DEFAULT_SKILL_SOURCES),
     }
 

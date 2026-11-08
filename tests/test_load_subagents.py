@@ -271,3 +271,144 @@ def test_missing_async_tool_warns_at_terminal_resolution(tmp_path, caplog):
         "nonexistent_tool" in r.getMessage() and "async graph" in r.getMessage()
         for r in debugs
     )
+
+
+def test_a_switch_gated_tool_is_skipped_at_debug_not_warning(tmp_path, caplog):
+    """A YAML may name a tool whose run switch is off; that is not a typo."""
+    config_path = _write_yaml(
+        tmp_path,
+        "writer.yaml",
+        """
+        writer:
+          description: Writes plans
+          system_prompt: ""
+          tools: [review_plan]
+        """,
+    )
+    with caplog.at_level("DEBUG", logger="EvoScientist.utils"):
+        subs = load_subagents(config_path)
+        resolve_subagent_tools(subs[0], {})
+    assert subs[0]["tools"] == []
+    assert not any(r.levelname == "WARNING" for r in caplog.records)
+    assert any(
+        r.levelname == "DEBUG" and "review_plan" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+class _Tool:
+    """Stands in for a registry tool: name resolution reads ``.name``."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+
+class TestPromptSections:
+    """One YAML serves both arms: the prompt blocks follow the tools the run registered."""
+
+    @staticmethod
+    def _load(tmp_path, body: str) -> dict:
+        return load_subagents(_write_yaml(tmp_path, "agent.yaml", body))[0]
+
+    BODY = """
+        writer:
+          description: Writes plans
+          system_prompt: |
+            Before.
+            {{review_plan}}
+            After.
+          tools: [think_tool, review_plan]
+          prompt_sections:
+            review_plan:
+              requires: [review_plan]
+              text: |
+                Call review_plan once with the plan path.
+        """
+
+    def test_the_section_follows_its_tool(self, tmp_path):
+        off = self._load(tmp_path, self.BODY)
+        resolve_subagent_tools(off, {"think_tool": _Tool("think_tool")})
+        assert "Call review_plan once" not in off["system_prompt"]
+        assert "{{review_plan}}" not in off["system_prompt"]
+        assert "Before." in off["system_prompt"]
+        assert "After." in off["system_prompt"]
+        assert "_prompt_sections" not in off
+
+    def test_the_section_is_rendered_when_the_tool_resolves(self, tmp_path):
+        on = self._load(tmp_path, self.BODY)
+        resolve_subagent_tools(
+            on,
+            {"think_tool": _Tool("think_tool"), "review_plan": _Tool("review_plan")},
+        )
+        assert "Call review_plan once with the plan path." in on["system_prompt"]
+        assert "{{review_plan}}" not in on["system_prompt"]
+        assert "_prompt_sections" not in on
+
+    def test_a_plain_string_requires_the_tool_named_by_its_key(self, tmp_path):
+        body = """
+            writer:
+              system_prompt: |
+                {{enqueue_paper_experiences}}
+              tools: [enqueue_paper_experiences]
+              prompt_sections:
+                enqueue_paper_experiences: |
+                  Queue the selected papers once.
+            """
+        off = self._load(tmp_path, body)
+        resolve_subagent_tools(off, {"think_tool": _Tool("think_tool")})
+        assert "Queue the selected papers" not in off["system_prompt"]
+        # a fresh load, because resolution consumes the internal key
+        (tmp_path / "agent.yaml").unlink()
+        on = self._load(tmp_path, body)
+        resolve_subagent_tools(
+            on, {"enqueue_paper_experiences": _Tool("enqueue_paper_experiences")}
+        )
+        assert "Queue the selected papers once." in on["system_prompt"]
+
+    def test_all_tools_in_requires_must_be_present(self, tmp_path):
+        body = """
+            writer:
+              system_prompt: |
+                {{both}}
+              tools: [a]
+              prompt_sections:
+                both:
+                  requires: [a, b]
+                  text: |
+                    Only when both are here.
+            """
+        sub = self._load(tmp_path, body)
+        resolve_subagent_tools(sub, {"a": _Tool("a")})
+        assert "Only when both are here." not in sub["system_prompt"]
+
+    def test_an_unrendered_placeholder_fails_loud(self, tmp_path):
+        body = """
+            writer:
+              system_prompt: |
+                {{forgotten}}
+              tools: []
+            """
+        sub = self._load(tmp_path, body)
+        with pytest.raises(ValueError, match=r"unrendered section placeholder"):
+            resolve_subagent_tools(sub, {})
+
+    def test_prompt_sections_must_be_a_mapping(self, tmp_path):
+        body = """
+            writer:
+              system_prompt: ""
+              prompt_sections: [a, b]
+            """
+        with pytest.raises(ValueError, match=r"'prompt_sections' must be a mapping"):
+            self._load(tmp_path, body)
+
+    def test_a_section_text_must_be_a_string(self, tmp_path):
+        body = """
+            writer:
+              system_prompt: ""
+              prompt_sections:
+                review_plan:
+                  requires: [review_plan]
+                  text: 3
+            """
+        with pytest.raises(ValueError, match=r"'text' must be a string"):
+            self._load(tmp_path, body)

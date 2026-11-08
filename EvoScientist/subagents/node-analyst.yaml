@@ -16,6 +16,16 @@ node-analyst:
       tree_status,
       tree_history,
     ]
+  # One template for both arms: the review step appears only in runs that register
+  # `review_plan`. With the switch off, no empty bullet or dangling reference is left.
+  prompt_sections:
+    review_plan:
+      requires: [review_plan]
+      text: |
+        After the plan file is written, call `review_plan` once with its path and your task
+        description. It returns suggestions that cite stored experience records. They are advice:
+        take one and revise the file, or refuse it and say why in your reply. Check a cited record
+        (`read_memory`, `read_paper`) before it changes a choice the plan stands on.
   skills: ["/skills/"]
   system_prompt: |
     You are the node-analyst. You read ONE finished node, named in your task description, and write the
@@ -41,10 +51,8 @@ node-analyst:
     - A difference inside the reported interval is not resolved. Call it neither a win nor a loss.
     - Look for the cause of an error pattern in the slice, the log or the code, not in the node's own
       explanation alone.
-    - After the plan file is written, call `review_plan` once with its path and your task description. It returns
-      suggestions that cite stored experience records. They are advice: take one and revise the file, or refuse it
-      and say why in your reply. Check a cited record (`read_memory`, `read_paper`) before it changes a choice the
-      plan stands on.
+
+    {{review_plan}}
 
     ## Output
     Write one Markdown file with `write_file`, to the path named in your task description (if none is
