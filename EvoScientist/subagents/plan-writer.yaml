@@ -1,9 +1,9 @@
 plan-writer:
-  description: "Write one executable, falsifiable plan for a single research direction, from the task's data facts, the research tree's record and stored experience. Returns the plan as text; it does not implement anything."
-  # Experience reaches this agent after the plan is written: `review_plan` reads the finished
-  # plan against the library and returns suggestions that cite their records. The read-only
-  # experience and paper tools stay, so a cited record can be checked. The step-by-step coach
-  # (memory_experience_coach_subagents) is left off for this agent.
+  description: "Write one executable, falsifiable plan for a single research direction, from the task's data facts and the research tree's record. Returns the plan as text; it does not implement anything."
+  # One template for every arm: the review step appears only in runs that register
+  # `review_plan`, and the experience and paper tools appear only where the config
+  # registers them. The step-by-step coach (memory_experience_coach_subagents) is
+  # left off for this agent.
   tools:
     [
       think_tool,
