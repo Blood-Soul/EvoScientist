@@ -531,6 +531,11 @@ class EvoScientistConfig:
     # Empty means use the provider/model default. A non-empty value is an
     # explicit user override exported as EVOSCIENTIST_REASONING_EFFORT.
     reasoning_effort: str = ""
+    # Output-token budget for every model call; 0 means the provider default.
+    # A reasoning model behind a gateway whose default budget is small can spend
+    # all of it on reasoning and return no answer (finish_reason max_tokens), so
+    # this lets a run raise it. Exported as EVOSCIENTIST_MAX_TOKENS.
+    max_tokens: int = 0
     # Anthropic prompt caching for OpenRouter anthropic/* models. Opt out if
     # cache-write costs outweigh the benefit for a workflow.
     openrouter_anthropic_prompt_cache: bool = True
@@ -1452,6 +1457,7 @@ _ENV_MAPPINGS = {
     "auxiliary_provider": "EVOSCIENTIST_AUXILIARY_PROVIDER",
     "auxiliary_model": "EVOSCIENTIST_AUXILIARY_MODEL",
     "reasoning_effort": "EVOSCIENTIST_REASONING_EFFORT",
+    "max_tokens": "EVOSCIENTIST_MAX_TOKENS",
     "openrouter_anthropic_prompt_cache": (
         "EVOSCIENTIST_OPENROUTER_ANTHROPIC_PROMPT_CACHE"
     ),
@@ -1871,6 +1877,8 @@ def _apply_config_to_env(config: EvoScientistConfig) -> None:
         os.environ["JINA_API_KEY"] = config.jina_api_key
     if config.reasoning_effort and not os.environ.get("EVOSCIENTIST_REASONING_EFFORT"):
         os.environ["EVOSCIENTIST_REASONING_EFFORT"] = config.reasoning_effort
+    if config.max_tokens > 0 and not os.environ.get("EVOSCIENTIST_MAX_TOKENS"):
+        os.environ["EVOSCIENTIST_MAX_TOKENS"] = str(config.max_tokens)
     if config.openrouter_http_referer and not os.environ.get(
         "EVOSCIENTIST_OPENROUTER_HTTP_REFERER"
     ):
