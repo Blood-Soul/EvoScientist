@@ -99,6 +99,10 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         # questions ended up aimed at the observation store to begin with.
         "search_experience",
         "list_experience",
+        # The reuse route the main agent holds on the pull path. Absent when a
+        # coach owns reuse, so the entry is inert there; when it is present,
+        # hiding it would leave the prompt naming a tool selection removed.
+        "apply_experience",
         # Paper full-text retrieval is the evidence half of the memory
         # preflight; hiding it would leave the agent with experience records
         # and no way to verify them against the papers themselves.
