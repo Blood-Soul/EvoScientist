@@ -129,7 +129,7 @@ Before delegating code tasks to code-agent, ask the user which code generation m
 - For academic-paper discovery, related work, citation analysis, or requests for
   the latest papers, use the `paper-navigator` skill first. It is a skill mounted
   at `/skills/paper-navigator/`, not a sub-agent name. Read its `SKILL.md` and
-  follow its workflow (including final paper experience enqueueing).
+  follow its workflow.
 - Use `research-agent` for broader web research only when paper-navigator does
   not apply; if research-agent handles a paper task, instruct it to read and
   follow `/skills/paper-navigator/SKILL.md`.
@@ -500,7 +500,7 @@ RESEARCH_TREE_REPORTS = """## Plans
 This run asks for a written plan before an explore or refine node. Sub-agents write plans as files and report the path; you read them, judge them and record them with `tree_plan`. Do not copy their text into your own messages or tool arguments: the tools read the files, and the files are what is kept for audit and for the sub-agents that come after.
 
 - **Survey, then plans, then one node.** Survey (the literature part goes to `research-agent`) and take the time it needs. From the families you found, pick the promising directions and ask `plan-writer` for a plan for each (one call per direction). Read the plans, compare them, accept those worth trying and open a node on the best one. The accepted plans you do not use yet stay available for later nodes; rewrite or reject them when the record changes.
-- **Asking plan-writer.** Delegate with the `task` tool. Put in the description: the direction and its family, what the data looks like (sizes, columns, the metric, anything measured so far), the working conditions (GPU, minutes left from `tree_status`), for a refinement the parent's id and what you know of it, and the file to write (`reports/drafts/plan-<direction>.md`). If an experience coach is mounted on it, the coach reads only this description, so the facts must be in it.
+- **Asking plan-writer.** Delegate with the `task` tool. Put in the description: the direction and its family, what the data looks like (sizes, columns, the metric, anything measured so far), the working conditions (GPU, minutes left from `tree_status`), for a refinement the parent's id and what you know of it, and the file to write (`reports/drafts/plan-<direction>.md`). The plan-writer does not see this conversation, so the facts must be in it.
 - **Record and decide.** `tree_plan(path='reports/drafts/plan-<direction>.md', cluster=..., parents=[...])` records the file as a draft (P1, ...) and keeps a copy in `reports/plans/`. Read that copy in full: does it test one hypothesis, can it finish in the node's minutes, does it repeat a node that failed in `tree_status`? Then `tree_plan(plan_id=..., decision='accepted' | 'revise' | 'rejected', reason=...)`. Send a plan back with `revise` and your reason instead of editing it yourself; it can be rewritten twice.
 - **Open the node on the accepted plan.** `tree_new(plan_id=...)` for explore and refine nodes (a merge takes no plan). The plan and the brief go to the implementing sub-agent through `nodes/<id>/BRIEF.md`. The implementer has no coach; everything it needs goes in the brief.
 - **After a node is closed.** Look at the record and decide what is worth doing next. An explore node starts from the task and tries a direction of its own; a refine node starts from a node already built and changes it. Both are opened the same way, on an accepted plan, and both stay open to you. `plan-writer` writes a plan for a direction from the task and the record. `node-analyst` reads a finished node, runs small experiments on what it saved to check its suspicions, and writes the plan for a step that builds on it: delegate with the node id, what to check, and the file to write (`reports/drafts/plan-next-<node>.md`). Before a plan that builds on a node is written, that node has to be understood: what it did well, where it fell short and why (its error breakdown, its logs and what its saved outputs show), and, with the paper-navigator skill, what the literature says about those weak points. Do this yourself or leave it to `node-analyst`, which does it as part of writing the plan. Record any plan with `tree_plan(path=..., parents=[...], cluster=...)` (the parents are empty for a new direction), read it as you read any plan, and decide. You may ask for several plans at once and choose among them, run an accepted plan that has not run yet, or merge nodes.
@@ -604,6 +604,10 @@ def _for_tree(text: str) -> str:
 # the bullet is selected from the tool list the main agent was actually built with,
 # not left in the prompt with "only if you have ..." for the model to interpret.
 _STORED_EXPERIENCE = re.compile(r"- \*\*Stored experience[^\n]*\n")
+_SURVEY_STORED_EXPERIENCE = re.compile(
+    r"the plans stand on what the survey found and on the experience it stored, "
+    r"and a plan written before that has neither\."
+)
 _TREE_LITERATURE = re.compile(
     r"- \*\*Use the literature where a step is stuck[^\n]*\n"
 )
@@ -646,6 +650,14 @@ def _for_capabilities(
     paper_tools: bool,
 ) -> str:
     """Select the tree bullets that name tools by the tools the run registered."""
+    if not (experience_search or experience_policy):
+        # Without the experience tools nothing the survey finds is stored as
+        # experience, so the background section cannot claim the plans stand on it.
+        text = _SURVEY_STORED_EXPERIENCE.sub(
+            "the plans stand on what the survey found, and a plan written before "
+            "that does not have it.",
+            text,
+        )
     bullet = _stored_experience_bullet(
         search=experience_search, policy=experience_policy
     )

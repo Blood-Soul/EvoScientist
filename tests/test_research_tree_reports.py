@@ -352,6 +352,31 @@ def test_the_tree_bullets_follow_the_main_agents_tools() -> None:
     assert "Use the literature where a step is stuck" in full
 
 
+def test_the_background_survey_does_not_promise_stored_experience() -> None:
+    off = get_system_prompt(
+        research_tree=True,
+        research_tree_background=True,
+    )
+    assert "on the experience it stored" not in off
+    assert (
+        "the plans stand on what the survey found, and a plan written before"
+        " that does not have it." in off
+    )
+
+    on = get_system_prompt(
+        research_tree=True,
+        research_tree_background=True,
+        available_tools=["search_experience"],
+    )
+    assert "on the experience it stored" in on
+
+
+def test_the_plan_writer_is_not_described_with_a_coach() -> None:
+    text = get_system_prompt(research_tree=True, research_tree_reports=True)
+    assert "experience coach is mounted" not in text
+    assert "The plan-writer does not see this conversation" in text
+
+
 def test_the_configured_prompt_reads_the_built_tool_list(tmp_path) -> None:
     from types import SimpleNamespace
 
