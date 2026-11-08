@@ -10,6 +10,7 @@ the answer the user reads comes from the main model.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
 from .schema import PolicyOutputError, normalize_policy
-from .trace import emit_trace_async
+from .trace import emit_trace_async, response_usage
 
 # One record's JSON runs 4-5k characters, and some run longer. The writer is the
 # coach's view of the library, so it should read each selected record whole: this
@@ -91,9 +92,11 @@ async def synthesize_policy(
         state=state.strip() or "[nothing recorded yet]",
         records=_render_records(selected),
     )
+    started = time.monotonic()
     response = await model.ainvoke(
         [SystemMessage(content=filled), HumanMessage(content="Write the policy now.")]
     )
+    seconds = round(time.monotonic() - started, 2)
     output = format_message_content(response).strip()
     try:
         policy = parse_policy_json(output)
@@ -106,6 +109,8 @@ async def synthesize_policy(
                 task=task.strip(),
                 selected_ids=[item.get("id") for item in selected],
                 raw_output=output,
+                seconds=seconds,
+                usage=response_usage(response),
                 parsed=False,
             )
         raise
@@ -117,6 +122,8 @@ async def synthesize_policy(
             task=task.strip(),
             selected_ids=[item.get("id") for item in selected],
             raw_output=output,
+            seconds=seconds,
+            usage=response_usage(response),
             parsed=True,
             policy=policy,
         )

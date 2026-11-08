@@ -47,6 +47,12 @@ def trace_path(memory_dir: str | Path) -> Path:
     return Path(memory_dir).expanduser() / _DEFAULT_RELATIVE_PATH
 
 
+def response_usage(response: Any) -> dict[str, Any] | None:
+    """Token usage a chat response reports, if any (for the trace only)."""
+    usage = getattr(response, "usage_metadata", None)
+    return dict(usage) if isinstance(usage, dict) else None
+
+
 def emit_trace(memory_dir: str | Path, event: str, **fields: Any) -> None:
     """Append one JSON line describing ``event``, if tracing is enabled."""
     if not trace_enabled():
@@ -77,4 +83,10 @@ async def emit_trace_async(memory_dir: str | Path, event: str, **fields: Any) ->
     await asyncio.to_thread(emit_trace, memory_dir, event, **fields)
 
 
-__all__ = ["emit_trace", "emit_trace_async", "trace_enabled", "trace_path"]
+__all__ = [
+    "emit_trace",
+    "emit_trace_async",
+    "response_usage",
+    "trace_enabled",
+    "trace_path",
+]

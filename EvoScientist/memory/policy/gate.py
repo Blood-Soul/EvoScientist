@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
-from .trace import emit_trace_async
+from .trace import emit_trace_async, response_usage
 
 logger = logging.getLogger(__name__)
 
@@ -307,9 +308,11 @@ async def decide_experience_need(
         library_map=library_map,
         candidates=candidates_text,
     )
+    started = time.monotonic()
     response = await model.ainvoke(
         [SystemMessage(content=filled), HumanMessage(content="Decide now.")]
     )
+    seconds = round(time.monotonic() - started, 2)
     output = format_message_content(response).strip()
     try:
         decision = parse_gate_json(output, allowed_ids=allowed_ids)
@@ -323,7 +326,15 @@ async def decide_experience_need(
         }
     if memory_dir is not None:
         await emit_trace_async(
-            memory_dir, "gate", call_id=call_id, raw_output=output, **decision
+            memory_dir,
+            "gate",
+            call_id=call_id,
+            raw_output=output,
+            activity_text=activity_text,
+            candidates_text=candidates_text,
+            seconds=seconds,
+            usage=response_usage(response),
+            **decision,
         )
     return decision
 

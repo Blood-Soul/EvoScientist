@@ -265,6 +265,13 @@ class ExperienceCoachMiddleware(AgentMiddleware):
         case. Every failure mode also returns ``""``.
         """
         call_id = uuid.uuid4().hex[:12]
+        # One line per model request: the anchor that every other record of this step hangs on.
+        await self._trace(
+            "coach_step",
+            call_id=call_id,
+            n_messages=len(messages),
+            last_tools=sorted(self._last_tool_names(messages)),
+        )
         stats = await asyncio.to_thread(self._cached_stats)
         skip = self._skip_reason(messages, stats)
         if skip:
@@ -349,6 +356,7 @@ class ExperienceCoachMiddleware(AgentMiddleware):
                 state=activity,
                 max_selected=self._max_selected,
                 model=self._resolve_model(),
+                call_id=call_id,
                 brief=brief_text,
                 situation=decision["situation"],
                 picked_ids=list(picked),
