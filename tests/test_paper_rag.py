@@ -43,6 +43,7 @@ from EvoScientist.memory.papers import (
     search_paper_chunks,
     store_paper_text,
 )
+from EvoScientist.tools import paper_experience_active
 from EvoScientist.memory.papers.chunking import (
     DEFAULT_OVERLAP_CHARS,
     chunk_id_for,
@@ -156,8 +157,24 @@ def _store_experiences(
 
 
 @pytest.fixture(autouse=True)
-def _fresh_fulltext_settings() -> None:
-    """Keep the module-level settings cache from leaking between tests."""
+def _fresh_fulltext_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the module-level settings cache from leaking between tests.
+
+    The storage switch is turned on here rather than left to the branch default:
+    ``tree-papers`` ships it off (the papers arm has no experience system), so a
+    test that exercises persistence would otherwise test the disabled path.
+    """
+    from EvoScientist.memory.papers import persist as persist_module
+
+    enabled = persist_module.PaperFulltextSettings(
+        enabled=True,
+        max_chunk_chars=persist_module.DEFAULT_MAX_CHUNK_CHARS,
+        overlap_chars=persist_module.DEFAULT_OVERLAP_CHARS,
+    )
+    monkeypatch.setattr(persist_module, "paper_fulltext_settings", lambda: enabled)
+    monkeypatch.setattr(
+        paper_experience_active, "paper_fulltext_settings", lambda: enabled
+    )
     reset_paper_fulltext_settings_cache()
     yield
     reset_paper_fulltext_settings_cache()
