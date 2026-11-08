@@ -376,6 +376,12 @@ def _inject_subagent_middleware(
     for sa in subs:
         name = str(sa.get("name") or "sub-agent")
         source_type = MemorySourceType.SUBAGENT
+        # Tools are still YAML names here (`_tool_names`) on the normal path, or
+        # already objects when a caller resolved them first.
+        granted = {
+            t if isinstance(t, str) else getattr(t, "name", "")
+            for t in [*(sa.get("_tool_names") or []), *(sa.get("tools") or [])]
+        }
         memory_middleware = create_memory_middleware(
             memory_dir,
             workspace_dir=workspace.root,
@@ -392,14 +398,14 @@ def _inject_subagent_middleware(
             # which is wrong guidance for a subagent whose YAML does not grant it.
             enable_experience_search=(
                 memory_controls.experience_search_enabled
-                and "search_experience" in (sa.get("tools") or [])
+                and "search_experience" in granted
             ),
             # Gated on the subagent actually holding the tool: the instructions
             # tell it to route reuse through `apply_experience`, which is wrong
             # guidance for a subagent whose YAML does not grant it.
             enable_experience_policy=(
                 memory_controls.experience_policy_enabled
-                and "apply_experience" in (sa.get("tools") or [])
+                and "apply_experience" in granted
             ),
             memory_scheduler=memory_scheduler,
         )
@@ -712,14 +718,22 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     base_tools = [think_tool, make_skill_manager_tool(workspace, work_dir=work_dir)]
     # Papers -> experience records. Off for an arm that must not build experience.
     if getattr(cfg, "memory_paper_extraction_enabled", True):
-        for tool in (
-            create_paper_experience_queue_tool(
-                memory_dir=memory_dir, project_id=project_id
-            ),
+        paper_tools = [
             create_extract_paper_experiences_tool(
                 memory_dir=memory_dir, project_id=project_id
             ),
-        ):
+        ]
+        # With autoqueue on, the middleware queues every `scholar_search.py`
+        # result in code; exposing the manual tool would add a second route
+        # the agent has to remember, and a second thing to tell it.
+        if not getattr(cfg, "memory_paper_autoqueue_enabled", False):
+            paper_tools.insert(
+                0,
+                create_paper_experience_queue_tool(
+                    memory_dir=memory_dir, project_id=project_id
+                ),
+            )
+        for tool in paper_tools:
             tool_registry[tool.name] = tool
             base_tools.append(tool)
 

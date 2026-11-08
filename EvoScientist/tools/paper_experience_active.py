@@ -217,7 +217,8 @@ def create_extract_paper_experiences_tool(
             "full text was not previously stored will have it fetched and saved, "
             "so `full_text_available` becomes true. Use this for explicit "
             "foreground extraction requests; paper-navigator's automatic "
-            "background accumulation uses enqueue_paper_experiences."
+            "background accumulation queues searched papers separately and "
+            "extracts them asynchronously."
         ),
         args_schema=ExtractPaperExperiencesArgs,
         infer_schema=False,
