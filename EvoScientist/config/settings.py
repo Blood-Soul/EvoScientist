@@ -420,17 +420,19 @@ class EvoScientistConfig:
     # large workspaces.
     memory_observation_cache_max_files: int = 2048
     # --- What this branch runs by default -----------------------------------
-    # This branch is the research tree with literature search (paper-navigator);
-    # the experience system is the same code behind its switches. By default
-    # those switches are off: no experience tools, no coach, no plan review, no
-    # paper-to-experience extraction.
+    # This branch is the research tree with literature search (paper-navigator)
+    # and the experience system. The switches below are on so experience
+    # retrieval, plan review and paper-to-experience extraction act in a run;
+    # the literature prompts stay, because paper-navigator's searches feed the
+    # experience library. The per-step coach is not mounted: the plan-writer and
+    # node-analyst call `review_plan` instead.
     # Paper full-text RAG. Experience records compress a paper into judgements;
     # the full text keeps the verifiable evidence behind them. When enabled,
     # text already downloaded for experience extraction is also persisted,
     # chunked, and exposed through `search_paper_text` / `read_paper`.
     # Disabling stops new persistence, tool registration, and prompt injection;
     # text already on disk is left alone.
-    memory_paper_fulltext_enabled: bool = False
+    memory_paper_fulltext_enabled: bool = True
     # Target chunk size in characters. Sections shorter than this stay whole;
     # longer ones are split at paragraph boundaries with the overlap below.
     memory_paper_chunk_max_chars: int = 2000
@@ -447,12 +449,13 @@ class EvoScientistConfig:
     # The two tools that turn papers into experience records
     # (`enqueue_paper_experiences`, `extract_paper_experiences`). Off removes them from
     # the agent, for an arm that must not build any experience.
-    memory_paper_extraction_enabled: bool = False
+    memory_paper_extraction_enabled: bool = True
     # Queue every paper a `scholar_search.py` call returns for experience extraction and
     # drain the queue in-process, so the library no longer depends on the agent calling
-    # `enqueue_paper_experiences`. Needs `memory_paper_extraction_enabled`. Off by default.
-    memory_paper_autoqueue_enabled: bool = False
-    memory_experience_search_enabled: bool = False
+    # `enqueue_paper_experiences`. Needs `memory_paper_extraction_enabled`. On by
+    # default on this branch, so the manual enqueue tool is not registered.
+    memory_paper_autoqueue_enabled: bool = True
+    memory_experience_search_enabled: bool = True
     # Experience-to-policy reuse. An `E-*` record is source-bound prose about
     # what one paper's authors did; injecting it directly makes an agent copy
     # the source's datasets, models, and numbers. When enabled, the
@@ -460,7 +463,7 @@ class EvoScientistConfig:
     # policy (procedure, values to re-derive, preconditions, checks) using the
     # auxiliary model. Disabling stops tool registration and prompt injection;
     # policies already cached on disk are left alone.
-    memory_experience_policy_enabled: bool = False
+    memory_experience_policy_enabled: bool = True
     # How many stored experiences one policy may draw on. More widens coverage
     # and surfaces conflicts between papers; fewer keeps the policy tight and
     # the synthesis call small.
@@ -493,10 +496,10 @@ class EvoScientistConfig:
     # it the tool alone, so the coach can sit on the subagents while the main
     # agent decides for itself when to call. A coached subagent still never holds
     # the tool.
-    memory_experience_main_pull_enabled: bool = False
+    memory_experience_main_pull_enabled: bool = True
     # Register `review_plan` for the sub-agents whose YAML lists it: a finished plan is read against the experience
     # library and comes back with suggestions that cite their records. Independent of the step-by-step coach.
-    memory_plan_review_enabled: bool = False
+    memory_plan_review_enabled: bool = True
     # Comma-separated subagent names that get their own coach, same middleware
     # and same pipeline as the main agent's. The gate then reads that subagent's
     # own trajectory, whose first human turn is the task the main agent handed
