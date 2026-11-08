@@ -488,7 +488,7 @@ For an end-to-end research task, one that comes with a statement of your working
 - **Stored experience.** `search_experience`, `list_experience` and `read_paper` show what the papers searched in this project teach, and `apply_experience` turns that into guidance bound to your task. Look something up when a decision calls for it, and apply it when the result will shape the decision.
 - **Every step starts from the record.** Call `tree_status`, then `tree_history` for the nodes that bear on the decision. Read them in order, not only the best one: what a node tried depends on what the earlier nodes showed, and a failed node says what not to repeat. Do not repeat a direction the record shows failed under the same conditions; if you retry one, say what is different. Prefer a surveyed family that has not been tried yet (`tree_status` lists which were). Cite what you built on in `based_on`.
 - **One hypothesis per node.** Open each node with `tree_new`, stating what you expect and what would refute it, which family it belongs to (`cluster`), which component it changes, what to build (`plan`), what to reuse, which dead ends to avoid and when to stop early. The budget of a node is yours to set from what the task needs. To refine a finished node, diagnose from its own errors first (the slices in its record), then change one major thing. When `tree_status` shows two nodes that are right on different rows, consider a merge. A difference inside the reported interval is not resolved: treat it as neither a win nor a loss.
-- **Use the literature where a step is stuck.** When a refinement has a specific weakness that papers might fix (for example how others decide that a question has no answer), search for it before `tree_new` with the paper tools, read the closest papers, propose directions that differ in mechanism, and pick one.
+- **Use the literature where a step is stuck.** When a refinement has a specific weakness that papers might fix (for example how others decide that a question has no answer), search for it before `tree_new` with the paper-navigator skill, read the closest papers, propose directions that differ in mechanism, and pick one.
 - **Build through sub-agents.** You do not write training code. `tree_new` produces a brief for the sub-agent: the step, the parents' records, the most related earlier nodes, the insights that bear on it, the budget and the files the node must contain. If the reply ends with the brief, give it to the sub-agent verbatim; if the reply names a `BRIEF.md` in the node directory, tell the sub-agent to read that file in full. Either way the node directory is its working directory; add anything the record does not hold. Close the node with `tree_finish` and take the judge's number, not the sub-agent's claim; processes the node left running in its directory are stopped then.
 - **Learn from the trajectory.** Every three closed nodes the tools remind you to record what the sequence shows with `tree_insight`: when the situation looks like X, the step that worked or failed was Y, with the nodes that show it. Keep the set current instead of rewriting it: mark an insight supported when a later node confirms it, contradicted when one refutes it, and cite insights in `based_on` of later steps.
 - **Time is a hard limit.** `tree_status` holds the clock. One GPU node runs at a time. Do not open a node that cannot finish; the last minutes belong to the deliverable. The champion's deliverable is kept at the project root automatically. Finish with `tree_finalize` and report the tree: what was tried, what won, what failed and why.
@@ -614,8 +614,8 @@ _TREE_LITERATURE = re.compile(
 _LITERATURE_BULLET = (
     "- **Use the literature where a step is stuck.** When a refinement has a specific "
     "weakness that papers might fix (for example how others decide that a question has "
-    "no answer), search for it before `tree_new` with the paper tools, read the closest "
-    "papers, propose directions that differ in mechanism, and pick one.\n"
+    "no answer), search for it before `tree_new` with the paper-navigator skill, read the "
+    "closest papers, propose directions that differ in mechanism, and pick one.\n"
 )
 
 
@@ -647,7 +647,6 @@ def _for_capabilities(
     *,
     experience_search: bool,
     experience_policy: bool,
-    paper_tools: bool,
 ) -> str:
     """Select the tree bullets that name tools by the tools the run registered."""
     if not (experience_search or experience_policy):
@@ -662,7 +661,7 @@ def _for_capabilities(
         search=experience_search, policy=experience_policy
     )
     text = _STORED_EXPERIENCE.sub(lambda _m: bullet, text)
-    return _TREE_LITERATURE.sub(lambda _m: _LITERATURE_BULLET if paper_tools else "", text)
+    return _TREE_LITERATURE.sub(lambda _m: _LITERATURE_BULLET, text)
 
 
 def _for_tree_reports(text: str) -> str:
@@ -760,7 +759,6 @@ def get_system_prompt(
                 section,
                 experience_search="search_experience" in names,
                 experience_policy="apply_experience" in names,
-                paper_tools=bool(names & {"search_paper_text", "read_paper"}),
             )
             for section in sections
         ]

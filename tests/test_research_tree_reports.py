@@ -318,7 +318,9 @@ def test_a_tree_run_keeps_one_report_and_drops_the_single_agent_template() -> No
 def test_the_tree_bullets_follow_the_main_agents_tools() -> None:
     none = get_system_prompt(research_tree=True)
     assert "Stored experience" not in none
-    assert "Use the literature where a step is stuck" not in none
+    # The literature bullet rests on the skill, not on a switch, so this arm
+    # keeps it even when no experience or full-text tool is registered.
+    assert "Use the literature where a step is stuck" in none
     assert "(only if you have" not in none
 
     search_only = get_system_prompt(
@@ -398,7 +400,7 @@ def test_the_configured_prompt_reads_the_built_tool_list(tmp_path) -> None:
     assert "Stored experience" in with_experience
     without = _configured_system_prompt(cfg, tmp_path, [tool("tree_status")])
     assert "Stored experience" not in without
-    assert "Use the literature where a step is stuck" not in without
+    assert "Use the literature where a step is stuck" in without
 
 
 def test_the_prompt_section_follows_the_flag() -> None:
