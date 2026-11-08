@@ -346,6 +346,8 @@ class TestSubagents:
         T._inject(
             tmp_path,
             subs,
+            memory_experience_policy_enabled=True,
+            memory_experience_coach_enabled=True,
             memory_experience_coach_subagents="plan-writer,node-analyst",
         )
         writer, analyst, planner = subs

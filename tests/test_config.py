@@ -1551,7 +1551,8 @@ class TestExperienceCoachConfig:
 
     def test_defaults(self):
         config = EvoScientistConfig()
-        assert config.memory_experience_coach_enabled is True
+        # Off by default on the tree-papers branch; the switch still turns it on.
+        assert config.memory_experience_coach_enabled is False
         assert config.memory_experience_coach_recent_messages == 6
 
     @pytest.mark.parametrize("bad", [0, -1, 31, 100, True, False, "6", 6.0, None])

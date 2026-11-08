@@ -419,13 +419,19 @@ class EvoScientistConfig:
     # deploy model; raise for a long-running server that cycles through many
     # large workspaces.
     memory_observation_cache_max_files: int = 2048
+    # --- What this branch runs by default -----------------------------------
+    # This branch is the research tree with literature search (paper-navigator)
+    # and no experience system. The experience modules are present, but every
+    # switch that would let them act in a run is off by default: no experience
+    # tools, no coach, no plan review, no paper-to-experience extraction. Turn
+    # one on only when the run is meant to compare against the experience arm.
     # Paper full-text RAG. Experience records compress a paper into judgements;
     # the full text keeps the verifiable evidence behind them. When enabled,
     # text already downloaded for experience extraction is also persisted,
     # chunked, and exposed through `search_paper_text` / `read_paper`.
     # Disabling stops new persistence, tool registration, and prompt injection;
     # text already on disk is left alone.
-    memory_paper_fulltext_enabled: bool = True
+    memory_paper_fulltext_enabled: bool = False
     # Target chunk size in characters. Sections shorter than this stay whole;
     # longer ones are split at paragraph boundaries with the overlap below.
     memory_paper_chunk_max_chars: int = 2000
@@ -442,12 +448,12 @@ class EvoScientistConfig:
     # The two tools that turn papers into experience records
     # (`enqueue_paper_experiences`, `extract_paper_experiences`). Off removes them from
     # the agent, for an arm that must not build any experience.
-    memory_paper_extraction_enabled: bool = True
+    memory_paper_extraction_enabled: bool = False
     # Queue every paper a `scholar_search.py` call returns for experience extraction and
     # drain the queue in-process, so the library no longer depends on the agent calling
     # `enqueue_paper_experiences`. Needs `memory_paper_extraction_enabled`. Off by default.
     memory_paper_autoqueue_enabled: bool = False
-    memory_experience_search_enabled: bool = True
+    memory_experience_search_enabled: bool = False
     # Experience-to-policy reuse. An `E-*` record is source-bound prose about
     # what one paper's authors did; injecting it directly makes an agent copy
     # the source's datasets, models, and numbers. When enabled, the
@@ -455,7 +461,7 @@ class EvoScientistConfig:
     # policy (procedure, values to re-derive, preconditions, checks) using the
     # auxiliary model. Disabling stops tool registration and prompt injection;
     # policies already cached on disk are left alone.
-    memory_experience_policy_enabled: bool = True
+    memory_experience_policy_enabled: bool = False
     # How many stored experiences one policy may draw on. More widens coverage
     # and surfaces conflicts between papers; fewer keeps the policy tight and
     # the synthesis call small.
@@ -470,7 +476,7 @@ class EvoScientistConfig:
     # short-circuited in code, plus two more when the gate opens. Disabling
     # leaves the pull path (`apply_experience`, held by the main agent only
     # when the coach is off) as the only route into the reuse layer.
-    memory_experience_coach_enabled: bool = True
+    memory_experience_coach_enabled: bool = False
     # How much of the trajectory tail the coach's gate reads. The gate names the
     # decision immediately ahead, so it needs the originating request plus the
     # last few steps; paying for the whole trajectory on the auxiliary model buys
@@ -481,7 +487,7 @@ class EvoScientistConfig:
     # subagent that inherits it), and no reuse paragraph in its memory
     # instructions. For runs where the main agent only coordinates and reuse
     # belongs to subagents (`memory_experience_coach_subagents`).
-    memory_experience_main_reuse_enabled: bool = True
+    memory_experience_main_reuse_enabled: bool = False
     # The main agent holds `apply_experience` (the pull route) without a coach on
     # it. Independent of `memory_experience_main_reuse_enabled`: that switch gives
     # the main agent the coach (or, with the coach off, the tool); this one gives
@@ -506,11 +512,11 @@ class EvoScientistConfig:
     # default. Scores come from a judge the agent cannot change: a service reached
     # through EVOSCIENTIST_TREE_JUDGE_URL, or a scoring script named in
     # EVOSCIENTIST_TREE_JUDGE_COMMAND (run as `<command> <predictions> [<deliverable>]`).
-    research_tree_enabled: bool = False
+    research_tree_enabled: bool = True
     # With the tree on: explore and refine nodes need a plan the main agent accepted
     # (written by the `plan-writer` sub-agent), and a refine needs an analysis of its
     # parent (written by `node-analyst`). Off keeps the tree as it was.
-    research_tree_require_plans: bool = False
+    research_tree_require_plans: bool = True
     # The main agent may run sub-agents in the background (task_start / task_collect) instead of waiting on `task`.
     research_tree_background_tasks: bool = False
 

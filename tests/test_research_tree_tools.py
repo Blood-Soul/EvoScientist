@@ -109,7 +109,8 @@ def test_a_node_end_to_end_through_the_tools(tools):
 
 
 def test_config_flag_defaults_off_and_maps_to_env():
-    assert EvoScientistConfig().research_tree_enabled is False
+    # The tree-papers branch runs the tree by default; the switch still turns it off.
+    assert EvoScientistConfig().research_tree_enabled is True
     assert (
         _ENV_MAPPINGS["research_tree_enabled"] == "EVOSCIENTIST_RESEARCH_TREE_ENABLED"
     )

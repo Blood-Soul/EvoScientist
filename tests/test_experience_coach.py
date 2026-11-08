@@ -829,7 +829,13 @@ class TestAgentWiring:
         return middleware, memory
 
     def test_main_agent_is_coached(self) -> None:
-        middleware, memory = self._stack()
+        # The switches are passed explicitly so the test does not depend on the
+        # branch's default profile (the papers branch has experience off).
+        middleware, memory = self._stack(
+            memory_experience_policy_enabled=True,
+            memory_experience_coach_enabled=True,
+            memory_experience_main_reuse_enabled=True,
+        )
         assert any(getattr(m, "name", "") == "experience_coach" for m in middleware)
         assert memory._enable_experience_coach is True
 
@@ -856,9 +862,15 @@ class TestAgentWiring:
         from EvoScientist import EvoScientist as evo
 
         cfg = evo._ensure_config()
-        saved = cfg.memory_experience_coach_enabled
+        saved = (
+            cfg.memory_experience_coach_enabled,
+            cfg.memory_experience_policy_enabled,
+            cfg.memory_experience_main_reuse_enabled,
+        )
         try:
             cfg.memory_experience_coach_enabled = True
+            cfg.memory_experience_policy_enabled = True
+            cfg.memory_experience_main_reuse_enabled = True
             registry, base = evo._build_paper_tools(
                 cfg=cfg, workspace=Workspace(Path.cwd()), work_dir=Path.cwd()
             )
@@ -872,7 +884,11 @@ class TestAgentWiring:
             assert "apply_experience" in registry
             assert any(t.name == "apply_experience" for t in base)
         finally:
-            cfg.memory_experience_coach_enabled = saved
+            (
+                cfg.memory_experience_coach_enabled,
+                cfg.memory_experience_policy_enabled,
+                cfg.memory_experience_main_reuse_enabled,
+            ) = saved
 
 
 class TestCoachModelIsQuiet:
@@ -1222,7 +1238,11 @@ class TestCoachedSubagents:
             {"name": "code-agent", "_tool_names": ["think_tool"], "tools": []},
         ]
         self._inject(
-            tmp_path, subs, memory_experience_coach_subagents="planner-agent"
+            tmp_path,
+            subs,
+            memory_experience_policy_enabled=True,
+            memory_experience_coach_enabled=True,
+            memory_experience_coach_subagents="planner-agent",
         )
         planner, code = subs
         assert self._coached(planner) and self._memory(planner)._enable_experience_coach
@@ -1243,7 +1263,11 @@ class TestCoachedSubagents:
         ]
         with pytest.raises(ValueError, match="pick one route"):
             self._inject(
-                tmp_path, subs, memory_experience_coach_subagents="planner-agent"
+                tmp_path,
+                subs,
+                memory_experience_policy_enabled=True,
+                memory_experience_coach_enabled=True,
+                memory_experience_coach_subagents="planner-agent",
             )
 
     def test_coach_off_means_no_coached_subagent(self, tmp_path: Path) -> None:
@@ -1251,6 +1275,7 @@ class TestCoachedSubagents:
         self._inject(
             tmp_path,
             subs,
+            memory_experience_policy_enabled=True,
             memory_experience_coach_enabled=False,
             memory_experience_coach_subagents="planner-agent",
         )
@@ -1339,6 +1364,7 @@ class TestMainAgentPull:
 
     def test_pull_on_gives_the_main_agent_the_tool_beside_subagent_coaches(self) -> None:
         names = self._tool_names(
+            memory_experience_policy_enabled=True,
             memory_experience_coach_enabled=True,
             memory_experience_main_reuse_enabled=False,
             memory_experience_main_pull_enabled=True,
@@ -1347,6 +1373,7 @@ class TestMainAgentPull:
 
     def test_pull_off_keeps_the_coordinator_without_it(self) -> None:
         names = self._tool_names(
+            memory_experience_policy_enabled=True,
             memory_experience_coach_enabled=True,
             memory_experience_main_reuse_enabled=False,
             memory_experience_main_pull_enabled=False,
