@@ -866,11 +866,15 @@ class TestAgentWiring:
             cfg.memory_experience_coach_enabled,
             cfg.memory_experience_policy_enabled,
             cfg.memory_experience_main_reuse_enabled,
+            cfg.memory_experience_main_pull_enabled,
         )
         try:
             cfg.memory_experience_coach_enabled = True
             cfg.memory_experience_policy_enabled = True
             cfg.memory_experience_main_reuse_enabled = True
+            # The coach owns reuse on this route; the pull switch is a separate
+            # route and is off here so the case isolates the coach.
+            cfg.memory_experience_main_pull_enabled = False
             registry, base = evo._build_paper_tools(
                 cfg=cfg, workspace=Workspace(Path.cwd()), work_dir=Path.cwd()
             )
@@ -888,6 +892,7 @@ class TestAgentWiring:
                 cfg.memory_experience_coach_enabled,
                 cfg.memory_experience_policy_enabled,
                 cfg.memory_experience_main_reuse_enabled,
+                cfg.memory_experience_main_pull_enabled,
             ) = saved
 
 
@@ -1189,7 +1194,10 @@ class TestCoordinatorMainAgent:
         )
 
         middleware, memory = TestAgentWiring._stack(
-            memory_experience_main_reuse_enabled=False
+            memory_experience_main_reuse_enabled=False,
+            # The pull route is separate; off here so the case isolates the
+            # "main agent only coordinates" profile.
+            memory_experience_main_pull_enabled=False,
         )
         assert not any(getattr(m, "name", "") == "experience_coach" for m in middleware)
         text = memory._observation_memory_instructions()
@@ -1356,10 +1364,10 @@ class TestMainAgentPull:
                 setattr(cfg, key, value)
         return {getattr(t, "name", "") for t in tools}
 
-    def test_switch_defaults_off_and_is_mapped(self) -> None:
+    def test_switch_defaults_on_and_is_mapped(self) -> None:
         from EvoScientist.config.settings import _ENV_MAPPINGS, EvoScientistConfig
 
-        assert EvoScientistConfig().memory_experience_main_pull_enabled is False
+        assert EvoScientistConfig().memory_experience_main_pull_enabled is True
         assert "memory_experience_main_pull_enabled" in _ENV_MAPPINGS
 
     def test_pull_on_gives_the_main_agent_the_tool_beside_subagent_coaches(self) -> None:

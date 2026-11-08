@@ -225,8 +225,8 @@ class TestMiddleware:
         assert len(_pending(tmp_path / "mem")) == 1
 
 
-def test_the_switch_is_off_by_default_and_mapped() -> None:
+def test_the_switch_is_on_by_default_and_mapped() -> None:
     from EvoScientist.config.settings import _ENV_MAPPINGS, EvoScientistConfig
 
-    assert EvoScientistConfig().memory_paper_autoqueue_enabled is False
+    assert EvoScientistConfig().memory_paper_autoqueue_enabled is True
     assert "memory_paper_autoqueue_enabled" in _ENV_MAPPINGS
