@@ -349,7 +349,8 @@ def test_the_tree_bullets_follow_the_main_agents_tools() -> None:
         "and `apply_experience` turns that into guidance bound to your task"
         in full
     )
-    assert "Use the literature where a step is stuck" in full
+    # this branch has no literature ability: the bullet never appears
+    assert "Use the literature where a step is stuck" not in full
 
 
 def test_the_configured_prompt_reads_the_built_tool_list(tmp_path) -> None:
@@ -578,7 +579,6 @@ class TestArmWithoutExperience:
         )
         assert "enqueue_paper_experiences" not in {t.name for t in auto["tools"]}
         assert "enqueue_paper_experiences" not in auto["system_prompt"]
-        assert "`paper-navigator` is a skill, not a sub-agent" in auto["system_prompt"]
 
 
 ANALYSIS = """# Analysis of n1
@@ -1015,23 +1015,25 @@ class TestNextPlanFromTheAnalyst:
         assert "plan-next-<node>.md" in text and "choose among them" in text
         assert "An explore node starts from the task" in text and "a refine node starts from a node already built" in text
         assert "Both are opened the same way" in text and "both stay open to you" in text
-        assert "that node has to be understood" in text and "with the paper-navigator skill" in text
+        assert "that node has to be understood" in text
+        assert "with the paper-navigator skill" not in text
         assert "report" not in text.split("that node has to be understood")[1].split("Record any plan with")[0]
         assert "ONE `code_interpreter` eval" not in text
         analyst = TestSubagents._load("node-analyst")["system_prompt"]
         assert "plan-next-<node id>.md" in analyst and "## What the node showed" in analyst
-        assert "may run small experiments" in analyst and "Look at the literature before you plan" in analyst
+        assert "may run small experiments" in analyst
+        assert "Look at the literature before you plan" not in analyst
         assert "analysis-<node id>" not in analyst and "### The next plan" not in analyst
         writer = TestSubagents._load("plan-writer")["system_prompt"]
         assert "states the result and the choice, not the story of the experiment" in writer
 
 
-def test_planning_starts_from_the_literature_for_both_writers() -> None:
+def test_this_branch_does_not_send_the_writers_to_the_literature() -> None:
     writer = TestSubagents._load("plan-writer")["system_prompt"]
-    assert "Look at the literature for the direction before you write" in writer
+    assert "Look at the literature for the direction before you write" not in writer
     analyst = TestSubagents._load("node-analyst")["system_prompt"]
-    assert analyst.index("Look at the literature before you plan") < analyst.index("## Rules")
-    assert "before you write the next plan" in analyst
+    assert "Look at the literature before you plan" not in analyst
+    assert "before you write the next plan" not in analyst
 
 
 def test_plans_are_asked_for_a_design_document_not_interfaces_and_a_source_for_every_choice() -> None:

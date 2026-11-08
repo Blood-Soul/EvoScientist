@@ -38,10 +38,7 @@ plan-writer:
     ## Before writing
     1. Call `tree_status`, then `tree_history` for the nodes that bear on the direction. Do not plan a
        step the record shows failed under the same conditions; if you plan it again, say what is different.
-    2. Look at the literature for the direction before you write. With the paper-navigator skill, search
-       for how others handle this problem or this step, read the closest papers, and let what you find shape
-       the plan. Search as long as it is worth it, then plan. Without the skill, plan from the record and the data.
-    3. Write the plan file first, from the record, the data and what you read.
+    2. Write the plan file first, from the record and the data.
 
     {{review_plan}}
 

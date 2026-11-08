@@ -40,12 +40,6 @@ node-analyst:
     - The node's own files under `nodes/<id>/`: `NODE_REPORT.md`, the logs under `outputs/`, and the
       code, where a claim needs checking. Check the judge's slices if the record has them.
 
-    ## Look at the literature before you plan (with the paper-navigator skill)
-    Once you know what is wrong, and before you write the next plan, search for papers that address those
-    weak points (paper-navigator, one question per search), read the closest ones, and let them shape the
-    plan. Search as long as it is worth it. Without the skill, plan from the
-    record and your measurements.
-
     ## Rules
     - Do not invent numbers: every figure comes from the record or a file you read.
     - A difference inside the reported interval is not resolved. Call it neither a win nor a loss.
