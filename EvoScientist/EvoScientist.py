@@ -1347,11 +1347,12 @@ def _get_default_middleware(
                 memory_scheduler=memory_scheduler,
             )
         )
-    # A run whose research tree is mandatory: the coordinator does not write code files itself.
+    # A run whose research tree is mandatory: the coordinator does not write code files itself,
+    # and a model call made after several tool calls without a tree carries a start note.
     if getattr(cfg, "research_tree_require_plans", False) is True and not for_async_subagent:
         from .middleware.coordinator_guard import CoordinatorGuardMiddleware
 
-        mw.append(CoordinatorGuardMiddleware())
+        mw.append(CoordinatorGuardMiddleware(workspace.root))
 
     # The coordinator may hand a sub-agent work and carry on (task_start / task_collect).
     if getattr(cfg, "research_tree_background_tasks", False) is True and not for_async_subagent:
