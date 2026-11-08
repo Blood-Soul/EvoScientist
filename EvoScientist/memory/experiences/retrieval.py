@@ -149,10 +149,10 @@ def search_experience_records(
 def degenerate_facets(*facets: str) -> list[dict[str, Any]]:
     """Report facets the tokenizer largely discarded, with what survived.
 
-    The ranker tokenizes on ``[a-z0-9_]+``, so a query written in Chinese (or
-    any non-Latin script) is reduced to whatever Latin fragments it happens to
-    contain: "如何利用摘要完成idea的构建" becomes the single token ``idea``, which
-    matches most of the library and produces a full page of high scores. The
+    The ranker keeps ASCII words and bigrams for unsegmented scripts, so a
+    query written in Chinese is searched as its bigrams; a run shorter than one
+    bigram (a single CJK character) yields no token at all, and the ranking then
+    returns whatever the library holds, unrelated to the question asked. The
     results are not wrong so much as unrelated to the question asked, and
     nothing in the response says so.
 

@@ -362,10 +362,11 @@ def test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently(
 ) -> None:
     """The failure mode is confident noise, so the response has to admit it.
 
-    Ranking tokenizes on `[a-z0-9_]+`, so a Chinese query survives only as its
-    incidental Latin fragments: "如何利用摘要完成idea的构建" becomes `idea`, which
-    matches most of the library and returns a full page of high scores that has
-    nothing to do with the question asked.
+    The ranker keeps ASCII words plus bigrams for unsegmented scripts, so a
+    Chinese query is searched as its bigrams: "如何利用摘要完成idea的构建" is no
+    longer lost. What can still disappear is a run shorter than one bigram -- a
+    single CJK character ("猫") yields no token at all, and the ranking then
+    returns whatever the library holds, unrelated to the question asked.
     """
     from EvoScientist.memory.experiences.retrieval import degenerate_facets
     from EvoScientist.tools.experience_search import create_search_experience_tool
@@ -373,23 +374,19 @@ def test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently(
     _store(tmp_path, project_id="P-alpha", marker="idea generation from abstracts")
     tool = create_search_experience_tool(memory_dir=tmp_path, project_id="P-alpha")
 
-    reported = degenerate_facets("如何利用摘要完成idea的构建")
-    assert reported == [
-        {
-            "facet": "如何利用摘要完成idea的构建",
-            "searched_as": ["idea"],
-            "coverage": pytest.approx(0.27, abs=0.01),
-        }
-    ]
+    # Multi-character Chinese survives as bigrams, so it is not flagged.
+    assert degenerate_facets("如何利用摘要完成idea的构建") == []
+    reported = degenerate_facets("猫")
+    assert reported == [{"facet": "猫", "searched_as": [], "coverage": 0.0}]
     # A query the tokenizer keeps is not flagged, so the warning stays a signal.
     assert degenerate_facets("automated scientific discovery") == []
     # Nor is an empty facet, which simply was not searched.
     assert degenerate_facets("", "   ") == []
 
-    payload = json.loads(tool.func(topic="如何利用摘要完成idea的构建"))
-    assert payload["results"]  # the fragment does match, which is the problem
+    payload = json.loads(tool.func(topic="猫"))
     warning = payload["query_warning"]
-    assert warning["facets"][0]["searched_as"] == ["idea"]
+    assert warning["facets"][0]["facet"] == "猫"
+    assert warning["facets"][0]["searched_as"] == []
     assert "list_experience" in warning["reason"]
 
     clean = json.loads(tool.func(topic="idea generation from abstracts"))
