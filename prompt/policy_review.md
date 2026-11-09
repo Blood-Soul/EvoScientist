@@ -14,7 +14,7 @@ A research agent has written a plan for one direction. You read the plan next to
 {plan}
 ```
 
-**Experience records found for the plan's main design choices (full JSON; each starts with its id):**
+**Experience records found for the plan's main design choices (each starts with its id and explains its own fields):**
 ```
 {records}
 ```

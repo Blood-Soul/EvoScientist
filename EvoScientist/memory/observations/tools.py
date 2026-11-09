@@ -274,7 +274,7 @@ def create_search_observations_tool(
             "This does NOT search paper experience. Findings extracted from "
             "published papers -- methods, results, evaluation protocols, "
             "subject-matter knowledge -- live in a separate library reached by "
-            "`search_experience`, `list_experience`, and `apply_experience`. "
+            "`search_experience` and `list_experience`. "
             "Asking here about a research topic returns nothing useful."
         ),
         args_schema=SearchObservationsArgs,
@@ -307,10 +307,15 @@ def create_read_memory_tool(
                 ensure_ascii=False,
                 sort_keys=True,
             )
-        payload: dict[str, object] = {"text": result["text"]}
         if result.get("record_kind") == "experience":
-            payload["record_kind"] = "experience"
-            payload["experience_level"] = result.get("experience_level")
+            # An experience is shown as labelled text that explains its own fields, not as the stored JSON.
+            from ..experiences.render import render_record
+            from ..policy.trace import emit_tool_output
+
+            text = render_record(result["text"])
+            emit_tool_output(memory_dir, "read_memory", {"id": requested_id}, text)
+            return text
+        payload: dict[str, object] = {"text": result["text"]}
         if "related_observations" in result:
             payload["related_observations"] = result["related_observations"]
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True)

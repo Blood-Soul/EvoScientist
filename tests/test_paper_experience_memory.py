@@ -407,14 +407,14 @@ def test_a_query_lost_to_the_tokenizer_is_reported_not_scored_silently(
     # Nor is an empty facet, which simply was not searched.
     assert degenerate_facets("", "   ") == []
 
-    payload = json.loads(tool.func(topic="猫"))
-    warning = payload["query_warning"]
-    assert warning["facets"][0]["facet"] == "猫"
-    assert warning["facets"][0]["searched_as"] == []
-    assert "list_experience" in warning["reason"]
+    warned = tool.func(topic="猫")
+    assert "retrieval is lexical" in warned
+    assert "'猫' -> []" in warned
+    assert "list_experience" in warned
 
-    clean = json.loads(tool.func(topic="idea generation from abstracts"))
-    assert "query_warning" not in clean
+    clean = tool.func(topic="idea generation from abstracts")
+    assert "retrieval is lexical" not in clean
+    assert "experience record(s)" in clean and not clean.lstrip().startswith("{")  # text, not a JSON document
 
 
 def test_experience_ids_follow_content_not_position(tmp_path: Path) -> None:

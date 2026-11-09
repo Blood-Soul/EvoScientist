@@ -33,6 +33,8 @@ from ..memory.experiences.retrieval import (
     search_experience_records,
 )
 from ..memory.experiences.taxonomy import DISCIPLINES
+from ..memory.experiences.render import render_browse, render_search
+from ..memory.experiences.store import list_experience_documents
 from ..memory.policy.trace import emit_tool_output
 from ..memory.runtime_context import runtime_project_id
 from ..memory.types import ExperienceLevel
@@ -190,7 +192,8 @@ def create_search_experience_tool(
             level=level,
             limit=limit,
         )
-        payload: dict[str, object] = {"results": results}
+        project = runtime_project_id(runtime, project_id)
+        notes: list[str] = []
         thin = degenerate_facets(topic, method, task)
         if thin:
             # Ranking is lexical over `[a-z0-9_]+`. A facet written in Chinese
@@ -199,31 +202,35 @@ def create_search_experience_tool(
             # of high scores that has nothing to do with the question. Say what
             # was actually searched instead of letting the scores imply
             # relevance the query never expressed.
-            payload["query_warning"] = {
-                "reason": (
-                    "Retrieval is lexical and matches only Latin letters, "
-                    "digits, and underscores, so these facets were searched as "
-                    "little more than a fragment of what you wrote. Any ranking "
-                    "below reflects the fragment, not your question. Re-query "
-                    "with English subject-matter terms, or browse the library's "
-                    "own vocabulary with `list_experience`."
-                ),
-                "facets": thin,
-            }
+            notes.append(
+                "\nNote: retrieval is lexical and matches only Latin letters, digits, and underscores, so these "
+                "facets were searched as little more than a fragment of what you wrote: "
+                + "; ".join(f"{t['facet']!r} -> {t['searched_as']}" for t in thin)
+                + ". Any ranking above reflects the fragment, not your question. Re-query with English "
+                "subject-matter terms, or browse the library's own vocabulary with `list_experience`."
+            )
         if not results:
             # An empty page is ambiguous between "nothing matches" and "your
             # phrasing missed", and the second is the common case for a lexical
             # index. Name the recovery path instead of leaving the caller to
             # retry variations of the same wording.
-            payload["hint"] = (
-                "No experience matched. Retrieval here is lexical, so try "
-                "`list_experience` to see which disciplines and domains hold "
-                "records, then query with the library's own vocabulary. Broaden "
-                "or drop `discipline`/`domain`/`level` filters, and check that "
-                "`topic` names a research subject rather than a step in your "
-                "own workflow."
+            notes.append(
+                "\nHint: retrieval here is lexical, so try `list_experience` to see which disciplines and "
+                "domains hold records, then query with the library's own vocabulary. The same idea is often "
+                "worded differently in different papers (null / negative / unanswerable / no-answer), so "
+                "try the other names. Broaden or drop `discipline`/`domain`/`level` filters, and check that "
+                "`topic` names a research subject rather than a step in your own workflow."
             )
-        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        bodies = {d.observation_id: d.text for d in list_experience_documents(memory_dir=memory_dir, project_id=project)}
+        entries = []
+        for hit in results:
+            raw = bodies.get(hit["observation_id"])
+            try:
+                document = json.loads(raw) if raw else None
+            except ValueError:
+                document = None
+            entries.append((document if isinstance(document, dict) else None, hit))
+        text = render_search(entries, notes=notes)
         emit_tool_output(memory_dir, "search_experience", {"topic": topic, "method": method, "task": task,
                          "discipline": discipline, "domain": domain, "level": level, "limit": limit}, text)
         return text
@@ -246,10 +253,14 @@ def create_search_experience_tool(
             "rather than diluting one long query string. `discipline`, "
             "`domain`, and `level` are exact-match filters. When you do not "
             "know the library's vocabulary, browse it with `list_experience` "
-            "first. Read a full record with `read_memory`, or -- when you are "
-            "making a decision rather than gathering context -- prefer "
-            "`apply_experience`, which rebinds the source's fixed values to "
-            "your task instead of leaving you to copy them."
+            "first. The same idea is often worded differently in different "
+            "papers (null / negative / unanswerable / no-answer), so put the "
+            "technique in `method` and try its other names.\n\n"
+            "Results are text, best match first, each with the problem it "
+            "answers, the method, the benefit and cost, and how the result was "
+            "obtained ([controlled] = one factor changed, the rest fixed; "
+            "[vs_baseline] = compared with other methods; [absolute_only] = no "
+            "comparison). Read a full record with `read_memory`."
         ),
         args_schema=SearchExperienceArgs,
         infer_schema=False,
@@ -282,7 +293,7 @@ def create_list_experience_tool(
             limit=limit,
             offset=offset,
         )
-        text = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        text = render_browse(result)
         emit_tool_output(memory_dir, "list_experience", {"facet": facet, "limit": limit}, text)
         return text
 

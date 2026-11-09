@@ -282,9 +282,11 @@ def _experience_id(
     """
     identity = ""
     if item is not None:
+        # `problem` and `action` are what tell one current-shape record from another of the same
+        # paper: they share domain and task, and have no `statement`.
         identity = "\x1f".join(
             " ".join(str(item.get(key) or "").split())
-            for key in ("statement", "declaration", "domain", "task")
+            for key in ("statement", "declaration", "domain", "task", "problem", "action")
         ).strip("\x1f")
     if identity:
         return f"E-{_sha256(f'{project_id}:{paper_key}:{level}:{identity}')[:16]}"
@@ -335,8 +337,12 @@ def _summary(item: Mapping[str, Any], *, title: str, level: ExperienceLevel) -> 
     absent.
     """
     facets = [value for key in ("domain", "task") if (value := _facet(item, key))]
-    if trigger := _facet(item, "trigger_context"):
+    if trigger := _facet(item, "trigger_context") or _facet(item, "problem"):
         facets.append(trigger[:_TRIGGER_BUDGET])
+    methods = item.get("method")
+    if isinstance(methods, list) and methods:
+        # The canonical name and its aliases are what a search from another paper's vocabulary has to hit.
+        facets.append("; ".join(" ".join(str(m).split()) for m in methods if str(m).strip())[:_TAIL_BUDGET])
     candidates = (
         item.get("transferable_core"),
         item.get("statement"),
@@ -396,7 +402,7 @@ def _experience_text(
 #
 # Every caller here re-read and re-parsed the whole library: ranking, the
 # prompt-facing index block rebuilt on every model request, reading a single
-# record by ID, and `apply_experience` twice per call. At 98 records that was
+# record by ID, and the coach's policy derivation twice per call. At 98 records that was
 # ~20ms per pass with the JSON parsed identically each time. The work is pure
 # and the inputs are files on disk, so it is memoizable as-is.
 #

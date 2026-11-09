@@ -79,7 +79,8 @@ measurement that comes first ("measure the share of empty windows; then keep onl
 paper's terms and the real values.
 
 **`effect`** -- three parts, in this order.
-- `compared`: what was compared with what (which variable, which levels, or which baselines).
+- `compared`: what was compared with what (which variable, which levels, or which baselines). Only a comparison the paper
+  actually runs. For `absolute_only` write what the number was measured on, never an imagined comparison.
 - `benefit`: what improved. Give the metric change when the paper reports one, **and** report analysis findings the
   paper makes: which capability, question type, subset or condition got better, and any mechanism evidence. A finding
   without a number is fine. Write only what the paper reports.

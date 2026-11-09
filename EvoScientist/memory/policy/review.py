@@ -69,11 +69,17 @@ def plan_queries(plan: str, limit: int = 6) -> list[str]:
     return uniq[:limit]
 
 
+def _rendered(c: dict[str, Any]) -> str:
+    from ..experiences.render import render_record
+
+    return render_record(c["record"])
+
+
 def record_sizes(candidates: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """For the trace: how big each shown record is and whether the reviewer got it cut short."""
     out = []
     for c in candidates:
-        n = len(json.dumps(c["record"], ensure_ascii=False, indent=1, sort_keys=True))
+        n = len(_rendered(c))
         out.append({"id": c["id"], "chars": n, "truncated": n > MAX_RECORD_CHARS})
     return out
 
@@ -81,10 +87,10 @@ def record_sizes(candidates: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 def _render_records(candidates: Sequence[dict[str, Any]]) -> str:
     blocks = []
     for c in candidates:
-        text = json.dumps(c["record"], ensure_ascii=False, indent=1, sort_keys=True)
+        text = _rendered(c)
         if len(text) > MAX_RECORD_CHARS:
             text = text[:MAX_RECORD_CHARS] + "\n... [record truncated]"
-        blocks.append(f"{c['id']}\n{text}")
+        blocks.append(text)
     return "\n\n".join(blocks)
 
 
