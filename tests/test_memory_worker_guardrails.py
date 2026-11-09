@@ -211,7 +211,8 @@ def _record_messages(result: dict[str, Any]) -> list[ToolMessage]:
 
 
 def _record_results(result: dict[str, Any]) -> list[dict[str, Any]]:
-    return [json.loads(m.content) for m in _record_messages(result)]
+    # The agent reads prose; the structured result is the message artifact.
+    return [dict(m.artifact) for m in _record_messages(result)]
 
 
 def _warnings(caplog) -> list[str]:
@@ -244,7 +245,7 @@ async def test_parallel_writes_keep_the_first_three(tmp_path, monkeypatch, use_a
 
     assert len(_observation_files(tmp_path)) == 3
     created = {
-        m.tool_call_id.rsplit("-", 1)[0]: json.loads(m.content)["created"]
+        m.tool_call_id.rsplit("-", 1)[0]: m.artifact["created"]
         for m in _record_messages(result)
     }
     assert created == {

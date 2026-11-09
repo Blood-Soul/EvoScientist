@@ -599,40 +599,31 @@ def test_read_unknown_chunk_returns_none(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_search_tool_returns_locators_without_passage_text(tmp_path: Path) -> None:
+def test_search_tool_returns_locators_as_text_without_passage_body(tmp_path: Path) -> None:
     _store_text(tmp_path)
     tool = create_search_paper_text_tool(memory_dir=tmp_path, project_id="P-alpha")
 
-    payload = json.loads(tool.run({"query": "top-1 accuracy catalyst split"}))
-    assert payload["results"]
-    first = payload["results"][0]
-    assert set(first) == {
-        "chunk_id",
-        "paper_id",
-        "title",
-        "url",
-        "section_path",
-        "matches",
-        "score",
-    }
-    assert first["chunk_id"].startswith("C-")
-    assert first["paper_id"] == PAPER_ID
-    assert first["title"] == PAPER_TITLE
+    out = tool.run({"query": "top-1 accuracy catalyst split"})
+    assert not out.lstrip().startswith("{")
+    assert out.startswith("1 passage(s)") or "passage(s), best match first" in out
+    assert f"({PAPER_ID})" in out and PAPER_TITLE[:30] in out
+    assert "chunk_id: C-" in out
+    assert "read_paper(chunk_id=" in out
 
 
 def test_search_tool_differentiates_empty_store_from_no_match(tmp_path: Path) -> None:
     tool = create_search_paper_text_tool(memory_dir=tmp_path, project_id="P-alpha")
 
-    empty = json.loads(tool.run({"query": "anything"}))
-    assert empty["results"] == []
-    assert empty["papers_stored"] == 0
-    assert "No paper full text is stored" in empty["hint"]
+    empty = tool.run({"query": "anything"})
+    assert "No passage matched." in empty
+    assert "in this project: 0." in empty
+    assert "No paper full text is stored" in empty
 
     _store_text(tmp_path)
-    missed = json.loads(tool.run({"query": "zzzzz nonexistent terminology qqqqq"}))
-    assert missed["results"] == []
-    assert missed["papers_stored"] == 1
-    assert "lexical" in missed["hint"]
+    missed = tool.run({"query": "zzzzz nonexistent terminology qqqqq"})
+    assert "No passage matched." in missed
+    assert "in this project: 1." in missed
+    assert "lexical" in missed
 
 
 def test_read_tool_covers_all_three_granularities(tmp_path: Path) -> None:
@@ -640,43 +631,38 @@ def test_read_tool_covers_all_three_granularities(tmp_path: Path) -> None:
     tool = create_read_paper_tool(memory_dir=tmp_path, project_id="P-alpha")
     chunk_id = _results_chunk_id(tmp_path)
 
-    chunk = json.loads(tool.run({"chunk_id": chunk_id, "expand": "chunk"}))
-    assert chunk["expand"] == "chunk"
+    chunk = tool.run({"chunk_id": chunk_id, "expand": "chunk"})
+    assert "· passage ·" in chunk or "section:" in chunk
+    assert not chunk.lstrip().startswith("{")
 
-    section = json.loads(tool.run({"chunk_id": chunk_id}))
-    assert section["expand"] == "section"
+    section = tool.run({"chunk_id": chunk_id})
+    assert "section:" in section
 
-    whole = json.loads(tool.run({"paper_id": PAPER_ID, "expand": "full"}))
-    assert whole["expand"] == "full"
-    assert whole["text"] == _paper_text()
+    whole = tool.run({"paper_id": PAPER_ID, "expand": "full"})
+    header, _, body = whole.partition("\n\n")
+    assert "full text" in header and PAPER_ID in header
+    assert body == _paper_text()  # the paper as written, line breaks and all, not escaped
 
 
 def test_read_tool_marks_full_truncation_inline(tmp_path: Path) -> None:
     _store_text(tmp_path)
     tool = create_read_paper_tool(memory_dir=tmp_path, project_id="P-alpha")
 
-    payload = json.loads(
-        tool.run({"paper_id": PAPER_ID, "expand": "full", "max_chars": 120})
-    )
-    assert payload["truncated"] is True
-    assert "[truncated at 120 of" in payload["text"]
+    out = tool.run({"paper_id": PAPER_ID, "expand": "full", "max_chars": 120})
+    assert "TRUNCATED" in out.splitlines()[0]
+    assert "[truncated at 120 of" in out
 
 
 def test_read_tool_reports_misuse_as_errors(tmp_path: Path) -> None:
     _store_text(tmp_path)
     tool = create_read_paper_tool(memory_dir=tmp_path, project_id="P-alpha")
 
-    assert (
-        "expand must be one of"
-        in json.loads(tool.run({"chunk_id": "C-x", "expand": "everything"}))["error"]
-    )
-    assert "requires paper_id" in json.loads(tool.run({"expand": "full"}))["error"]
-    assert "chunk_id is required" in json.loads(tool.run({}))["error"]
-    assert "No stored passage" in json.loads(tool.run({"chunk_id": "C-nope"}))["error"]
-    assert (
-        "No stored full text"
-        in json.loads(tool.run({"paper_id": "missing", "expand": "full"}))["error"]
-    )
+    assert "expand must be one of" in tool.run({"chunk_id": "C-x", "expand": "everything"})
+    assert "requires paper_id" in tool.run({"expand": "full"})
+    assert "chunk_id is required" in tool.run({})
+    assert "No stored passage" in tool.run({"chunk_id": "C-nope"})
+    assert "No stored full text" in tool.run({"paper_id": "missing", "expand": "full"})
+    assert tool.run({}).startswith("Error:")
 
 
 def test_tools_follow_the_runtime_project_id(tmp_path: Path) -> None:
@@ -684,19 +670,17 @@ def test_tools_follow_the_runtime_project_id(tmp_path: Path) -> None:
     # Constructed for P-alpha, but the runtime says P-beta.
     search = create_search_paper_text_tool(memory_dir=tmp_path, project_id="P-alpha")
 
-    assert json.loads(search.run({"query": "top-1 accuracy"}))["results"] == []
-    scoped = json.loads(
-        search.run(
-            {
-                "query": "top-1 accuracy",
-                "runtime": _tool_runtime(
-                    search,
-                    config={"configurable": {"evomemory_project_id": "P-beta"}},
-                ),
-            }
-        )
+    assert "No passage matched." in search.run({"query": "top-1 accuracy"})
+    scoped = search.run(
+        {
+            "query": "top-1 accuracy",
+            "runtime": _tool_runtime(
+                search,
+                config={"configurable": {"evomemory_project_id": "P-beta"}},
+            ),
+        }
     )
-    assert scoped["results"]
+    assert "chunk_id: C-" in scoped
 
 
 # --------------------------------------------------------------------------

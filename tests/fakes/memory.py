@@ -98,17 +98,16 @@ def record_observation_payload(
     why_it_matters: str,
     scope: MemoryScope,
 ) -> dict[str, Any]:
-    payload = tool.run(
-        {
-            "memory_type": memory_type,
-            "summary": summary,
-            "observation": observation,
-            "why_it_matters": why_it_matters,
-            "scope": scope,
-            "runtime": runtime,
-        }
+    # The tool answers the agent in prose and attaches the structured result; tests want the structure.
+    _text, artifact = tool.func(
+        memory_type=memory_type,
+        summary=summary,
+        observation=observation,
+        why_it_matters=why_it_matters,
+        scope=scope,
+        runtime=runtime,
     )
-    return json.loads(payload)
+    return dict(artifact)
 
 
 def tool_by_name(tools: Sequence[BaseTool], name: str) -> BaseTool:

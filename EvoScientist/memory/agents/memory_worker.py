@@ -453,12 +453,18 @@ def _record_attempts(messages: Sequence[object]) -> int:
 
 
 def _record_results(messages: Sequence[object]) -> Iterator[Mapping[str, object]]:
+    """The structured result of each ``record_observation`` call.
+
+    The tool answers the agent in prose and attaches the structured result as the message artifact; a message from
+    before that change (a resumed checkpoint) carries the result as JSON in its content instead.
+    """
     for message in messages:
-        if (
-            not isinstance(message, ToolMessage)
-            or message.name != _RECORD_OBSERVATION_TOOL
-            or not isinstance(message.content, str)
-        ):
+        if not isinstance(message, ToolMessage) or message.name != _RECORD_OBSERVATION_TOOL:
+            continue
+        if isinstance(message.artifact, Mapping):
+            yield message.artifact
+            continue
+        if not isinstance(message.content, str):
             continue
         try:
             payload = json.loads(message.content)
@@ -565,7 +571,8 @@ class _MemoryWorkerGuardrailMiddleware(AgentMiddleware):
             ),
         }
         return ToolMessage(
-            content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            content=str(payload["note"]),
+            artifact=payload,
             tool_call_id=request.tool_call["id"],
             name=_RECORD_OBSERVATION_TOOL,
         )

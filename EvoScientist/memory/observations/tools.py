@@ -15,6 +15,13 @@ from pydantic import BaseModel, Field
 
 from ..experiences.retrieval import read_memory_file
 from ..runtime_context import runtime_config_value, runtime_project_id
+from .render import (
+    render_error,
+    render_linked,
+    render_observation,
+    render_observation_hits,
+    render_recorded,
+)
 from ..types import (
     MemoryScope,
     MemorySourceType,
@@ -252,11 +259,7 @@ def create_search_observations_tool(
             limit=limit,
             mode=search_mode,
         )
-        return json.dumps(
-            {"results": results},
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        return render_observation_hits(results)
 
     return StructuredTool.from_function(
         func=_search_observations,
@@ -300,13 +303,7 @@ def create_read_memory_tool(
             record_id=requested_id,
         )
         if result is None:
-            return json.dumps(
-                {
-                    "error": "No observation with that ID exists in global or current-project memory.",
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+            return render_error("No observation with that ID exists in global or current-project memory.")
         if result.get("record_kind") == "experience":
             # An experience is shown as labelled text that explains its own fields, not as the stored JSON.
             from ..experiences.render import render_record
@@ -315,10 +312,7 @@ def create_read_memory_tool(
             text = render_record(result["text"])
             emit_tool_output(memory_dir, "read_memory", {"id": requested_id}, text)
             return text
-        payload: dict[str, object] = {"text": result["text"]}
-        if "related_observations" in result:
-            payload["related_observations"] = result["related_observations"]
-        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        text = render_observation(result)
         from ..policy.trace import emit_tool_output
 
         emit_tool_output(memory_dir, "read_memory", {"id": requested_id}, text)
@@ -355,20 +349,17 @@ def create_record_observation_tool(
         scope: MemoryScope,
         evidence: str | None = None,
         runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
-    ) -> str:
+    ) -> tuple[str, dict[str, object]]:
+        # The agent reads the text; the structured result rides along as the message artifact, which
+        # is what the memory worker's write limit counts (it must not parse prose).
         context = _resolve_observation_context(
             runtime,
             project_id=project_id,
             source_agent=source_agent,
         )
         if context is None:
-            return json.dumps(
-                {
-                    "error": "Cannot record observation without a source session id.",
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+            message = "Cannot record observation without a source session id."
+            return render_error(message), {"created": False, "error": message}
         result = record_observation_file(
             memory_dir=memory_dir,
             project_id=context.project_id,
@@ -387,7 +378,7 @@ def create_record_observation_tool(
                 on_observation_recorded(result)
             except Exception:
                 logger.warning("Failed to schedule observation linking", exc_info=True)
-        return json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return render_recorded(result), dict(result)
 
     return StructuredTool.from_function(
         func=_record_observation,
@@ -398,6 +389,7 @@ def create_record_observation_tool(
             "tool or platform behavior unless it is project-specific."
         ),
         args_schema=RecordObservationArgs,
+        response_format="content_and_artifact",
         infer_schema=False,
     )
 
@@ -426,7 +418,7 @@ def create_link_observations_tool(
             relation=relation,
             bidirectional=bidirectional,
         )
-        return json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return render_linked(result)
 
     return StructuredTool.from_function(
         func=_link_observations,

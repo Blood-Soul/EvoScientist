@@ -456,23 +456,16 @@ def test_read_and_search_surface_related_observations(tmp_path):
     )
 
     read_tool = create_read_memory_tool(memory_dir=memories, project_id="P-project")
-    read_payload = json.loads(
-        read_tool.run({"observation_id": source["observation_id"]})
-    )
+    read_text = read_tool.run({"observation_id": source["observation_id"]})
     search_tool = create_search_observations_tool(
         memory_dir=memories,
         project_id="P-project",
     )
-    search_payload = json.loads(
-        search_tool.run({"query": "gateway memory workers launch metadata"})
-    )
+    search_text = search_tool.run({"query": "gateway memory workers launch metadata"})
+    assert "Linked observations:" in read_text and target["observation_id"] in read_text
+    assert "linked: " in search_text and target["observation_id"] in search_text
     assert (
-        read_payload["related_observations"][0]["observation_id"]
-        == target["observation_id"]
-    )
-    assert (
-        search_payload["results"][0]["related_observations"][0]["observation_id"]
-        == target["observation_id"]
+        True
     )
 
 
@@ -880,18 +873,16 @@ def test_link_observations_tool_uses_runtime_project_id(tmp_path):
         config={"configurable": {"evomemory_project_id": "P-runtime"}},
     )
 
-    payload = json.loads(
-        tool.run(
-            {
-                "source_observation_id": first["observation_id"],
-                "target_observation_id": second["observation_id"],
-                "reason": "Both validate frontmatter-native linker behavior.",
-                "runtime": runtime,
-            }
-        )
+    reply = tool.run(
+        {
+            "source_observation_id": first["observation_id"],
+            "target_observation_id": second["observation_id"],
+            "reason": "Both validate frontmatter-native linker behavior.",
+            "runtime": runtime,
+        }
     )
 
-    assert payload["linked"] is True
+    assert reply.startswith("Linked ")
     metadata, _body = _read_memory_document(
         memories / first["path"].removeprefix("/memories/")
     )
@@ -1031,18 +1022,15 @@ def test_read_and_search_observation_tools_use_runtime_project_id(tmp_path):
         search_tool,
         config={"configurable": {"evomemory_project_id": "P-runtime"}},
     )
-    search_payload = json.loads(
-        search_tool.run(
-            {
-                "query": "runtime project observation reads",
-                "scope": MemoryScope.PROJECT,
-                "runtime": search_runtime,
-            }
-        )
+    search_text = search_tool.run(
+        {
+            "query": "runtime project observation reads",
+            "scope": MemoryScope.PROJECT,
+            "runtime": search_runtime,
+        }
     )
-    assert [hit["observation_id"] for hit in search_payload["results"]] == [
-        observation["observation_id"]
-    ]
+    assert search_text.startswith("1 observation(s), best match first:")
+    assert observation["observation_id"] in search_text
 
     read_tool = create_read_memory_tool(
         memory_dir=memories,
@@ -1052,18 +1040,13 @@ def test_read_and_search_observation_tools_use_runtime_project_id(tmp_path):
         read_tool,
         config={"configurable": {"evomemory_project_id": "P-runtime"}},
     )
-    read_payload = json.loads(
-        read_tool.run(
-            {
-                "observation_id": observation["observation_id"],
-                "runtime": read_runtime,
-            }
-        )
+    read_text = read_tool.run(
+        {
+            "observation_id": observation["observation_id"],
+            "runtime": read_runtime,
+        }
     )
-    assert (
-        "Read and search tools should honor runtime project ids."
-        in read_payload["text"]
-    )
+    assert "Read and search tools should honor runtime project ids." in read_text
 
 
 def test_search_observation_files_returns_ranked_keyword_hits(tmp_path):
@@ -1131,9 +1114,9 @@ def test_search_observation_files_returns_ranked_keyword_hits(tmp_path):
         memory_dir=memories,
         project_id="P-project",
     )
-    payload = json.loads(tool.run({"query": "GraphQL userName frontend", "limit": 5}))
-    assert list(payload) == ["results"]
-    assert payload["results"][0]["observation_id"] == first["observation_id"]
+    text = tool.run({"query": "GraphQL userName frontend", "limit": 5})
+    assert not text.lstrip().startswith("{")
+    assert text.split("\n\n")[1].startswith(f"1. {first['observation_id']}")
 
 
 def test_search_observation_files_ranks_unsegmented_chinese_text(tmp_path):
@@ -1416,13 +1399,11 @@ def test_read_memory_returns_full_observation_by_id(tmp_path):
     assert observation in read["text"]
 
     tool = create_read_memory_tool(memory_dir=memories, project_id="P-project")
-    payload = json.loads(tool.run({"observation_id": result["observation_id"]}))
-    assert payload == {"text": read["text"]}
+    # An observation is already a note, so the agent gets it as written.
+    assert tool.run({"observation_id": result["observation_id"]}) == read["text"].rstrip()
 
-    missing = json.loads(tool.run({"observation_id": "../not-a-memory"}))
-    assert missing == {
-        "error": "No observation with that ID exists in global or current-project memory.",
-    }
+    missing = tool.run({"observation_id": "../not-a-memory"})
+    assert missing == "Error: No observation with that ID exists in global or current-project memory."
 
 
 def test_search_observation_files_supports_keyword_or_regex_queries(tmp_path):
@@ -1732,6 +1713,7 @@ def test_record_observation_tool_skips_without_runtime_thread_id(tmp_path):
     )
 
     assert payload == {
+        "created": False,
         "error": "Cannot record observation without a source session id.",
     }
     assert launched == []

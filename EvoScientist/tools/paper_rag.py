@@ -29,6 +29,7 @@ from ..memory.papers import (
     read_paper_full,
     search_paper_chunks,
 )
+from ..memory.papers.render import render_error, render_passage, render_passage_hits
 from ..memory.runtime_context import runtime_project_id
 from ..memory.types import ObservationSearchMode
 
@@ -163,21 +164,16 @@ def create_search_paper_text_tool(
             )
         if not results:
             stored = list_papers(memory_dir=memory_dir, project_id=active_project)
-            return json.dumps(
-                {
-                    "results": [],
-                    "papers_stored": len(stored),
-                    "hint": (
-                        "No passage matched. Retrieval is lexical: retry with the "
-                        "wording a paper would use, or drop the paper_id filter."
-                        if stored
-                        else "No paper full text is stored for this project yet."
-                    ),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
+            return render_passage_hits(
+                [],
+                papers_stored=len(stored),
+                hint=(
+                    "Retrieval is lexical: retry with the wording a paper would use, or drop the paper_id filter."
+                    if stored
+                    else "No paper full text is stored for this project yet."
+                ),
             )
-        return json.dumps({"results": results}, ensure_ascii=False, sort_keys=True)
+        return render_passage_hits(results)
 
     return StructuredTool.from_function(
         func=_search_paper_text,
@@ -213,19 +209,11 @@ def create_read_paper_tool(*, memory_dir: str | Path, project_id: str) -> BaseTo
         requested_paper = paper_id.strip()
         granularity = expand.strip().casefold() or "section"
         if granularity not in {"chunk", "section", "full"}:
-            return json.dumps(
-                {"error": "expand must be one of: chunk, section, full."},
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+            return render_error("expand must be one of: chunk, section, full.")
 
         if granularity == "full":
             if not requested_paper:
-                return json.dumps(
-                    {"error": "expand=full requires paper_id."},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
+                return render_error("expand=full requires paper_id.")
             result = read_paper_full(
                 memory_dir=memory_dir,
                 project_id=active_project,
@@ -233,16 +221,10 @@ def create_read_paper_tool(*, memory_dir: str | Path, project_id: str) -> BaseTo
                 max_chars=max_chars or DEFAULT_FULL_PAPER_MAX_CHARS,
             )
             if result is None:
-                return json.dumps(
-                    {
-                        "error": (
-                            "No stored full text for that paper_id in this project. "
+                return render_error(
+                "No stored full text for that paper_id in this project. "
                             "Use search_paper_text to find a stored paper."
-                        )
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
+            )
             if result["truncated"]:
                 # Mark the cut inline so the model cannot mistake a truncated
                 # body for the paper's real ending.
@@ -251,14 +233,10 @@ def create_read_paper_tool(*, memory_dir: str | Path, project_id: str) -> BaseTo
                     f"{result['char_count']} characters; raise max_chars or use "
                     "search_paper_text to locate the remaining sections]"
                 )
-            return json.dumps(result, ensure_ascii=False, sort_keys=True)
+            return render_passage(result)
 
         if not requested_chunk:
-            return json.dumps(
-                {"error": "chunk_id is required unless expand=full with paper_id."},
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+            return render_error("chunk_id is required unless expand=full with paper_id.")
         result = read_paper_chunk(
             memory_dir=memory_dir,
             project_id=active_project,
@@ -267,19 +245,13 @@ def create_read_paper_tool(*, memory_dir: str | Path, project_id: str) -> BaseTo
             max_chars=max_chars or DEFAULT_SECTION_MAX_CHARS,
         )
         if result is None:
-            return json.dumps(
-                {
-                    "error": (
-                        "No stored passage with that chunk_id in this project. "
+            return render_error(
+                "No stored passage with that chunk_id in this project. "
                         "Chunk IDs come from search_paper_text."
-                    )
-                },
-                ensure_ascii=False,
-                sort_keys=True,
             )
         if result["truncated"]:
             result["text"] += "\n\n[truncated; raise max_chars to read further]"
-        return json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return render_passage(result)
 
     return StructuredTool.from_function(
         func=_read_paper,
