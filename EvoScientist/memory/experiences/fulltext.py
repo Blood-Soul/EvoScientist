@@ -112,6 +112,38 @@ def _backend() -> str:
     return choice if choice in {"auto", "mineru", "pdf", "jina"} else "auto"
 
 
+_LANDING_MARKERS = (
+    "skip to main content",
+    "submission history",
+    "bibliographic explorer",
+    "bibliographic and citation tools",
+    "access paper:",
+    "cite as: arxiv",
+    "just a moment",
+    "enable javascript and cookies",
+)
+_BODY_WORD_RE = re.compile(r"\b(introduction|methods?|methodology|experiments?|results|conclusions?)\b", re.I)
+
+
+def landing_page_reason(text: str, source_url: str = "") -> str:
+    """Why this text is a landing/abstract page rather than a paper's body, else ''.
+
+    The experience extractor must read the full text. A converter handed an arXiv
+    ``/abs/`` link, a publisher page or a bot wall happily returns the page chrome plus
+    an abstract (about 9 KB for arXiv), which is long enough to pass a length check.
+    """
+    head = text[:600].casefold()
+    if "url source:" in head and "/abs/" in head.split("url source:", 1)[1].split("\n", 1)[0]:
+        return "converted an /abs/ page (abstract only)"
+    lowered = text.casefold()
+    hits = [m for m in _LANDING_MARKERS if m in lowered]
+    if len(hits) >= 2:
+        return f"page chrome, not a paper body ({', '.join(hits[:3])})"
+    if len(text) < 15000 and len(_BODY_WORD_RE.findall(text)) < 2:
+        return "no body sections (introduction/methods/results...) found"
+    return ""
+
+
 def _record(
     attempts: list[dict[str, Any]], backend: str, started: float, error: Any = None, **extra: Any
 ) -> None:
@@ -302,16 +334,22 @@ async def _mineru_agent(
 
 # ----------------------------------------------------------------------- Jina
 
+_JINA_RETRY_DELAYS_S = (1.0, 2.0, None)  # 3 attempts, 3 s of waiting in total
+_JINA_TIMEOUT = httpx.Timeout(45.0, connect=10.0)
+
 
 async def _jina(client: httpx.AsyncClient, url: str, attempts: list[dict[str, Any]]) -> str:
     key = os.environ.get("JINA_API_KEY", "").strip()
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     reader_url = url if url.startswith("https://r.jina.ai/") else f"https://r.jina.ai/{url}"
     last: Exception | None = None
-    for delay in (2.0, 5.0, None):
+    # Short on purpose: slower backends and the local PDF parse sit behind Jina, so a
+    # stuck request should cost seconds, not minutes. An unreachable host fails at the
+    # 10 s connect limit; a slow conversion gets 45 s to read.
+    for delay in _JINA_RETRY_DELAYS_S:
         started = time.monotonic()
         try:
-            response = await client.get(reader_url, headers=headers)
+            response = await client.get(reader_url, headers=headers, timeout=_JINA_TIMEOUT)
             response.raise_for_status()
             text = response.text.strip()
             if text:
@@ -369,7 +407,9 @@ async def download_fulltext(
         "User-Agent": _USER_AGENT,
         "Accept": "text/markdown,text/plain;q=0.9,application/pdf;q=0.8,*/*;q=0.1",
     }
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout, connect=10.0), follow_redirects=True, headers=headers
+    ) as client:
         pdf_cache: list[bytes | None] = []
 
         async def pdf_bytes() -> bytes | None:
@@ -387,10 +427,14 @@ async def download_fulltext(
             return pdf_cache[0]
 
         def accept(text: str, name: str, started: float) -> bool:
-            if len(text.strip()) >= _MIN_TEXT_CHARS:
-                return True
-            _record(attempts, name, started, error=f"only {len(text.strip())} chars")
-            return False
+            if len(text.strip()) < _MIN_TEXT_CHARS:
+                _record(attempts, name, started, error=f"only {len(text.strip())} chars")
+                return False
+            reason = landing_page_reason(text)
+            if reason:
+                _record(attempts, name, started, error=f"not the full text: {reason}")
+                return False
+            return True
 
         for step in order:
             if step == "jina":
@@ -461,5 +505,6 @@ __all__ = [
     "arxiv_pdf_url",
     "download_fulltext",
     "download_fulltext_sync",
+    "landing_page_reason",
     "pdf_bytes_to_text",
 ]

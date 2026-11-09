@@ -15,7 +15,11 @@ import pytest
 
 from EvoScientist.memory.experiences import extraction, fulltext
 
-BODY = "## Method\n\n" + "We train a reader with hard negatives. " * 30
+BODY = (
+    "## Introduction\n\n" + "We train a reader with hard negatives. " * 15
+    + "\n\n## Method\n\n" + "The reader scores spans. " * 15
+    + "\n\n## Results\n\n" + "Exact match improves. " * 15
+)
 PDF_BYTES = b"%PDF-1.7 fake pdf body"
 
 
@@ -228,3 +232,31 @@ async def test_short_text_counts_as_failure_and_the_error_names_every_backend(mo
         await extraction.download_paper_text("https://arxiv.org/abs/1804.07927")
     message = str(excinfo.value)
     assert "jina: only" in message and "pymupdf: only" in message
+
+
+ABSTRACT_PAGE = (
+    "Title: A paper\n\nURL Source: https://arxiv.org/abs/1804.07927\n\nMarkdown Content:\n"
+    "[Skip to main content](#content) " + "We study a reader. " * 60 + "\nSubmission history\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_an_abstract_page_is_never_accepted_as_full_text(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "r.jina.ai":
+            return httpx.Response(200, text=ABSTRACT_PAGE)
+        return httpx.Response(200, content=PDF_BYTES)
+
+    _patch_client(monkeypatch, handler)
+    monkeypatch.setattr(fulltext, "pdf_bytes_to_text", lambda data: BODY)
+    result = await fulltext.download_fulltext("https://arxiv.org/abs/1804.07927")
+    assert result.backend == "pymupdf"  # Jina's abstract page was refused, the PDF used
+    assert "not the full text" in result.attempts[1]["error"]
+
+
+def test_landing_page_reason_cases():
+    assert fulltext.landing_page_reason(BODY) == ""
+    assert "abstract only" in fulltext.landing_page_reason(ABSTRACT_PAGE)
+    chrome = "Skip to main content. Submission history. " + "We study a reader. " * 60
+    assert "page chrome" in fulltext.landing_page_reason(chrome)
+    assert "no body sections" in fulltext.landing_page_reason("Some words. " * 80)
