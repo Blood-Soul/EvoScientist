@@ -78,6 +78,19 @@ async def test_jina_is_tried_first_and_the_pdf_is_never_downloaded(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_jina_gets_the_pdf_link_for_an_arxiv_abs_url(monkeypatch):
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(200, text=BODY)
+
+    _patch_client(monkeypatch, handler)
+    await fulltext.download_fulltext("https://arxiv.org/abs/1804.07927")
+    assert requested == ["https://r.jina.ai/https://arxiv.org/pdf/1804.07927"]  # not /abs/: that is only the abstract
+
+
+@pytest.mark.asyncio
 async def test_jina_is_retried_with_backoff(monkeypatch):
     calls = {"n": 0}
 

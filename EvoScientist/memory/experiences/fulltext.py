@@ -396,7 +396,9 @@ async def download_fulltext(
             if step == "jina":
                 started = time.monotonic()
                 try:
-                    text = await _jina(client, url, attempts)
+                    # An arXiv /abs/ page converts to just the abstract (about 9 KB);
+                    # the /pdf/ link converts to the whole paper.
+                    text = await _jina(client, pdf_url or url, attempts)
                 except Exception:
                     continue  # _jina recorded every attempt
                 if accept(text, "jina", started):
