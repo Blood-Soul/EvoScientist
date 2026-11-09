@@ -2,18 +2,18 @@
 
 The chain, in order, with every attempt recorded:
 
-1. **MinerU cloud** (optional, preferred when ``MINERU_API_KEY`` is set).
-   The precise API accepts a PDF URL, parses layout, tables and formulas, and
-   returns a zip containing ``full.md``. A token-free agent API also exists; it
-   is opt-in (``EVOSCIENTIST_MINERU_AGENT_API=1``) because its shared queue can
-   leave tasks pending for many minutes.
-2. **The arXiv PDF, parsed locally** with pymupdf4llm (layout-aware Markdown),
-   then pymupdf's plain text, then pypdf. This path needs no network service
-   beyond arxiv.org and no GPU.
-3. **Jina Reader** (``r.jina.ai``), only when the PDF path is unavailable or
-   fails; it converts both PDFs and HTML pages to Markdown.
+1. **Jina Reader** (``r.jina.ai``), retried with backoff. It converts both PDFs and
+   HTML pages to clean Markdown and is fast.
+2. **MinerU cloud** (optional, used when ``MINERU_API_KEY`` is set), one attempt only:
+   it parses layout, tables and formulas but can take minutes on a long paper. The
+   result is reduced to the paper's text (figures dropped, tables flattened). A
+   token-free agent API exists; it is opt-in (``EVOSCIENTIST_MINERU_AGENT_API=1``).
+3. **The arXiv PDF, parsed locally** (the safety net) with pymupdf4llm, then
+   pymupdf's plain text, then pypdf. Needs only arxiv.org and no GPU.
 4. **A direct GET**, accepted only when the server returns ``text/plain`` or
    ``text/markdown`` — raw HTML is never handed to the extractor.
+
+A backend whose text is under 500 characters counts as failed and the chain moves on.
 
 This module deliberately imports nothing from the EvoScientist package: the
 paper-navigator skill loads it by file path from an interpreter that may not
@@ -23,8 +23,11 @@ variables only:
 ``MINERU_API_KEY``
     MinerU precise-API token. Without it, MinerU is skipped unless the agent API
     is explicitly enabled.
+``JINA_API_KEY``
+    Jina Reader key (works without one at a much lower rate limit).
 ``EVOSCIENTIST_PAPER_FULLTEXT_BACKEND``
-    ``auto`` (default), ``mineru``, ``pdf`` or ``jina``.
+    ``auto`` (default: Jina, MinerU, local PDF), or the first stop: ``jina``,
+    ``mineru`` or ``pdf``. The local PDF parse stays behind ``jina``/``mineru``.
 ``EVOSCIENTIST_MINERU_MODEL``
     MinerU model version for the precise API (default ``vlm``).
 ``EVOSCIENTIST_MINERU_TIMEOUT_S``
@@ -213,19 +216,6 @@ def _mineru_pdf_url(url: str) -> str:
     return base + sep + rest
 
 
-_MINERU_RETRY_DELAYS_S = (5.0, 15.0)  # up to 3 attempts
-
-
-def _mineru_retryable(exc: Exception) -> bool:
-    """Transient MinerU failures: 'try again later', timeouts, 429/5xx, dropped connections."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return status == 429 or status >= 500
-    if isinstance(exc, (httpx.TransportError, TimeoutError)):
-        return True
-    return "try again" in str(exc).casefold()
-
-
 def _zip_markdown(data: bytes) -> str:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = archive.namelist()
@@ -343,16 +333,32 @@ async def _jina(client: httpx.AsyncClient, url: str, attempts: list[dict[str, An
 # ----------------------------------------------------------------------- main
 
 
+_MIN_TEXT_CHARS = 500  # shorter than this is an error page or a stub, not a paper
+
+_ORDER = {
+    "auto": ("jina", "mineru", "pdf"),
+    "jina": ("jina", "pdf"),
+    "mineru": ("mineru", "pdf"),
+    "pdf": ("pdf",),
+}
+
+
 async def download_fulltext(
     url: str,
     *,
     timeout: float = 90.0,
     backend: str | None = None,
 ) -> Fulltext:
-    """Fetch a paper's full text, recording every backend that was tried."""
+    """Fetch a paper's full text, recording every backend that was tried.
+
+    ``auto`` order: Jina Reader (retried with backoff), then MinerU (one attempt:
+    it is slow, and a retry costs minutes), then the arXiv PDF parsed locally, then
+    a direct text/plain response. ``backend`` picks the first stop (``jina``,
+    ``mineru`` or ``pdf``); the local PDF parse stays behind it as the safety net.
+    A backend that returns under ``_MIN_TEXT_CHARS`` counts as failed.
+    """
     choice = (backend or _backend()).casefold()
-    if choice not in {"auto", "mineru", "pdf", "jina"}:
-        choice = "auto"
+    order = _ORDER.get(choice, _ORDER["auto"])
     pdf_url = arxiv_pdf_url(url) or (url if _looks_like_pdf_url(url) else "")
     key = os.environ.get("MINERU_API_KEY", "").strip()
     mineru_timeout = float(os.environ.get("EVOSCIENTIST_MINERU_TIMEOUT_S", "600"))
@@ -364,61 +370,66 @@ async def download_fulltext(
         "Accept": "text/markdown,text/plain;q=0.9,application/pdf;q=0.8,*/*;q=0.1",
     }
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-        # The PDF is cheap to fetch and is the fallback for every MinerU mode.
-        pdf_bytes: bytes | None = None
-        if pdf_url:
-            started = time.monotonic()
-            try:
-                pdf_bytes = await _fetch_pdf_bytes(client, pdf_url)
-                _record(attempts, "arxiv-pdf", started, bytes=len(pdf_bytes), url=pdf_url)
-            except Exception as exc:
-                _record(attempts, "arxiv-pdf", started, error=exc, url=pdf_url)
+        pdf_cache: list[bytes | None] = []
 
-        if choice in {"auto", "mineru"} and (key or agent_api):
-            started = time.monotonic()
-            try:
-                if key:
-                    # MinerU sometimes fails a task with "please try again later" and
-                    # accepts the identical request a moment later; other failures
-                    # (bad token, unsupported file) are not worth repeating.
-                    for retry_delay in (*_MINERU_RETRY_DELAYS_S, None):
-                        try:
-                            text = await _mineru_precise(client, pdf_url or url, key, mineru_timeout)
-                            break
-                        except Exception as exc:
-                            if retry_delay is None or not _mineru_retryable(exc):
-                                raise
-                            _record(attempts, "mineru", started, error=exc, retry=True)
-                            await asyncio.sleep(retry_delay)
-                            started = time.monotonic()
-                    _record(attempts, "mineru", started, chars=len(text))
-                    return Fulltext(text=text, backend="mineru", attempts=attempts)
-                if pdf_bytes is not None:
-                    name = (pdf_url.rsplit("/", 1)[-1] or "paper.pdf").split("?")[0]
-                    text = await _mineru_agent(client, pdf_bytes, name, mineru_timeout)
-                    _record(attempts, "mineru-agent", started, chars=len(text))
-                    return Fulltext(text=text, backend="mineru-agent", attempts=attempts)
-                raise ValueError("agent API needs a downloaded PDF")
-            except Exception as exc:
-                _record(attempts, "mineru" if key else "mineru-agent", started, error=exc)
+        async def pdf_bytes() -> bytes | None:
+            """The arXiv PDF, downloaded the first time a backend needs it."""
+            if not pdf_cache:
+                data: bytes | None = None
+                if pdf_url:
+                    started = time.monotonic()
+                    try:
+                        data = await _fetch_pdf_bytes(client, pdf_url)
+                        _record(attempts, "arxiv-pdf", started, bytes=len(data), url=pdf_url)
+                    except Exception as exc:
+                        _record(attempts, "arxiv-pdf", started, error=exc, url=pdf_url)
+                pdf_cache.append(data)
+            return pdf_cache[0]
 
-        if choice in {"auto", "pdf", "mineru"} and pdf_bytes is not None:
-            started = time.monotonic()
-            try:
-                text = await asyncio.to_thread(pdf_bytes_to_text, pdf_bytes)
-                _record(attempts, "pymupdf", started, chars=len(text))
-                if text:
-                    return Fulltext(text=text, backend="pymupdf", attempts=attempts)
-                raise ValueError("local PDF parse returned no text")
-            except Exception as exc:
-                _record(attempts, "pymupdf", started, error=exc)
+        def accept(text: str, name: str, started: float) -> bool:
+            if len(text.strip()) >= _MIN_TEXT_CHARS:
+                return True
+            _record(attempts, name, started, error=f"only {len(text.strip())} chars")
+            return False
 
-        if choice in {"auto", "pdf", "mineru", "jina"}:
-            try:
-                text = await _jina(client, url, attempts)
-                return Fulltext(text=text, backend="jina", attempts=attempts)
-            except Exception:
-                pass
+        for step in order:
+            if step == "jina":
+                started = time.monotonic()
+                try:
+                    text = await _jina(client, url, attempts)
+                except Exception:
+                    continue  # _jina recorded every attempt
+                if accept(text, "jina", started):
+                    return Fulltext(text=text.strip(), backend="jina", attempts=attempts)
+            elif step == "mineru" and (key or agent_api):
+                name = "mineru" if key else "mineru-agent"
+                started = time.monotonic()
+                try:
+                    if key:
+                        text = await _mineru_precise(client, pdf_url or url, key, mineru_timeout)
+                    else:
+                        data = await pdf_bytes()
+                        if data is None:
+                            raise ValueError("agent API needs a downloaded PDF")
+                        file_name = (pdf_url.rsplit("/", 1)[-1] or "paper.pdf").split("?")[0]
+                        text = await _mineru_agent(client, data, file_name, mineru_timeout)
+                    _record(attempts, name, started, chars=len(text))
+                    if accept(text, name, started):
+                        return Fulltext(text=text.strip(), backend=name, attempts=attempts)
+                except Exception as exc:
+                    _record(attempts, name, started, error=exc)
+            elif step == "pdf":
+                data = await pdf_bytes()
+                if data is None:
+                    continue
+                started = time.monotonic()
+                try:
+                    text = await asyncio.to_thread(pdf_bytes_to_text, data)
+                    _record(attempts, "pymupdf", started, chars=len(text))
+                    if accept(text, "pymupdf", started):
+                        return Fulltext(text=text.strip(), backend="pymupdf", attempts=attempts)
+                except Exception as exc:
+                    _record(attempts, "pymupdf", started, error=exc)
 
         started = time.monotonic()
         try:
@@ -429,9 +440,8 @@ async def download_fulltext(
                 raise ValueError(f"refusing HTML response (content-type {content_type or 'unknown'})")
             text = response.text.strip()
             _record(attempts, "direct", started, chars=len(text))
-            if text:
+            if accept(text, "direct", started):
                 return Fulltext(text=text, backend="direct", attempts=attempts)
-            raise ValueError("empty response")
         except Exception as exc:
             _record(attempts, "direct", started, error=exc)
 
