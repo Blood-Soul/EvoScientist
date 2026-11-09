@@ -519,6 +519,8 @@ def test_default_middleware_includes_tool_selector(
 ):
     mock_model.return_value = _mock_model()
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = False
     cfg.auto_approve = False
     cfg.auxiliary_model = ""
@@ -560,6 +562,8 @@ def test_tool_selector_ordering(mock_config, mock_model, mock_ts, workspace):
     """ToolSelector should come after ToolErrorHandler and before Memory."""
     mock_model.return_value = _mock_model()
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = False
     cfg.auto_approve = False
     cfg.auxiliary_model = ""

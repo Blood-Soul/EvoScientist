@@ -1501,6 +1501,8 @@ def _assembly_cfg(*, auto_mode: bool):
     cfg.auto_mode = auto_mode
     cfg.auxiliary_model = ""
     cfg.auxiliary_provider = ""
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     return cfg
 
 

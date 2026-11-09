@@ -97,6 +97,8 @@ def _mock_cfg():
     cfg.model_fallbacks = None
     cfg.auxiliary_model = ""
     cfg.auxiliary_provider = ""
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     return cfg
 
 

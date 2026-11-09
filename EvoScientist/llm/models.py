@@ -762,4 +762,14 @@ def get_chat_model(
 
     apply_known_context_window(chat_model)
 
+    # Token accounting for every call anywhere in the process; a no-op unless
+    # EVOSCIENTIST_USAGE_LEDGER names a file.
+    from .usage_ledger import attach_usage_ledger
+
+    attach_usage_ledger(
+        chat_model,
+        provider=_original_provider or provider,
+        model_name=model_id,
+    )
+
     return chat_model

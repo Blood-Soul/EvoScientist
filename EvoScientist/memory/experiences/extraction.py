@@ -42,6 +42,30 @@ class ExperienceOutputError(ValueError):
     """Raised when extraction output does not match the existing prompt schema."""
 
 
+def _without_lone_surrogates(text: str) -> str:
+    """Replace UTF-16 surrogate code points, which UTF-8 cannot encode.
+
+    Paper text scraped from PDFs and model replies can carry them; handing them
+    to the chat API fails with "'utf-8' codec can't encode character ...:
+    surrogates not allowed", which loses the whole paper.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace").decode("utf-8")
+    return text
+
+
+def _clean_surrogates(value: Any) -> Any:
+    if isinstance(value, str):
+        return _without_lone_surrogates(value)
+    if isinstance(value, list):
+        return [_clean_surrogates(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _clean_surrogates(v) for k, v in value.items()}
+    return value
+
+
 _COMMON_LLM_KEYS = {
     "domain",
     "task",
@@ -486,15 +510,17 @@ def parse_experience_json(
         for item in experiences
     )
     if current:
-        return _normalize_current_payload(
-            payload,
-            level=level,
-            paper_id=canonical_id.strip(),
-            domain_arxiv=domain_arxiv,
+        return _clean_surrogates(
+            _normalize_current_payload(
+                payload,
+                level=level,
+                paper_id=canonical_id.strip(),
+                domain_arxiv=domain_arxiv,
+            )
         )
     if supplied_id is not None and supplied_id != canonical_id:
         raise ExperienceOutputError("model paper_id does not match the requested paper")
-    return payload
+    return _clean_surrogates(payload)
 
 
 async def _induce_l2_from_l1(
@@ -516,8 +542,10 @@ async def _induce_l2_from_l1(
         [
             SystemMessage(content=prompt),
             HumanMessage(
-                content=f"[paper_id] {paper_id}\n\n"
-                + json.dumps(l1_experiences, ensure_ascii=False)
+                content=_without_lone_surrogates(
+                    f"[paper_id] {paper_id}\n\n"
+                    + json.dumps(l1_experiences, ensure_ascii=False)
+                )
             ),
         ]
     )
@@ -528,6 +556,18 @@ async def _induce_l2_from_l1(
         domain_arxiv=domain_arxiv,
     )
     return result["experiences"]
+
+
+def _json_was_cut_off(exc: ExperienceOutputError) -> bool:
+    """A missing or unterminated JSON object is usually a reply cut off at the output limit."""
+    message = str(exc)
+    return "malformed JSON" in message or "did not contain a JSON object" in message
+
+
+_TRUNCATED_RETRY_HINT = (
+    "\n\n[Correction] Your previous reply stopped before the JSON object was complete. "
+    "Return the same extraction again with fewer or shorter records, so that the whole JSON fits."
+)
 
 
 async def run_experience_extraction(
@@ -546,20 +586,26 @@ async def run_experience_extraction(
 
         model = _ensure_auxiliary_chat_model()
     loaded = dict(prompts or load_experience_prompts())
+    paper_text = _without_lone_surrogates(paper_text)
 
     async def one(level: ExperienceLevel) -> dict[str, Any]:
-        response = await model.ainvoke(
-            [
-                SystemMessage(content=loaded[level]),
-                HumanMessage(content=f"[paper_id] {paper_id}\n\n{paper_text}"),
-            ]
-        )
-        return parse_experience_json(
-            format_message_content(response).strip(),
-            level=level,
-            paper_id=paper_id,
-            domain_arxiv=domain_arxiv,
-        )
+        base = f"[paper_id] {paper_id}\n\n{paper_text}"
+        note = ""
+        while True:  # at most two passes: a reply cut off at the output limit is worth one retry
+            response = await model.ainvoke(
+                [SystemMessage(content=loaded[level]), HumanMessage(content=base + note)]
+            )
+            try:
+                return parse_experience_json(
+                    format_message_content(response).strip(),
+                    level=level,
+                    paper_id=paper_id,
+                    domain_arxiv=domain_arxiv,
+                )
+            except ExperienceOutputError as exc:
+                if note or not _json_was_cut_off(exc):
+                    raise
+                note = _TRUNCATED_RETRY_HINT
 
     levels: tuple[ExperienceLevel, ...] = ("l1", "l2")
     results = await asyncio.gather(

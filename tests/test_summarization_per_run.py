@@ -522,6 +522,8 @@ def test_default_middleware_registers_subclass_exactly_once(
         profile={"max_input_tokens": CONSTRUCTION_WINDOW}
     )
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = False
     cfg.auto_approve = False
     cfg.auxiliary_model = ""
@@ -561,6 +563,8 @@ def test_deepagents_name_merge_replaces_stock_instance(
         profile={"max_input_tokens": CONSTRUCTION_WINDOW}
     )
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = False
     cfg.auto_approve = False
     cfg.auxiliary_model = ""
@@ -623,6 +627,8 @@ def test_explicit_general_purpose_spec_gets_per_run_summarization(workspace):
 def _factory_cfg_mock() -> MagicMock:
     """Config stub covering both ``_get_default_middleware`` and the factory."""
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.recursion_limit = 1_000_000
     cfg.enable_ask_user = False
     cfg.auto_mode = False
