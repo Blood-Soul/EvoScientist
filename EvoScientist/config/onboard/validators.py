@@ -106,3 +106,15 @@ def validate_deepxiv_token(api_key: str) -> tuple[bool, str]:
     if result.status == "unavailable":
         return True, result.message
     return as_pair(result)
+
+
+def validate_mineru_token(api_key: str) -> tuple[bool, str]:
+    """Accept a MinerU precise-API token without a live probe.
+
+    Every MinerU endpoint that proves a token works costs an extraction (time
+    and credits), so the wizard does not spend one. A wrong token surfaces on
+    the first paper fetch instead, where the chain falls back to the arXiv PDF.
+    """
+    if not api_key.strip():
+        return False, "empty token"
+    return True, "saved (not probed; MinerU is used when this token is set)"

@@ -205,6 +205,8 @@ class EvoScientistConfig:
         deepxiv_api_token: DeepXiv API token (optional; arXiv search/fetch
             fallback used by paper-navigator when Semantic Scholar is
             unavailable or rate-limited).
+        mineru_api_key: MinerU precise-API token (optional; preferred paper
+            full-text parser, with a local arXiv PDF as the fallback).
         provider: Default LLM provider ('anthropic', 'openai', 'google-genai', or 'nvidia').
         model: Default model name (short name or full ID).
         auxiliary_provider: Provider for auxiliary_model (empty = use main provider).
@@ -247,10 +249,14 @@ class EvoScientistConfig:
     tavily_api_key: str = ""
     # All optional — used by the paper-navigator skill's full-text fetch chain
     # (Semantic Scholar API -> arXiv/DeepXiv -> scraping fallback) and by the
-    # Jina Reader fetch used for paper full text (memory experience
-    # extraction, paper-navigator). Unset just means lower rate limits.
+    # shared full-text chain behind memory experience extraction and
+    # paper-navigator. Unset just means lower rate limits or a skipped backend.
     deepxiv_api_token: str = ""
     jina_api_key: str = ""
+    # MinerU precise-API token. When set, the full-text chain uses MinerU
+    # (layout/table/formula-aware Markdown) for every paper it can; otherwise
+    # it parses the arXiv PDF locally and keeps Jina Reader as a fallback.
+    mineru_api_key: str = ""
 
     # LLM Settings
     provider: str = "anthropic"
@@ -1050,6 +1056,7 @@ API_KEY_FIELDS: frozenset[str] = frozenset(
         "custom_anthropic_api_key",
         "tavily_api_key",
         "jina_api_key",
+        "mineru_api_key",
     }
 )
 # Paper-fetch credentials whose names do not end in ``_api_key``.
@@ -1446,6 +1453,7 @@ _ENV_MAPPINGS = {
     "tavily_api_key": "TAVILY_API_KEY",
     "deepxiv_api_token": "DEEPXIV_API_TOKEN",
     "jina_api_key": "JINA_API_KEY",
+    "mineru_api_key": "MINERU_API_KEY",
     "default_mode": "EVOSCIENTIST_DEFAULT_MODE",
     "default_workdir": "EVOSCIENTIST_WORKSPACE_DIR",
     "ui_backend": "EVOSCIENTIST_UI_BACKEND",
@@ -1883,6 +1891,8 @@ def _apply_config_to_env(config: EvoScientistConfig) -> None:
         os.environ["DEEPXIV_API_TOKEN"] = config.deepxiv_api_token
     if config.jina_api_key and not os.environ.get("JINA_API_KEY"):
         os.environ["JINA_API_KEY"] = config.jina_api_key
+    if config.mineru_api_key and not os.environ.get("MINERU_API_KEY"):
+        os.environ["MINERU_API_KEY"] = config.mineru_api_key
     if config.reasoning_effort and not os.environ.get("EVOSCIENTIST_REASONING_EFFORT"):
         os.environ["EVOSCIENTIST_REASONING_EFFORT"] = config.reasoning_effort
     if config.max_tokens > 0 and not os.environ.get("EVOSCIENTIST_MAX_TOKENS"):

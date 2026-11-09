@@ -1923,6 +1923,7 @@ class TestRunOnboard:
                 "",  # Tavily key (keep current)
                 "",  # DeepXiv token (keep current)
                 "",  # Jina Reader key (keep current)
+                "",  # MinerU token (keep current)
             ]
             mock_q.confirm.return_value.ask.side_effect = [
                 True,  # Save config
@@ -1983,6 +1984,7 @@ class TestRunOnboard:
                 "",  # Tavily key (keep current)
                 "",  # DeepXiv token (keep current)
                 "",  # Jina Reader key (keep current)
+                "",  # MinerU token (keep current)
             ]
             mock_q.confirm.return_value.ask.side_effect = [
                 True,  # Save config

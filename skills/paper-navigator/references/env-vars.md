@@ -8,7 +8,8 @@ Full reference for environment variables consumed by paper-navigator scripts. Th
 |----------|-------------|-------|
 | `S2_API_KEY` | All S2 scripts (recommended) | [Request here](https://www.semanticscholar.org/product/api#api-key). Without it: `scholar_search` falls back to arXiv (via DeepXiv); `citation_traverse` / `recommend` / `snippet_search` are disabled. |
 | `DEEPXIV_API_TOKEN` | `arxiv_monitor`, `scholar_search` fallback | Token for the [DeepXiv SDK](https://github.com/qhjqhj00/deepxiv_sdk) (`pip install deepxiv-sdk`), which replaces the rate-limited arXiv API. Get a **free** token with `deepxiv token` (auto-registers, saves to `~/.env`) or at <https://data.rag.ac.cn/register>; ~10,000 req/day. The skill reads it from the environment, then `./.env` / `~/.env` (key-scoped — it does not load the whole file). Also read from `DEEPXIV_TOKEN`. |
-| `JINA_API_KEY` | `fetch_paper` | Free tier works without key |
+| `MINERU_API_KEY` | `fetch_paper` (full text) | Optional. Token for the [MinerU](https://mineru.net) precise API. When set, full text comes from MinerU's layout/table/formula-aware Markdown; otherwise the arXiv PDF is parsed locally (pymupdf4llm) and Jina Reader is only a fallback. |
+| `JINA_API_KEY` | `fetch_paper` (fallback) | Only used when neither MinerU nor the local PDF parse works; free tier works without key |
 | `GITHUB_TOKEN` | `github_search`, `find_code` | Higher rate limits |
 | `HF_TOKEN` | `find_code`, `dataset_search`, `sota` | Higher rate limits |
 | `UNPAYWALL_EMAIL` | `fetch_paper` (optional) | Email for the Unpaywall API. Default: `paper-navigator@users.noreply.github.com` |

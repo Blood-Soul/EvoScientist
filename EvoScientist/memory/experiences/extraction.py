@@ -11,11 +11,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
 from ..types import ExperienceLevel
+from .fulltext import FulltextError, download_fulltext
 from .taxonomy import DISCIPLINES, normalize_discipline
 
 # Matches a References/Bibliography heading line on its own (optionally numbered,
@@ -298,99 +298,25 @@ def load_experience_prompts() -> dict[str, str]:
     raise FileNotFoundError(f"Experience prompts not found; searched: {searched}")
 
 
-_JINA_RETRY_DELAYS_S = (2.0, 5.0)  # 3 attempts total
+async def download_paper_text(url: str, *, timeout: float = 90.0) -> str:
+    """Download a paper's full text through the shared acquisition chain.
 
-_ARXIV_ID_RE = re.compile(
-    r"arxiv\.org/(?:abs|pdf)/([^?#\s]+?)(?:\.pdf)?(?:[?#].*)?$", re.IGNORECASE
-)
-
-
-def _arxiv_pdf_url(url: str) -> str:
-    """Return the arXiv PDF URL for an arxiv.org abs/pdf URL, else ''."""
-    match = _ARXIV_ID_RE.search(url)
-    return f"https://arxiv.org/pdf/{match.group(1)}" if match else ""
-
-
-def _pdf_bytes_to_text(data: bytes) -> str:
-    """Extract plain text from PDF bytes with pypdf (raises ImportError if absent)."""
-    import io
-
-    from pypdf import PdfReader
-
-    pages = [(p.extract_text() or "").strip() for p in PdfReader(io.BytesIO(data)).pages]
-    return "\n\n".join(t for t in pages if t)
-
-
-async def _download_arxiv_pdf_text(client: httpx.AsyncClient, pdf_url: str) -> str:
-    """Fetch an arXiv PDF and extract its text locally; '' when that is not possible.
-
-    Used only after Jina Reader failed, so environments that cannot reach Jina
-    (offline sandboxes that allow arxiv.org only) still get the paper body.
+    Backend order lives in `fulltext.py`: MinerU when `MINERU_API_KEY` is set,
+    then the arXiv PDF parsed locally (pymupdf4llm, pymupdf, pypdf), then Jina
+    Reader, then a direct text/plain or text/markdown response. Every attempt
+    is named in the exception, so a failed fallback is not hidden behind the
+    first error the way the Jina-first version hid it.
     """
     try:
-        response = await client.get(pdf_url)
-        response.raise_for_status()
-        return (await asyncio.to_thread(_pdf_bytes_to_text, response.content)).strip()
-    except Exception:  # noqa: BLE001 - any failure falls back to the direct fetch
-        return ""
-
-
-async def download_paper_text(url: str, *, timeout: float = 90.0) -> str:
-    """Download full text through Jina Reader, with a direct-text fallback.
-
-    Jina failures are retried with backoff before falling back to a direct
-    request against the original URL: for arXiv sources that fallback hits
-    arxiv.org directly, and arXiv's courtesy rate limit (1 req/3s) means a
-    single transient Jina blip (429/5xx) should not immediately shift traffic
-    onto arxiv.org under high-frequency queue draining.
-    """
-    headers = {
-        "User-Agent": "EvoScientist/0.2 paper-experience-worker",
-        "Accept": "text/markdown,text/plain;q=0.9,*/*;q=0.1",
-    }
-    jina_key = os.environ.get("JINA_API_KEY", "").strip()
-    jina_headers = {
-        **headers,
-        **({"Authorization": f"Bearer {jina_key}"} if jina_key else {}),
-    }
-    async with httpx.AsyncClient(
-        timeout=timeout, follow_redirects=True, headers=headers
-    ) as client:
-        reader_url = (
-            url if url.startswith("https://r.jina.ai/") else f"https://r.jina.ai/{url}"
-        )
-        reader_error: httpx.HTTPError | None = None
-        text = ""
-        for delay in (*_JINA_RETRY_DELAYS_S, None):
-            try:
-                reader = await client.get(reader_url, headers=jina_headers)
-                reader.raise_for_status()
-                text = reader.text.strip()
-                reader_error = None
-                break
-            except httpx.HTTPError as exc:
-                reader_error = exc
-                status = (
-                    exc.response.status_code
-                    if isinstance(exc, httpx.HTTPStatusError)
-                    else None
-                )
-                retryable = status is None or status == 429 or status >= 500
-                if not retryable or delay is None:
-                    break
-                await asyncio.sleep(delay)
-        if reader_error is not None:
-            pdf_url = _arxiv_pdf_url(url)
-            text = await _download_arxiv_pdf_text(client, pdf_url) if pdf_url else ""
-        if reader_error is not None and not text:
-            response = await client.get(url)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "").casefold()
-            if "text/plain" not in content_type and "text/markdown" not in content_type:
-                raise reader_error
-            text = response.text.strip()
+        result = await download_fulltext(url, timeout=timeout)
+    except FulltextError as exc:
+        raise RuntimeError(str(exc)) from exc
+    text = result.text.strip()
     if len(text) < 500:
-        raise ValueError("Downloaded paper full text is unexpectedly short")
+        raise ValueError(
+            "Downloaded paper full text is unexpectedly short "
+            f"({len(text)} chars via {result.backend})"
+        )
     return _strip_references_section(text)
 
 

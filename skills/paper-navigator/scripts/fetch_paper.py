@@ -16,17 +16,16 @@ import re
 import sys
 
 import httpx
-
 from utils import (
-    S2_BASE,
     JINA_PREFIX,
-    s2_headers,
-    jina_headers,
-    request_with_retry,
-    normalize_paper_id,
-    metadata_without_s2,
-    s2_configured,
+    S2_BASE,
     _strip_arxiv_version,
+    jina_headers,
+    metadata_without_s2,
+    normalize_paper_id,
+    request_with_retry,
+    s2_configured,
+    s2_headers,
 )
 
 
@@ -165,12 +164,72 @@ def fetch_arxiv_pdf_text(url: str) -> str:
     return "\n\n".join(t for t in pages if t)
 
 
-def fetch_via_jina(url: str, limit_chars: int = 50000) -> str:
-    """Fetch URL content as Markdown via Jina Reader.
+def _load_shared_fulltext():
+    """Load ``EvoScientist/memory/experiences/fulltext.py`` by path, else None.
 
-    If Jina cannot be reached and the URL is on arxiv.org, the PDF is
-    downloaded and its text extracted locally instead.
+    Loaded by file path rather than imported as a package because the skill
+    runs in the case's own interpreter, which may not have EvoScientist
+    installed. The module is deliberately leaf-only (its sole dependency is
+    httpx), so this stays safe.
     """
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "EvoScientist"
+        / "memory"
+        / "experiences"
+        / "fulltext.py"
+    )
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("evoscientist_fulltext", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    # Register before executing: dataclasses resolve ``cls.__module__`` through
+    # sys.modules, and a module absent from it makes the decorator crash.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        sys.modules.pop(spec.name, None)
+        print(
+            f"*Shared full-text module unavailable ({exc}); "
+            "falling back to the legacy Jina path*",
+            file=sys.stderr,
+        )
+        return None
+    return module
+
+
+def fetch_via_jina(url: str, limit_chars: int = 50000) -> str:
+    """Fetch URL content as Markdown through the shared full-text chain.
+
+    The chain is the same one the paper-experience worker uses: MinerU when
+    ``MINERU_API_KEY`` is configured, then the arXiv PDF parsed locally
+    (pymupdf4llm -> pymupdf -> pypdf), then Jina Reader, then a direct
+    ``text/markdown``/``text/plain`` response. Raw HTML is never returned.
+
+    The legacy Jina-then-pypdf path below is kept only for installs where the
+    shared module cannot be found (e.g. a standalone copy of this skill).
+    """
+    shared = _load_shared_fulltext()
+    if shared is not None:
+        try:
+            result = shared.download_fulltext_sync(url)
+        except Exception as exc:  # FulltextError names every backend it tried
+            raise RuntimeError(f"full-text chain failed: {exc}") from exc
+        text = _strip_boilerplate(result.text)
+        print(f"*Full text via {result.backend}*", file=sys.stderr)
+        if len(text) > limit_chars:
+            text = (
+                text[:limit_chars]
+                + f"\n\n---\n*[Truncated at {limit_chars} characters]*"
+            )
+        return text
+
     jina_url = f"{JINA_PREFIX}{url}"
     has_fallback = bool(_arxiv_pdf_url(url))
 

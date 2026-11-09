@@ -40,6 +40,11 @@ dependencies = [
     "langgraph-sdk>=0.4",
     "langgraph-checkpoint-sqlite>=3.0",
     "httpx>=0.28",
+    # Full-text acquisition: layout-aware PDF -> Markdown, plus a last-resort
+    # plain-text extractor. All three are pure-Python/wheel installs (no GPU).
+    "pymupdf4llm>=0.0.17",
+    "pymupdf>=1.24",
+    "pypdf>=6.0",
     "psutil>=6.0",
     "filelock>=3.16",
     # WebUI setup stage: the supported WebUI version range

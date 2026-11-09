@@ -49,7 +49,8 @@ arXiv access (`arxiv_monitor`, `scholar_search` fallback) uses the DeepXiv SDK: 
 |---|---|---|
 | `S2_API_KEY` | All S2 scripts | Without it (the normal case here): `scholar_search` falls back to arXiv (via DeepXiv) at once; `fetch_paper` / `download_paper` take an arXiv ID, a DOI or a URL and go straight to arXiv / Unpaywall; `citation_traverse`, `recommend`, `snippet_search`, `author_search`, `trending`, `match_paper_by_title` and `literature_report` need S2: they exit at once with code 3 and one line, do not retry them |
 | `DEEPXIV_API_TOKEN` | `arxiv_monitor`, `scholar_search` fallback | Get a free token: `deepxiv token` (writes `~/.env`). Also read from `DEEPXIV_TOKEN` and `./.env`/`~/.env`. ~10,000 req/day |
-| `JINA_API_KEY` | `fetch_paper` | Free tier works without key |
+| `MINERU_API_KEY` | `fetch_paper` full text | Optional MinerU precise-API token; when set, full text is MinerU Markdown, else the arXiv PDF is parsed locally and Jina is the fallback |
+| `JINA_API_KEY` | `fetch_paper` fallback | Used only when MinerU and the local PDF parse both fail |
 | `GITHUB_TOKEN` | `github_search`, `find_code` | Higher rate limits |
 | `PAPER_NAV_PAPERS_DIR` | `fetch_paper` full text | No default — set or pass `--metadata-only` |
 

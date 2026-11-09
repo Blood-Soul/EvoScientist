@@ -45,6 +45,7 @@ from .style import (
 from .validators import (
     validate_deepxiv_token,
     validate_jina_key,
+    validate_mineru_token,
     validate_tavily_key,
 )
 
@@ -1098,6 +1099,39 @@ def _step_jina_key(
         skip_validation,
         placeholder=FormattedText(
             [("fg:#858585", " (optional, free tier works without a key)")]
+        ),
+    )
+
+
+def _step_mineru_key(
+    config: EvoScientistConfig,
+    skip_validation: bool = False,
+) -> str | None:
+    """Step: Enter a MinerU API token, the preferred paper full-text parser.
+
+    With a token set, the shared full-text chain sends the paper to MinerU's
+    precise API first; without one it reads the arXiv PDF locally and only then
+    falls back to Jina. Optional.
+
+    Args:
+        config: Current configuration.
+        skip_validation: Skip the (offline, no-probe) check.
+
+    Returns:
+        New token or None if unchanged.
+    """
+    current = config.mineru_api_key or os.environ.get("MINERU_API_KEY", "")
+
+    hint = f"Current: ***{current[-4:]}" if current else "Not set"
+    prompt_text = f"MinerU API token for paper parsing ({hint}, Enter to keep):"
+
+    return _prompt_and_validate_api_key(
+        prompt_text,
+        current,
+        validate_mineru_token,
+        skip_validation,
+        placeholder=FormattedText(
+            [("fg:#858585", " (optional, preferred full-text parser)")]
         ),
     )
 

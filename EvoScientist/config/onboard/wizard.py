@@ -36,6 +36,7 @@ from .steps import (
     _step_jina_key,
     _step_langgraph_dev_port,
     _step_mcp_servers,
+    _step_mineru_key,
     _step_minimax_region,
     _step_model,
     _step_ollama_base_url,
@@ -398,6 +399,7 @@ _FLAG_TO_SECTIONS: dict[str, frozenset[str]] = {
     "tavily_key": frozenset({"tavily"}),
     "deepxiv_token": frozenset({"paper_apis"}),
     "jina_key": frozenset({"paper_apis"}),
+    "mineru_key": frozenset({"paper_apis"}),
     "workspace_mode": frozenset({"workspace"}),
     "show_thinking": frozenset({"thinking"}),
 }
@@ -979,6 +981,35 @@ def _run_onboard(
                         config.jina_api_key = new_jina_key
                     elif not config.jina_api_key:
                         _print_step_skipped("Jina Reader Key", "not set")
+
+                preset_mineru = _preset("mineru_key")
+                if preset_mineru is not None:
+                    if not skip_validation:
+                        from .validators import validate_mineru_token
+
+                        valid, msg = validate_mineru_token(preset_mineru)
+                        if not valid:
+                            raise RuntimeError(
+                                f"--mineru-key rejected: {msg}. "
+                                "Pass --skip-validation to override."
+                            )
+                        console.print(f"  [green]✓ {msg}[/green]      ")
+                    config.mineru_api_key = preset_mineru
+                    console.print(
+                        f"  [green]✓ MinerU token: ***{preset_mineru[-4:]}[/green]"
+                        "   [dim](--mineru-key)[/dim]"
+                    )
+                elif strict:
+                    if config.mineru_api_key:
+                        _print_step_skipped("MinerU Token", "kept current")
+                    else:
+                        _print_step_skipped("MinerU Token", "not set")
+                else:
+                    new_mineru_key = _step_mineru_key(config, skip_validation)
+                    if new_mineru_key is not None:
+                        config.mineru_api_key = new_mineru_key
+                    elif not config.mineru_api_key:
+                        _print_step_skipped("MinerU Token", "not set")
                 _autosave(config)
 
             if "workspace" in sections_to_run:

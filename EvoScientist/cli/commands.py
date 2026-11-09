@@ -192,6 +192,9 @@ def onboard(
     jina_key: str | None = typer.Option(
         None, "--jina-key", help="Pre-set Jina Reader API key (optional)"
     ),
+    mineru_key: str | None = typer.Option(
+        None, "--mineru-key", help="Pre-set MinerU API token (optional)"
+    ),
     workspace_mode: str | None = typer.Option(
         None,
         "--workspace-mode",
@@ -286,6 +289,8 @@ def onboard(
         answers["deepxiv_token"] = deepxiv_token
     if jina_key is not None:
         answers["jina_key"] = jina_key
+    if mineru_key is not None:
+        answers["mineru_key"] = mineru_key
     if workspace_mode is not None:
         answers["workspace_mode"] = workspace_mode
     if show_thinking is not None:
