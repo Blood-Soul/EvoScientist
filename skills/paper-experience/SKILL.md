@@ -1,6 +1,6 @@
 ---
 name: paper-experience
-description: "Actively extract and save reusable L1 practical and L2 inductive experiences from a specified academic paper or a small, deliberately selected set of papers on a topic. Use when the user explicitly asks to extract, learn, distill, or retain research experience from papers. Do not use for ordinary literature discovery, paper summaries, or related-work writing."
+description: "Actively extract and save reusable experiences (practices a paper tested, with what they were compared against) from a specified academic paper or a small, deliberately selected set of papers on a topic. Use when the user explicitly asks to extract, learn, distill, or retain research experience from papers. Do not use for ordinary literature discovery, paper summaries, or related-work writing."
 allowed-tools: "read_file think_tool execute extract_paper_experiences search_observations read_memory"
 metadata:
   author: EvoScientist
@@ -12,7 +12,7 @@ metadata:
 
 Turn explicit paper-learning requests into reusable project memory and an
 immediate answer. This is the foreground counterpart to paper-navigator's
-automatic background accumulation; both paths use the same L1/L2 prompts and
+automatic background accumulation; both paths use the same extraction prompt and
 the same project-isolated experience store.
 
 ## Resolve the papers
@@ -33,8 +33,9 @@ the same project-isolated experience store.
 ## Extract and persist
 
 Call `extract_paper_experiences` once with the final paper set. It downloads the
-paper bodies, runs L1 and L2 extraction, saves successful results in the active
-project's experience store, and returns the complete payloads. Existing stored
+paper bodies, extracts the experiences, saves successful results in the active
+project's experience store, and returns one line per extracted record (use
+`read_memory` on a record id for the full text). Existing stored
 results are reused unless the user explicitly asks to refresh or re-extract.
 
 Batch failures are per-paper: continue with successful papers and identify each
@@ -44,11 +45,10 @@ failed paper and its actual error. Do not invent a replacement extraction.
 
 The experience, not a paper summary, is the deliverable.
 
-- For every successful paper, present all returned L1 practical experiences and
-  L2 inductive experiences. Preserve each entry's `statement`, applicability
-  conditions, action/effect, L1 `practice_trace`, L2 `rationale`, and source
-  `evidence`.
-- Keep source quotes verbatim. Translate surrounding prose when the user writes
+- For every successful paper, present the returned experiences: for each, the task, what to do, what it was
+  compared against and the benefit and cost, with whether the comparison was controlled. Read a record in full with
+  `read_memory` when its detail is needed.
+- Translate surrounding prose when the user writes
   in another language, without changing technical names, numbers, datasets, or
   metrics.
 - State briefly that the records were saved to project memory, or that stored

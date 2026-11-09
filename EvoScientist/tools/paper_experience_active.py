@@ -201,7 +201,7 @@ def create_extract_paper_experiences_tool(
                     "cached": False,
                     "full_text_available": stored is not None,
                     "l1": payloads["l1"],
-                    "l2": payloads["l2"],
+                    "l2": payloads.get("l2", {"experiences": []}),
                 }
 
         results = await asyncio.gather(
@@ -228,7 +228,7 @@ def create_extract_paper_experiences_tool(
         name="extract_paper_experiences",
         description=(
             "Immediately download one to ten explicitly selected papers, extract "
-            "their L1 practical and L2 inductive experiences, persist them (and "
+            "the experiences the paper tested, persist them (and "
             "each paper's full text, for later `search_paper_text`) in the active "
             "project's store, and return the full payloads. Cached papers whose "
             "full text was not previously stored will have it fetched and saved, "

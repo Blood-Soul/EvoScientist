@@ -273,7 +273,25 @@ def _prompt_dir_candidates() -> list[Path]:
     return candidates
 
 
+V2_PROMPT_FILENAME = "experience_extract_v2.md"
+_V2_MAX_PAPER_CHARS = 200_000
+
+
 def load_experience_prompts() -> dict[str, str]:
+    """Load the extraction prompt: one comparison-centred level, kept under the key ``l1``.
+
+    A prompts mapping without an ``l2`` entry selects the single-level extraction in
+    `run_experience_extraction`; the older L1/L2 pair is `load_legacy_experience_prompts`.
+    """
+    for directory in _prompt_dir_candidates():
+        path = directory / V2_PROMPT_FILENAME
+        if path.is_file():
+            return {"l1": path.read_text(encoding="utf-8")}
+    searched = ", ".join(str(path) for path in _prompt_dir_candidates())
+    raise FileNotFoundError(f"Experience prompt {V2_PROMPT_FILENAME} not found; searched: {searched}")
+
+
+def load_legacy_experience_prompts() -> dict[str, str]:
     """Load the existing L1/L2 prompts without changing their schemas.
 
     Also loads the L1->L2 induction prompt under `INDUCTION_PROMPT_KEY` when a
@@ -496,6 +514,134 @@ _TRUNCATED_RETRY_HINT = (
 )
 
 
+# ---------------------------------------------------------------- single-level records
+
+_V2_KEYS = (
+    "domain", "task", "problem", "method", "requires", "source_setting", "limits_stated",
+    "action", "effect", "comparison", "locator",
+)
+_V2_COMPARISONS = {"controlled", "vs_baseline", "absolute_only"}
+_V2_PARAM_BASES = {"swept", "derived", "prior_work", "default", "unstated"}
+_V2_REQUIRES_BASES = {"stated", "inferred"}
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _collapse_numbers(text: str) -> str:
+    """One spelling for numbers in a PDF conversion: '0 .2' -> '0.2', '36,000' -> '36000'."""
+    text = re.sub(r"(\d)\s*\.\s*(\d)", r"\1.\2", text)
+    return re.sub(r"(\d),(\d{3})(?!\d)", r"\1\2", text)
+
+
+def _ungrounded_share(record: Mapping[str, Any], paper_text: str) -> tuple[int, int]:
+    """(numbers in the record's effect and params that the paper never writes, numbers checked)."""
+    claimed = json.dumps([record.get("effect"), (record.get("source_setting") or {}).get("params")], ensure_ascii=False)
+    wanted = {n for n in _NUMBER_RE.findall(_collapse_numbers(claimed)) if "." in n or len(n) >= 2}
+    if not wanted:
+        return 0, 0
+    have = set(_NUMBER_RE.findall(_collapse_numbers(paper_text)))
+    return len(wanted - have), len(wanted)
+
+
+def _validate_v2_record(item: Mapping[str, Any]) -> None:
+    missing = [k for k in _V2_KEYS if k not in item]
+    if missing:
+        raise ExperienceOutputError(f"record keys missing: {missing}")
+    for key in ("domain", "task", "problem", "action", "locator"):
+        if not isinstance(item[key], str) or not item[key].strip():
+            raise ExperienceOutputError(f"{key} must be a non-empty string")
+    method = item["method"]
+    if not isinstance(method, list) or not method or not all(isinstance(m, str) and m.strip() for m in method):
+        raise ExperienceOutputError("method must be a non-empty list of strings")
+    if item["comparison"] not in _V2_COMPARISONS:
+        raise ExperienceOutputError(f"comparison {item['comparison']!r} is not one of {sorted(_V2_COMPARISONS)}")
+    effect = item["effect"]
+    if not isinstance(effect, Mapping) or not str(effect.get("compared") or "").strip():
+        raise ExperienceOutputError("effect.compared is required")
+    for req in item["requires"] if isinstance(item["requires"], list) else [None]:
+        if not isinstance(req, Mapping) or req.get("basis") not in _V2_REQUIRES_BASES or not str(req.get("text") or "").strip():
+            raise ExperienceOutputError("requires entries need text and a basis of stated or inferred")
+    setting = item["source_setting"]
+    if not isinstance(setting, Mapping) or not isinstance(setting.get("environment"), list) or not isinstance(setting.get("params"), list):
+        raise ExperienceOutputError("source_setting needs environment and params lists")
+    for param in setting["params"]:
+        if not isinstance(param, Mapping) or param.get("basis") not in _V2_PARAM_BASES or not str(param.get("name") or "").strip():
+            raise ExperienceOutputError("params entries need a name and a basis from the allowed set")
+    if not isinstance(item["limits_stated"], list):
+        raise ExperienceOutputError("limits_stated must be a list")
+
+
+def parse_experience_v2(
+    raw_output: str,
+    *,
+    paper_id: str,
+    paper_text: str = "",
+    domain_arxiv: str | None = None,
+) -> dict[str, Any]:
+    """Parse the single-level extraction reply into the payload that is stored.
+
+    Records that break the shape, or whose numbers mostly never occur in the paper, are dropped one by one so a
+    single bad record does not cost the paper; if the reply held records and none survived, that is an error and the
+    caller retries.
+    """
+    candidate = raw_output.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", candidate, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        candidate = fenced.group(1).strip()
+    start = candidate.find("{")
+    if start < 0:
+        raise ExperienceOutputError("extraction did not contain a JSON object")
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(candidate[start:])
+    except json.JSONDecodeError as exc:
+        raise ExperienceOutputError(f"extraction returned malformed JSON: {exc.msg}") from exc
+    rows = payload.get("experiences") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ExperienceOutputError("output must contain an 'experiences' list")
+    kept: list[dict[str, Any]] = []
+    first_error: ExperienceOutputError | None = None
+    for row in rows:
+        try:
+            if not isinstance(row, dict):
+                raise ExperienceOutputError("record is not an object")
+            row.setdefault("limits_stated", [])
+            _validate_v2_record(row)
+            if paper_text:
+                bad, total = _ungrounded_share(row, paper_text)
+                if total >= 3 and bad / total > 0.5:
+                    raise ExperienceOutputError(f"{bad} of {total} numbers never occur in the paper")
+        except ExperienceOutputError as exc:
+            first_error = first_error or exc
+            continue
+        row["layer"] = "l1"
+        kept.append(row)
+    if rows and not kept:
+        raise ExperienceOutputError(f"no record survived validation: {first_error}")
+    return _clean_surrogates({"paper_id": paper_id, "domain_arxiv": domain_arxiv, "experiences": kept})
+
+
+async def _run_single_level_extraction(
+    *, paper_id: str, paper_text: str, prompt: str, model: Any, domain_arxiv: str | None
+) -> dict[str, dict[str, Any]]:
+    text = _without_lone_surrogates(paper_text)[:_V2_MAX_PAPER_CHARS]
+    base = f"[paper_id] {paper_id}\n\n{text}"
+    note = ""
+    last: Exception | None = None
+    for _attempt in range(3):
+        response = await model.ainvoke([SystemMessage(content=prompt), HumanMessage(content=base + note)])
+        try:
+            payload = parse_experience_v2(
+                format_message_content(response).strip(), paper_id=paper_id, paper_text=text, domain_arxiv=domain_arxiv
+            )
+            return {"l1": payload}
+        except ExperienceOutputError as exc:
+            last = exc
+            note = _TRUNCATED_RETRY_HINT if _json_was_cut_off(exc) else (
+                f"\n\n[Correction] Your previous reply was rejected: {exc}. Return the extraction again in the exact shape given."
+            )
+    raise ExperienceOutputError(f"Experience extraction failed: {last}")
+
+
+
 async def run_experience_extraction(
     *,
     paper_id: str,
@@ -512,6 +658,10 @@ async def run_experience_extraction(
 
         model = _ensure_auxiliary_chat_model()
     loaded = dict(prompts or load_experience_prompts())
+    if "l2" not in loaded:
+        return await _run_single_level_extraction(
+            paper_id=paper_id, paper_text=paper_text, prompt=loaded["l1"], model=model, domain_arxiv=domain_arxiv
+        )
     paper_text = _without_lone_surrogates(paper_text)
 
     async def one(level: ExperienceLevel) -> dict[str, Any]:

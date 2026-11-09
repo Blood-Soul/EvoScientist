@@ -189,12 +189,14 @@ def store_paper_experiences(
     payloads: Mapping[ExperienceLevel, Mapping[str, Any]],
     domain_arxiv: str | None = None,
 ) -> Path:
-    """Atomically persist prompt-compatible L1 and L2 JSON payloads."""
+    """Atomically persist the extraction payloads: one level (current) or the older L1 and L2 pair."""
     directory = _paper_dir(
         memory_dir, project_id=project_id, paper_id=paper_id, url=url
     )
     now = datetime.now(UTC).isoformat()
-    for level in ("l1", "l2"):
+    levels = tuple(level for level in ("l1", "l2") if level in payloads)
+    single_level = levels == ("l1",)
+    for level in levels:
         atomic_write_json(directory / f"{level}.json", payloads[level])
         # The parse cache validates on (mtime_ns, size). A re-extraction that
         # lands in the same nanosecond tick and produces the same byte count
@@ -213,7 +215,8 @@ def store_paper_experiences(
             "url": url,
             "domain_arxiv": domain_arxiv,
             "paper_sha256": _sha256(paper_text),
-            "prompt_sha256": {level: _sha256(prompts[level]) for level in ("l1", "l2")},
+            "prompt_sha256": {level: _sha256(prompts[level]) for level in levels},
+            "extraction_schema": "v2" if single_level else "v1",
             "confidence_policy": "single_paper_evidence_v1",
             "supporting_papers": [canonical_paper_identifier(paper_id or url)],
             "contradicting_papers": [],
@@ -234,14 +237,15 @@ def load_paper_experiences(
     metadata = read_json(directory / "metadata.json")
     l1 = read_json(directory / "l1.json")
     l2 = read_json(directory / "l2.json")
+    single_level = metadata is not None and metadata.get("extraction_schema") == "v2"
     if (
         metadata is None
         or metadata.get("project_id") != project_id
         or l1 is None
-        or l2 is None
+        or (l2 is None and not single_level)
     ):
         return None
-    return {"metadata": metadata, "l1": l1, "l2": l2}
+    return {"metadata": metadata, "l1": l1, "l2": l2 if l2 is not None else {"experiences": []}}
 
 
 def _has_full_text(root: Path, *, project_id: str, paper_key: str) -> bool:
