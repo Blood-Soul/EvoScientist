@@ -69,6 +69,15 @@ def plan_queries(plan: str, limit: int = 6) -> list[str]:
     return uniq[:limit]
 
 
+def record_sizes(candidates: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """For the trace: how big each shown record is and whether the reviewer got it cut short."""
+    out = []
+    for c in candidates:
+        n = len(json.dumps(c["record"], ensure_ascii=False, indent=1, sort_keys=True))
+        out.append({"id": c["id"], "chars": n, "truncated": n > MAX_RECORD_CHARS})
+    return out
+
+
 def _render_records(candidates: Sequence[dict[str, Any]]) -> str:
     blocks = []
     for c in candidates:
@@ -170,7 +179,7 @@ async def review_plan(
     try:
         review = parse_review(raw, allowed, max_suggestions)
     except ValueError as error:
-        await emit_trace_async(memory_dir, "plan_review", call_id=call_id, ok=False, error=str(error), raw_output=raw[:2000],
+        await emit_trace_async(memory_dir, "plan_review", call_id=call_id, ok=False, error=str(error), raw_output=raw, prompt_chars=len(filled),
                                seconds=round(time.monotonic() - started, 2))
         return {"status": "unreadable", "suggestions": [], "queries": queries,
                 "text": f"Plan review: the reviewer's output could not be read ({error})."}
@@ -181,6 +190,8 @@ async def review_plan(
             titles[c["id"]] = " ".join(str(paper["title"]).split())[:70]
     text = render_review(review, titles)
     await emit_trace_async(memory_dir, "plan_review", call_id=call_id, ok=True, queries=queries, shown=[c["id"] for c in shown],
+                           shown_sizes=record_sizes(shown), found=len(found), prompt_chars=len(filled),
+                           plan_chars=len(plan), task_chars=len(task), raw_output=raw,
                            suggestions=review["suggestions"], dropped_without_source=review["dropped_without_source"],
                            seconds=round(time.monotonic() - started, 2), usage=response_usage(response))
     return {"status": "ok", "queries": queries, "shown": [c["id"] for c in shown], "text": text, **review}

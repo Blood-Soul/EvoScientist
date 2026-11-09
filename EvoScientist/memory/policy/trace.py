@@ -53,6 +53,16 @@ def response_usage(response: Any) -> dict[str, Any] | None:
     return dict(usage) if isinstance(usage, dict) else None
 
 
+def emit_tool_output(memory_dir: str | Path, tool: str, args: Any, output: str, **fields: Any) -> None:
+    """Record what an experience tool returned to the agent, untruncated.
+
+    The event stream shortens every tool result to about 2000 characters, so after a run
+    nobody can say what the agent actually read. This writes the whole string next to the
+    trace, as a ``tool_output`` event with its length. Same switch, same file, best effort.
+    """
+    emit_trace(memory_dir, "tool_output", tool=tool, args=args, chars=len(output), output=output, **fields)
+
+
 def emit_trace(memory_dir: str | Path, event: str, **fields: Any) -> None:
     """Append one JSON line describing ``event``, if tracing is enabled."""
     if not trace_enabled():
@@ -84,6 +94,7 @@ async def emit_trace_async(memory_dir: str | Path, event: str, **fields: Any) ->
 
 
 __all__ = [
+    "emit_tool_output",
     "emit_trace",
     "emit_trace_async",
     "response_usage",

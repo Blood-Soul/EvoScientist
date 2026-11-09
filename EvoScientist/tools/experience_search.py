@@ -33,6 +33,7 @@ from ..memory.experiences.retrieval import (
     search_experience_records,
 )
 from ..memory.experiences.taxonomy import DISCIPLINES
+from ..memory.policy.trace import emit_tool_output
 from ..memory.runtime_context import runtime_project_id
 from ..memory.types import ExperienceLevel
 
@@ -222,7 +223,10 @@ def create_search_experience_tool(
                 "`topic` names a research subject rather than a step in your "
                 "own workflow."
             )
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        emit_tool_output(memory_dir, "search_experience", {"topic": topic, "method": method, "task": task,
+                         "discipline": discipline, "domain": domain, "level": level, "limit": limit}, text)
+        return text
 
     return StructuredTool.from_function(
         func=_search_experience,
@@ -278,7 +282,9 @@ def create_list_experience_tool(
             limit=limit,
             offset=offset,
         )
-        return json.dumps(result, ensure_ascii=False, sort_keys=True)
+        text = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        emit_tool_output(memory_dir, "list_experience", {"facet": facet, "limit": limit}, text)
+        return text
 
     return StructuredTool.from_function(
         func=_list_experience,

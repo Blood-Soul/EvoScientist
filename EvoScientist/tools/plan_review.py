@@ -58,6 +58,9 @@ def create_review_plan_tool(
         except Exception as error:  # a review is an aid; its failure must not block the plan
             return json.dumps({"status": "error", "error": str(error),
                                "hint": "The review failed. Finish the plan without it."})
+        from ..memory.policy.trace import emit_tool_output
+
+        emit_tool_output(memory_dir, "review_plan", {"path": path}, result["text"], status=result.get("status"))
         return result["text"]
 
     return StructuredTool.from_function(

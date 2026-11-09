@@ -313,7 +313,11 @@ def create_read_memory_tool(
             payload["experience_level"] = result.get("experience_level")
         if "related_observations" in result:
             payload["related_observations"] = result["related_observations"]
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        from ..policy.trace import emit_tool_output
+
+        emit_tool_output(memory_dir, "read_memory", {"id": requested_id}, text)
+        return text
 
     return StructuredTool.from_function(
         func=_read_memory,
