@@ -3977,7 +3977,8 @@ def test_xiaomi_token_plan_wire_request(monkeypatch, region_url, host):
 
     def respond(request):
         captured["url"] = str(request.url)
-        captured["api_key"] = request.headers.get("x-api-key")
+        captured["x_api_key"] = request.headers.get("x-api-key")
+        captured["authorization"] = request.headers.get("authorization")
         captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
@@ -4003,7 +4004,10 @@ def test_xiaomi_token_plan_wire_request(monkeypatch, region_url, host):
     model.invoke([HumanMessage("hi")])
 
     assert captured["url"] == f"https://{host}/anthropic/v1/messages"
-    assert captured["api_key"] == "tp-test"
+    # anthropic-python presents the key as x-api-key through 1.x and as a
+    # Bearer token from 2.x; either way it must be the Token Plan key.
+    presented = captured["x_api_key"] or captured["authorization"] or ""
+    assert presented.removeprefix("Bearer ") == "tp-test"
     assert captured["body"]["model"] == "mimo-v2.6-pro"
     assert captured["body"]["max_tokens"] == 131072
     assert captured["body"]["thinking"]["type"] == "enabled"

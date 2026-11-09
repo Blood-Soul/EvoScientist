@@ -1093,6 +1093,8 @@ class TestExplicitSeeding:
             return agent
 
         cfg = MagicMock()
+        cfg.code_interpreter_timeout = 60
+        cfg.code_interpreter_max_result_chars = 6000
         cfg.model_fallbacks = "cfg-a:prov-a"
         cfg.auto_approve = False
         cfg.dangerous_mode = False
@@ -1131,6 +1133,8 @@ class TestExplicitSeeding:
         from EvoScientist.middleware.model_fallback import get_fallback_chain
 
         cfg = MagicMock()
+        cfg.code_interpreter_timeout = 60
+        cfg.code_interpreter_max_result_chars = 6000
         cfg.model_fallbacks = "factory-a:prov-a, factory-b:prov-b"
         cfg.auxiliary_model = ""
         cfg.auxiliary_provider = ""
@@ -1159,8 +1163,12 @@ class TestExplicitSeeding:
         )
 
         cfg_v1 = MagicMock()
+        cfg_v1.code_interpreter_timeout = 60
+        cfg_v1.code_interpreter_max_result_chars = 6000
         cfg_v1.model_fallbacks = "cfg-a:prov-a"
         cfg_v2 = MagicMock()
+        cfg_v2.code_interpreter_timeout = 60
+        cfg_v2.code_interpreter_max_result_chars = 6000
         cfg_v2.model_fallbacks = "other:prov"
 
         for cfg in (cfg_v1, cfg_v2):

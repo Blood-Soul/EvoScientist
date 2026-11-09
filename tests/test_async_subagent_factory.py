@@ -69,6 +69,8 @@ def test_factory_requests_async_safe_middleware(
     """
     # Minimal config stub so factory's `cfg.recursion_limit` access works.
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.recursion_limit = 1_000_000
     cfg.memory_profile_enabled = True
     cfg.memory_observations_enabled = True
@@ -142,6 +144,8 @@ def test_factory_never_arms_hitl_interrupt_on(
     documented in ``_factory.py`` so always-arm never leaks into the children.
     """
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.recursion_limit = 1_000_000
     cfg.memory_profile_enabled = True
     cfg.memory_observations_enabled = True
@@ -180,6 +184,8 @@ def test_inject_subagent_omits_memory_middleware_when_memory_disabled(
 ):
     mock_model.return_value = MagicMock(profile={"max_input_tokens": 200_000})
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.memory_profile_enabled = False
     cfg.memory_observations_enabled = False
     cfg.memory_observation_writer = MemoryObservationWriter.ALL
@@ -208,6 +214,8 @@ def test_inject_subagent_worker_only_observation_writer_keeps_live_tool_off(
 ):
     mock_model.return_value = MagicMock(profile={"max_input_tokens": 200_000})
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.memory_profile_enabled = False
     cfg.memory_observations_enabled = True
     cfg.memory_observation_writer = MemoryObservationWriter.WORKER
@@ -244,6 +252,8 @@ def test_all_observation_writer_schedules_turn_worker_without_profile_memory(
     mock_config, mock_chat, mock_tool_selector, workspace
 ):
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = False
     cfg.auto_mode = False
     cfg.auto_approve = False
@@ -304,6 +314,8 @@ def test_async_subagent_mode_filters_ask_user(
     the middleware list builder pulls in transitively.
     """
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = True  # would normally include AskUserMiddleware
     cfg.auto_mode = False
     cfg.auto_approve = False
@@ -346,6 +358,8 @@ def test_async_subagent_disables_tool_selector_stream_tracking(
 ):
     """Async subagents still select tools, but must not drive main-agent UI state."""
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = False
     cfg.auto_mode = False
     cfg.auto_approve = False
@@ -386,6 +400,8 @@ def test_main_agent_mounts_the_grader_after_our_other_after_agent_hooks(
     from deepagents.backends import FilesystemBackend
 
     cfg = MagicMock()
+    cfg.code_interpreter_timeout = 60
+    cfg.code_interpreter_max_result_chars = 6000
     cfg.enable_ask_user = False
     cfg.auto_mode = False
     cfg.auto_approve = False

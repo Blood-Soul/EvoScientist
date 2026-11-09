@@ -355,6 +355,19 @@ def _apply_auto_config(
     Mutates *kwargs* in place.  Only sets keys that the caller hasn't already
     provided, so explicit user settings are never overridden.
     """
+    # An output budget left to the provider can be far too small for a reasoning
+    # model: an Anthropic-compatible gateway with no max_tokens applied 4096, and a
+    # long reasoning turn exhausted it before writing any answer (finish_reason
+    # max_tokens, no content). Applies to every route, only when the user sets it.
+    _user_max_tokens = os.environ.get("EVOSCIENTIST_MAX_TOKENS", "").strip()
+    if _user_max_tokens:
+        try:
+            _budget = int(_user_max_tokens)
+        except ValueError:
+            _budget = 0
+        if _budget > 0:
+            kwargs.setdefault("max_tokens", _budget)
+
     # Current Claude models all output up to 128K (their profiles agree); without a
     # profile langchain-anthropic falls back to 4096. Applies on every route.
     if provider == "anthropic" and _is_current_claude(model_id):
@@ -748,5 +761,15 @@ def get_chat_model(
         _fill_claude_structured_output(chat_model, model_id)
 
     apply_known_context_window(chat_model)
+
+    # Token accounting for every call anywhere in the process; a no-op unless
+    # EVOSCIENTIST_USAGE_LEDGER names a file.
+    from .usage_ledger import attach_usage_ledger
+
+    attach_usage_ledger(
+        chat_model,
+        provider=_original_provider or provider,
+        model_name=model_id,
+    )
 
     return chat_model
