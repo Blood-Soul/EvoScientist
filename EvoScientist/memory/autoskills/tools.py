@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
+from ...render_text import render_data
 from ...config import MemorySkillSynthesisMode, get_effective_config
 from ...paths import Workspace
 from ...tools.skills_manager import list_skills
@@ -85,14 +85,12 @@ def create_inspect_autoskill_candidates_tool(
             project_id=project_id,
             workspace_dir=workspace.root,
         )
-        return json.dumps(
+        return render_data(
             {
                 "candidates": candidates,
                 "installed_skills": _installed_skills_for_autoskill_context(workspace),
-            },
-            ensure_ascii=False,
-            default=str,
-        )
+            }
+        ) or "No autoskill candidates and no installed skills."
 
     return StructuredTool.from_function(
         func=_inspect_autoskill_candidates,
@@ -145,7 +143,7 @@ def create_submit_autoskill_proposal_tool(
                 workspace_dir=workspace.root,
             )
             proposal["auto_approval"] = approved
-        return json.dumps(proposal, ensure_ascii=False, default=str)
+        return render_data(proposal)
 
     return StructuredTool.from_function(
         func=_submit_autoskill_proposal,

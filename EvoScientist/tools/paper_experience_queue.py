@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Annotated
@@ -67,16 +66,11 @@ def create_paper_experience_queue_tool(
             launched = launch_paper_experience_worker(active_project) is not None
         except Exception:
             logger.warning("Failed to launch paper experience worker", exc_info=True)
-        return json.dumps(
-            {
-                "enqueued": enqueued,
-                "existing": existing,
-                "worker_launched": launched,
-                "task_ids": task_ids,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        parts = [f"Queued {enqueued} paper(s) for experience extraction"]
+        if existing:
+            parts.append(f"{existing} already queued")
+        worker = "started the background worker" if launched else "the background worker was not started"
+        return f"{'; '.join(parts)}; {worker}. Extraction runs asynchronously and does not change your answer."
 
     return StructuredTool.from_function(
         func=_enqueue_paper_experiences,

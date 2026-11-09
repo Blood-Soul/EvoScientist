@@ -764,27 +764,17 @@ def test_enqueue_tool_batches_and_launches_once(
     )
     tool = create_paper_experience_queue_tool(memory_dir=tmp_path, project_id="P-alpha")
 
-    result = json.loads(
-        tool.run(
-            {
-                "papers": [
-                    {
-                        "url": "https://example.test/one",
-                        "paper_id": "paper-1",
-                        "title": "One",
-                    },
-                    {
-                        "url": "https://example.test/two",
-                        "paper_id": "paper-2",
-                        "title": "Two",
-                    },
-                ]
-            }
-        )
+    result = tool.run(
+        {
+            "papers": [
+                {"url": "https://example.test/one", "paper_id": "paper-1", "title": "One"},
+                {"url": "https://example.test/two", "paper_id": "paper-2", "title": "Two"},
+            ]
+        }
     )
 
-    assert result["enqueued"] == 2
-    assert result["worker_launched"] is True
+    assert result.startswith("Queued 2 paper(s) for experience extraction")
+    assert "started the background worker" in result
     assert launches == ["P-alpha"]
 
 
@@ -816,22 +806,16 @@ async def test_active_extraction_returns_and_stores_experiences(
         memory_dir=tmp_path, project_id="P-alpha"
     )
 
-    result = json.loads(
-        await tool.arun(
-            {
-                "papers": [
-                    {
-                        "url": "https://example.test/paper",
-                        "paper_id": "paper-1",
-                        "title": "Paper One",
-                    }
-                ]
-            }
-        )
+    result = await tool.arun(
+        {
+            "papers": [
+                {"url": "https://example.test/paper", "paper_id": "paper-1", "title": "Paper One"}
+            ]
+        }
     )
 
-    assert result["failed"] == []
-    assert result["completed"][0]["cached"] is False
+    assert "FAILED" not in result
+    assert "Paper One (paper-1)" in result and "extracted now" in result
     documents = list_experience_documents(memory_dir=tmp_path, project_id="P-alpha")
     assert {document.experience_level for document in documents} == {"l1", "l2"}
 
@@ -863,24 +847,22 @@ async def test_active_extraction_reuses_project_store(
         memory_dir=tmp_path, project_id="P-alpha"
     )
 
-    result = json.loads(
-        await tool.arun(
-            {
-                "papers": [
-                    {
-                        "url": "https://arxiv.org/abs/2401.01234",
-                        "paper_id": "2401.01234",
-                        "title": "Catalyst Study",
-                    }
-                ]
-            }
-        )
+    result = await tool.arun(
+        {
+            "papers": [
+                {
+                    "url": "https://arxiv.org/abs/2401.01234",
+                    "paper_id": "2401.01234",
+                    "title": "Catalyst Study",
+                }
+            ]
+        }
     )
 
     # Cache hit: no extraction, but the full text is backfilled once.
     assert downloads == 1
-    assert result["completed"][0]["cached"] is True
-    assert "cached experience" in json.dumps(result, ensure_ascii=False)
+    assert "Catalyst Study (2401.01234)" in result and "from cache" in result
+    assert "record(s)" in result
 
 
 @pytest.mark.asyncio

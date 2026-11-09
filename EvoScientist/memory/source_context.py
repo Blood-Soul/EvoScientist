@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NotRequired, TypedDict
@@ -192,9 +192,40 @@ def _trajectory_digest(trajectory: list[CompactMessage]) -> str:
     return _short_hash(_stable_json(trajectory))
 
 
+def _format_call(call: Mapping[str, object]) -> str:
+    """One tool call as `name(arg=value, ...)`, long or multi-line values on their own indented lines."""
+    args = call.get("args") if isinstance(call.get("args"), Mapping) else {}
+    inline, block = [], []
+    for key, value in args.items():
+        text = value if isinstance(value, str) else _pretty_json(value)
+        if "\n" in text or len(text) > 120:
+            block.append(f"    {key}:\n" + "\n".join(f"      {line}" for line in text.splitlines()))
+        else:
+            inline.append(f"{key}={text!r}" if isinstance(value, str) else f"{key}={text}")
+    head = f"  -> {call.get('name')}({', '.join(inline)})"
+    return head + ("\n" + "\n".join(block) if block else "")
+
+
 def _trajectory_for_prompt(trajectory: list[CompactMessage]) -> str:
-    """Serialize the full compact trajectory for worker prompts."""
-    return _pretty_json(trajectory)
+    """The compact trajectory as a transcript for worker prompts: who said what, which tools were called, what came back.
+
+    The hash that identifies a trajectory is still taken over the JSON form (`_stable_json`); this is only what the
+    worker reads.
+    """
+    blocks = []
+    for message in trajectory:
+        role = str(message.get("role") or "message")
+        label = role + (f" ({message['name']})" if message.get("name") else "")
+        if role == "tool":
+            status = message.get("status")
+            label = f"tool result" + (f" ({message['name']})" if message.get("name") else "") + (f" [{status}]" if status and status != "success" else "")
+        lines = [f"[{label}]"]
+        content = str(message.get("content") or "").rstrip()
+        if content:
+            lines.append(content)
+        lines.extend(_format_call(call) for call in message.get("tool_calls") or [])
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _runtime_thread_id(runtime: Runtime | None) -> str | None:

@@ -848,19 +848,18 @@ async def test_active_tool_backfills_full_text_on_a_cache_hit(
         "papers": [{"url": PAPER_URL, "paper_id": PAPER_ID, "title": PAPER_TITLE}]
     }
 
-    payload = json.loads(await tool.arun(request))
-    assert payload["failed"] == []
+    reply = await tool.arun(request)
+    assert "FAILED" not in reply
     # Still a cache hit: the experiences were reused, not re-extracted.
-    assert payload["completed"][0]["cached"] is True
-    assert payload["completed"][0]["full_text_available"] is True
+    assert "from cache" in reply and "full text stored" in reply
     assert downloads == [PAPER_URL]
     stored = list_papers(memory_dir=tmp_path, project_id="P-alpha")
     assert len(stored) == 1
     assert stored[0]["chunk_count"] >= 1
 
     # The text now exists, so a second hit reports it without fetching again.
-    second = json.loads(await tool.arun(request))
-    assert second["completed"][0]["full_text_available"] is True
+    second = await tool.arun(request)
+    assert "full text stored" in second
     assert downloads == [PAPER_URL]
 
 
@@ -890,14 +889,11 @@ async def test_a_failed_backfill_still_returns_the_cached_experiences(
         memory_dir=tmp_path, project_id="P-alpha"
     )
 
-    payload = json.loads(
-        await tool.arun(
-            {"papers": [{"url": PAPER_URL, "paper_id": PAPER_ID, "title": PAPER_TITLE}]}
-        )
+    reply = await tool.arun(
+        {"papers": [{"url": PAPER_URL, "paper_id": PAPER_ID, "title": PAPER_TITLE}]}
     )
-    assert payload["failed"] == []
-    assert payload["completed"][0]["cached"] is True
-    assert payload["completed"][0]["full_text_available"] is False
+    assert "FAILED" not in reply
+    assert "from cache" in reply and "no full text stored" in reply
     assert list_papers(memory_dir=tmp_path, project_id="P-alpha") == []
 
 
@@ -928,13 +924,10 @@ async def test_active_tool_stores_full_text_when_it_extracts(
         memory_dir=tmp_path, project_id="P-alpha"
     )
 
-    payload = json.loads(
-        await tool.arun(
-            {"papers": [{"url": PAPER_URL, "paper_id": PAPER_ID, "title": PAPER_TITLE}]}
-        )
+    reply = await tool.arun(
+        {"papers": [{"url": PAPER_URL, "paper_id": PAPER_ID, "title": PAPER_TITLE}]}
     )
-    assert payload["completed"][0]["cached"] is False
-    assert payload["completed"][0]["full_text_available"] is True
+    assert "extracted now" in reply and "full text stored" in reply
     assert len(list_papers(memory_dir=tmp_path, project_id="P-alpha")) == 1
     assert search_paper_chunks(
         memory_dir=tmp_path, project_id="P-alpha", query="top-1 accuracy"

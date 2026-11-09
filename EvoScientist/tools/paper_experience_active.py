@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -53,6 +52,32 @@ class ExtractPaperExperiencesArgs(BaseModel):
         description="Re-extract even when this project already has the paper.",
     )
     runtime: Annotated[object | None, InjectedToolArg] = None
+
+
+def _render_extraction(completed: list[dict[str, Any]], failed: list[dict[str, str]]) -> str:
+    """What the extraction produced, as text: one block per paper, one line per record."""
+    from ..memory.experiences.render import is_current
+
+    lines: list[str] = []
+    for paper in completed:
+        records = [
+            *((r, "L1") for r in (paper.get("l1") or {}).get("experiences", []) if isinstance(r, dict)),
+            *((r, "L2") for r in (paper.get("l2") or {}).get("experiences", []) if isinstance(r, dict)),
+        ]
+        source = "from cache" if paper.get("cached") else "extracted now"
+        text = "full text stored" if paper.get("full_text_available") else "no full text stored"
+        lines.append(f"{paper.get('title') or paper.get('paper_id')} ({paper.get('paper_id')}): {len(records)} record(s), {source}, {text}")
+        for record, level in records:
+            if is_current(record):
+                effect = record.get("effect") or {}
+                lines.append(f"  - [{record.get('comparison')}] {' '.join(str(record.get('task') or '').split())}: {' '.join(str(effect.get('benefit') or '').split())[:200]}")
+            else:
+                lines.append(f"  - [{level}] {' '.join(str(record.get('task') or '').split())}: {' '.join(str(record.get('action') or '').split())[:200]}")
+    for item in failed:
+        lines.append(f"FAILED {item.get('title') or item.get('paper_id')}: {item.get('error')}")
+    if not lines:
+        return "No paper was processed."
+    return "\n".join([*lines, "", "Search the stored records with search_experience; read one in full with read_memory."])
 
 
 def create_extract_paper_experiences_tool(
@@ -196,15 +221,7 @@ def create_extract_paper_experiences_tool(
                 )
             else:
                 completed.append(result)
-        return json.dumps(
-            {
-                "project_id": active_project,
-                "completed": completed,
-                "failed": failed,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        return _render_extraction(completed, failed)
 
     return StructuredTool.from_function(
         coroutine=_extract_paper_experiences,

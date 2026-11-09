@@ -817,15 +817,13 @@ def test_submit_tool_reads_live_autoskill_mode_without_rebuild(
         "Use when testing review mode autoskill submissions.",
         "# Review mode skill\n",
     )
-    review_payload = json.loads(
-        tool.run(
-            {
-                "skill_name": "review-mode-skill",
-                "cluster_hash": "cluster-review",
-                "source_observation_ids": ["O-1", "O-2", "O-3"],
-                "rationale": "Review mode should only stage this proposal.",
-            }
-        )
+    review_text = tool.run(
+        {
+            "skill_name": "review-mode-skill",
+            "cluster_hash": "cluster-review",
+            "source_observation_ids": ["O-1", "O-2", "O-3"],
+            "rationale": "Review mode should only stage this proposal.",
+        }
     )
     set_config_value("memory_skill_synthesis_mode", "auto")
     _write_skill_folder(
@@ -834,20 +832,18 @@ def test_submit_tool_reads_live_autoskill_mode_without_rebuild(
         "Use when testing auto mode autoskill submissions.",
         "# Auto mode skill\n",
     )
-    auto_payload = json.loads(
-        tool.run(
-            {
-                "skill_name": "auto-mode-skill",
-                "cluster_hash": "cluster-auto",
-                "source_observation_ids": ["O-4", "O-5", "O-6"],
-                "rationale": "Auto mode should promote this proposal.",
-            }
-        )
+    auto_text = tool.run(
+        {
+            "skill_name": "auto-mode-skill",
+            "cluster_hash": "cluster-auto",
+            "source_observation_ids": ["O-4", "O-5", "O-6"],
+            "rationale": "Auto mode should promote this proposal.",
+        }
     )
 
-    assert review_payload["status"] == "pending"
-    assert "auto_approval" not in review_payload
-    assert auto_payload["auto_approval"]["approved"] is True
+    assert "status: pending" in review_text
+    assert "auto_approval" not in review_text
+    assert "auto_approval:" in auto_text and "approved: yes" in auto_text
     assert (workspace.skills_dir / "auto-mode-skill" / "SKILL.md").exists()
 
 
