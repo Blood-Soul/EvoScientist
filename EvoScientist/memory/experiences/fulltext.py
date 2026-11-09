@@ -171,6 +171,61 @@ async def _fetch_pdf_bytes(client: httpx.AsyncClient, pdf_url: str) -> bytes:
 # --------------------------------------------------------------------- MinerU
 
 
+_IMAGE_RE = re.compile(r"^[ \t]*!\[[^\]]*\]\([^)]*\)[ \t]*$", re.MULTILINE)
+_INLINE_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_TABLE_RE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
+_ROW_RE = re.compile(r"<tr\b.*?</tr>", re.IGNORECASE | re.DOTALL)
+_CELL_RE = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"</?(?:sup|sub|b|i|u|em|strong|span|br)\b[^>]*>", re.IGNORECASE)
+
+
+def _table_to_text(match: re.Match[str]) -> str:
+    """One HTML table -> one line per row, cells joined by ' | ' (numbers kept)."""
+    rows = []
+    for row in _ROW_RE.findall(match.group(0)):
+        cells = [_TAG_RE.sub("", re.sub(r"\s+", " ", c)).strip() for c in _CELL_RE.findall(row)]
+        if any(cells):
+            rows.append(" | ".join(cells))
+    return "\n".join(rows)
+
+
+def clean_mineru_markdown(markdown: str) -> str:
+    """Keep the paper's words: drop figures, flatten tables, tidy inline HTML.
+
+    MinerU's ``full.md`` points at extracted figures (``![](images/...)``) and renders
+    tables as HTML. The experience extractor reads text, so figures are dropped
+    (their captions are ordinary lines and stay), each table becomes one text line per
+    row, and ``<sup>``/``<sub>`` style tags are removed. The References section is
+    stripped later, by the caller, the same way for every backend.
+    """
+    text = _TABLE_RE.sub(_table_to_text, markdown)
+    text = _IMAGE_RE.sub("", text)
+    text = _INLINE_IMAGE_RE.sub("", text)
+    text = _TAG_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _mineru_pdf_url(url: str) -> str:
+    """MinerU decides the file type from the URL, so an arXiv ``/pdf/<id>`` needs ``.pdf``."""
+    base, sep, rest = url.partition("?")
+    if "arxiv.org/pdf/" in base and not base.casefold().endswith(".pdf"):
+        base += ".pdf"
+    return base + sep + rest
+
+
+_MINERU_RETRY_DELAYS_S = (5.0, 15.0)  # up to 3 attempts
+
+
+def _mineru_retryable(exc: Exception) -> bool:
+    """Transient MinerU failures: 'try again later', timeouts, 429/5xx, dropped connections."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status == 429 or status >= 500
+    if isinstance(exc, (httpx.TransportError, TimeoutError)):
+        return True
+    return "try again" in str(exc).casefold()
+
+
 def _zip_markdown(data: bytes) -> str:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = archive.namelist()
@@ -206,7 +261,7 @@ async def _mineru_precise(
 ) -> str:
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     body = {
-        "url": pdf_url,
+        "url": _mineru_pdf_url(pdf_url),
         "model_version": os.environ.get("EVOSCIENTIST_MINERU_MODEL", "vlm"),
         "language": "en",
         "enable_table": True,
@@ -226,7 +281,7 @@ async def _mineru_precise(
         raise RuntimeError("MinerU finished without full_zip_url")
     archive = await client.get(zip_url)
     archive.raise_for_status()
-    return _zip_markdown(archive.content)
+    return clean_mineru_markdown(_zip_markdown(archive.content))
 
 
 async def _mineru_agent(
@@ -252,7 +307,7 @@ async def _mineru_agent(
         raise RuntimeError("MinerU agent finished without markdown_url")
     markdown = await client.get(markdown_url)
     markdown.raise_for_status()
-    return markdown.text.strip()
+    return clean_mineru_markdown(markdown.text)
 
 
 # ----------------------------------------------------------------------- Jina
@@ -323,7 +378,19 @@ async def download_fulltext(
             started = time.monotonic()
             try:
                 if key:
-                    text = await _mineru_precise(client, pdf_url or url, key, mineru_timeout)
+                    # MinerU sometimes fails a task with "please try again later" and
+                    # accepts the identical request a moment later; other failures
+                    # (bad token, unsupported file) are not worth repeating.
+                    for retry_delay in (*_MINERU_RETRY_DELAYS_S, None):
+                        try:
+                            text = await _mineru_precise(client, pdf_url or url, key, mineru_timeout)
+                            break
+                        except Exception as exc:
+                            if retry_delay is None or not _mineru_retryable(exc):
+                                raise
+                            _record(attempts, "mineru", started, error=exc, retry=True)
+                            await asyncio.sleep(retry_delay)
+                            started = time.monotonic()
                     _record(attempts, "mineru", started, chars=len(text))
                     return Fulltext(text=text, backend="mineru", attempts=attempts)
                 if pdf_bytes is not None:
