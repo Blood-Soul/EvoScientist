@@ -1,88 +1,20 @@
-"""Experience-to-policy transformation layer.
+"""Plan review against the stored experience library.
 
-This package implements the query-conditioned reuse (QCR) operation that
-converts stored paper experiences into target-bound policies. It adds the
-missing step between retrieval and action: an experience record describes what
-one paper's authors did in their setting; a policy describes what the current
-task should do, listing the source-side values that must be re-derived rather
-than copied.
-
-Entry point: ``derive_policy`` runs the full pipeline: retrieve → rerank →
-synthesize → cache. The tool at ``tools/experience_policy.py`` wraps it.
+A finished plan is read next to the task and the experience records found for its design choices, and comes back
+with suggestions that cite their records (`review.py`). Candidate lookup is in `select.py`; `trace.py` writes the
+opt-in debug trace.
 """
 
 from __future__ import annotations
 
-from .brief import TaskBrief, build_brief
-from .catalog import render_catalog, situation_terms
-from .gate import (
-    DEFAULT_RECENT_MESSAGES,
-    GateOutputError,
-    decide_experience_need,
-    normalize_gate,
-    parse_gate_json,
-    render_activity,
-    render_library,
-    render_recent,
-    summarize_activity,
-)
-from .pipeline import derive_policy
+from .prompts import load_policy_prompt
 from .review import review_plan
-from .prompts import (
-    load_gate_prompt,
-    load_rerank_prompt,
-    load_summarize_prompt,
-    load_writer_prompt,
-)
-from .schema import BINDING_KINDS, VERDICTS, PolicyOutputError, normalize_policy
-from .select import (
-    DEFAULT_MAX_SELECTED,
-    DEFAULT_RETRIEVE_LIMIT,
-    fetch_candidates,
-    gather_candidates,
-    rerank_candidates,
-    transferable_core,
-)
-from .store import STORE_VERSION, load_cached_policy, store_policy
-from .suggest import SUGGESTION_CLOSE, SUGGESTION_OPEN, render_suggestion
-from .synthesize import parse_policy_json, synthesize_policy
+from .select import DEFAULT_RETRIEVE_LIMIT, fetch_candidates, gather_candidates
 
 __all__ = [
-    "BINDING_KINDS",
-    "DEFAULT_MAX_SELECTED",
-    "DEFAULT_RECENT_MESSAGES",
     "DEFAULT_RETRIEVE_LIMIT",
-    "STORE_VERSION",
-    "SUGGESTION_CLOSE",
-    "SUGGESTION_OPEN",
-    "VERDICTS",
-    "GateOutputError",
-    "PolicyOutputError",
-    "TaskBrief",
-    "build_brief",
-    "decide_experience_need",
-    "derive_policy",
     "fetch_candidates",
     "gather_candidates",
-    "load_cached_policy",
-    "load_gate_prompt",
-    "load_rerank_prompt",
-    "load_summarize_prompt",
-    "load_writer_prompt",
-    "normalize_gate",
-    "normalize_policy",
-    "parse_gate_json",
-    "parse_policy_json",
-    "render_activity",
-    "render_catalog",
-    "render_library",
-    "render_recent",
-    "render_suggestion",
+    "load_policy_prompt",
     "review_plan",
-    "rerank_candidates",
-    "situation_terms",
-    "store_policy",
-    "summarize_activity",
-    "synthesize_policy",
-    "transferable_core",
 ]

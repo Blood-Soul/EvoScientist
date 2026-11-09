@@ -5,8 +5,8 @@ research-agent:
   # middleware queues every `scholar_search.py` result in code and the tool is
   # not registered, so this block drops out and the skill skips its manual step.
   # search_paper_text/read_paper close the loop: papers queued earlier become
-  # verifiable source text on later tasks. Experience reuse is pulled here with
-  # `apply_experience` (there is no coach on subagents).
+  # verifiable source text on later tasks. Stored experience is read here with
+  # `search_experience` and `list_experience`.
   tools:
     [
       tavily_search,
@@ -14,7 +14,6 @@ research-agent:
       enqueue_paper_experiences,
       search_experience,
       list_experience,
-      apply_experience,
       search_paper_text,
       read_paper,
     ]

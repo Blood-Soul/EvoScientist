@@ -4,7 +4,6 @@ External imports like ``from EvoScientist.tools import tavily_search`` continue
 to work unchanged thanks to these re-exports.
 """
 
-from .experience_policy import create_apply_experience_tool
 from .experience_search import (
     create_list_experience_tool,
     create_search_experience_tool,
@@ -18,7 +17,6 @@ from .skill_manager import make_skill_manager_tool
 from .think import think_tool
 
 __all__ = [
-    "create_apply_experience_tool",
     "create_extract_paper_experiences_tool",
     "create_list_experience_tool",
     "create_paper_experience_queue_tool",

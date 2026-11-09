@@ -331,26 +331,12 @@ def test_the_tree_bullets_follow_the_main_agents_tools() -> None:
     assert "Look something up when a decision calls for it." in search_only
     assert "apply_experience" not in search_only
 
-    policy_only = get_system_prompt(
-        research_tree=True, available_tools=["apply_experience"]
-    )
-    assert "Stored experience" in policy_only
-    assert "Apply it when the result will shape the decision." in policy_only
-    assert "search_experience" not in policy_only
-
     full = get_system_prompt(
         research_tree=True,
-        available_tools=[
-            "search_experience",
-            "apply_experience",
-            "search_paper_text",
-            "read_paper",
-        ],
+        available_tools=["search_experience", "search_paper_text", "read_paper"],
     )
-    assert (
-        "and `apply_experience` turns that into guidance bound to your task"
-        in full
-    )
+    assert "Stored experience" in full
+    assert "apply_experience" not in full
     assert "Use the literature where a step is stuck" in full
 
 
@@ -450,10 +436,10 @@ class TestSubagents:
         assert "review_plan" not in off
 
     @pytest.mark.parametrize("name", ["planner-agent", "research-agent"])
-    def test_the_agents_that_do_the_work_can_pull_experience(self, name) -> None:
-        # the coach is not installed on subagents in this design: an agent that must
-        # apply the stored policy pulls it itself
-        assert "apply_experience" in set(self._load(name)["_tool_names"])
+    def test_the_agents_that_do_the_work_can_look_experience_up(self, name) -> None:
+        granted = set(self._load(name)["_tool_names"])
+        assert {"search_experience", "list_experience"} <= granted
+        assert "apply_experience" not in granted
 
     def test_neither_writes_to_the_tree(self) -> None:
         for name in ("plan-writer", "node-analyst"):
@@ -468,26 +454,6 @@ class TestSubagents:
                 "tree_init",
                 "tree_finalize",
             }
-
-    def test_named_in_the_config_they_get_a_coach_labelled_with_their_name(
-        self, tmp_path
-    ) -> None:
-        from tests.test_experience_coach import TestCoachedSubagents as T
-
-        subs = [self._load("plan-writer"), self._load("node-analyst")]
-        subs.append(self._load("planner-agent"))
-        T._inject(
-            tmp_path,
-            subs,
-            memory_experience_policy_enabled=True,
-            memory_experience_coach_enabled=True,
-            memory_experience_coach_subagents="plan-writer,node-analyst",
-        )
-        writer, analyst, planner = subs
-        assert T._coached(writer) and T._coached(analyst)
-        assert not T._coached(planner)
-        coach = next(m for m in writer["middleware"] if m.name == "experience_coach")
-        assert coach._agent == "plan-writer"
 
 
 class TestArmWithoutExperience:

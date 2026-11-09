@@ -221,87 +221,6 @@ decide. Prefer this over recalling a paper from memory.
   source paper can be searched this way.
 """
 
-EXPERIENCE_POLICY_INSTRUCTIONS = """
-Experience reuse goes through `apply_experience`, not through reading `E-*`
-records directly.
-
-An `E-*` record is a long, source-bound account of what one paper's authors did
-in their own setting, on their datasets, with their models, scales, and numbers.
-Read into a decision as-is, it delivers the useful procedure and the obsolete
-values together, and the values get copied: a dataset that does not fit this
-project, a model the project is not using, a threshold measured somewhere else.
-
-`apply_experience` performs the missing step. Give it the decision you are
-making and what is already true in this project; it returns a policy bound to
-your task:
-- `procedure` — the action and validation pattern that still transfers.
-- `rebind` — the source-specific values you must re-derive here. Treat
-  `source_value` as provenance and a plausibility anchor, never as your answer;
-  follow `how_to_obtain` to ground each value in this project.
-- `preconditions` — what must hold for the procedure to be valid here.
-- `declines` — what does not transfer, so you do not over-apply it.
-- `checks` — what to verify before treating the task as done.
-- `conflicts` — where two records disagree, plus the condition that decides
-  which applies. Resolve it on the condition; do not average the two.
-- `unsupported` — what memory does not cover. Send those parts to live search
-  or `search_paper_text` instead of assuming they were handled.
-
-When to call it: planning an experiment, choosing a method, evaluation
-protocol, baseline, or parameter, judging whether a published result applies to
-this project, generating or narrowing research ideas, surveying what is already
-known about a subject, or deciding whether an idea is close to prior work. Once
-per decision, not once per search.
-
-For gathering context rather than deciding, `search_experience` and
-`list_experience` are the cheaper path -- this tool costs two aux-model calls,
-so reach for it when the answer will actually shape what you do next.
-
-`verdict: decline` is a real answer, not a failure — it means the stored
-experience does not apply to your task, and inventing applicability from it
-would be worse than proceeding without. `no_candidates` and
-`no_reusable_memory` mean the same thing: continue with live search.
-
-`read_memory` on an `E-*` ID stays available for auditing the evidence behind a
-specific policy line, and `search_paper_text` gives the paper's own wording.
-Use them to check a policy, not to replace it.
-"""
-
-EXPERIENCE_COACH_INSTRUCTIONS = """
-Experience reuse is pushed to you, not called by you. There is no
-`apply_experience` tool in this session.
-
-Before a step where stored paper experience could change what you do, an
-`<experience_guidance>` block appears in the conversation. It is derived for
-that one decision from the `E-*` records that matched it, and it is rewritten
-for your task rather than quoted: an `E-*` record is a source-bound account of
-what one paper's authors did on their datasets, at their scale, with their
-numbers, and reading one into a decision as-is gets those values copied. What
-you receive has already had that separated out:
-- `What transfers to this step` — the action and validation pattern that still
-  holds.
-- `Values you must re-derive here rather than copy` — the source-specific
-  values. A `source-side value` is provenance and a plausibility anchor, never
-  your answer; ground each one in this project the way the line says to.
-- `This only holds if` / `What does not transfer` — the limits, so you neither
-  misapply the procedure nor over-extend it.
-- `Papers disagree here` — resolve it on the stated condition. Do not average
-  two findings.
-- `Verify before treating this as settled` — checks to clear before you call
-  the task done.
-- `Memory does not cover these` — send those parts to live search or
-  `search_paper_text` rather than assuming they were handled.
-
-The guidance is advisory and it is one input among several. It was derived from
-the library alone, so it does not know what you have observed in this project;
-where the two disagree, what you have verified here wins. Most steps get no
-block at all, which means stored experience had no bearing on them -- not that
-the library is empty or that you should go looking for a substitute.
-
-`read_memory` on an `E-*` ID audits the evidence behind a specific line, and
-`search_paper_text` gives the paper's own wording. Use them to check a piece of
-guidance, not to replace it.
-"""
-
 OBSERVATION_MEMORY_WRITE_INSTRUCTIONS = """
 Call `record_observation` only for durable, non-obvious, evidence-backed
 information that is not already in memory and is likely to change future behavior:
@@ -730,8 +649,6 @@ class EvoMemoryMiddleware(AgentMiddleware):
         enable_observation_tool: bool = True,
         enable_paper_fulltext: bool = True,
         enable_experience_search: bool = True,
-        enable_experience_policy: bool = True,
-        enable_experience_coach: bool = False,
         memory_scheduler: MemoryScheduler | None = None,
         enable_profile_bootstrap: bool = False,
         inline_rows_per_session: int | None = DEFAULT_INLINE_ROWS_PER_SESSION,
@@ -761,24 +678,9 @@ class EvoMemoryMiddleware(AgentMiddleware):
         self._enable_paper_fulltext = (
             enable_observation_memory and enable_paper_fulltext
         )
-        # Kept separate from the policy flag: browsing and searching the
-        # experience library is read-only and always affordable, while
-        # `apply_experience` costs two aux-model calls. A deployment that
-        # disables the expensive reuse layer still needs the retrieval half,
-        # otherwise the inlined experience block advertises a store with no way
-        # to reach it.
+        # Browsing and searching the experience library is read-only and always affordable.
         self._enable_experience_search = (
             enable_observation_memory and enable_experience_search
-        )
-        self._enable_experience_policy = (
-            enable_observation_memory and enable_experience_policy
-        )
-        # Which side of the reuse layer this agent sees. The coach pushes
-        # guidance and the tool is withheld, so the two blocks are mutually
-        # exclusive: injecting both would tell the agent to call a tool it does
-        # not have while guidance is already arriving on its own.
-        self._enable_experience_coach = (
-            self._enable_experience_policy and enable_experience_coach
         )
         self.tools = []
         if enable_observation_memory:
@@ -1104,10 +1006,6 @@ class EvoMemoryMiddleware(AgentMiddleware):
             instructions += EXPERIENCE_SEARCH_INSTRUCTIONS
         if self._enable_paper_fulltext:
             instructions += PAPER_FULLTEXT_INSTRUCTIONS
-        if self._enable_experience_coach:
-            instructions += EXPERIENCE_COACH_INSTRUCTIONS
-        elif self._enable_experience_policy:
-            instructions += EXPERIENCE_POLICY_INSTRUCTIONS
         if not self._enable_observation_tool:
             return instructions
         return instructions + OBSERVATION_MEMORY_WRITE_INSTRUCTIONS
@@ -1278,8 +1176,6 @@ def create_memory_middleware(
     enable_observation_tool: bool = True,
     enable_paper_fulltext: bool = True,
     enable_experience_search: bool = True,
-    enable_experience_policy: bool = True,
-    enable_experience_coach: bool = False,
     memory_scheduler: MemoryScheduler | None = None,
     enable_profile_bootstrap: bool = False,
     inline_rows_per_session: int | None = DEFAULT_INLINE_ROWS_PER_SESSION,
@@ -1300,8 +1196,6 @@ def create_memory_middleware(
         enable_observation_tool=enable_observation_tool,
         enable_paper_fulltext=enable_paper_fulltext,
         enable_experience_search=enable_experience_search,
-        enable_experience_policy=enable_experience_policy,
-        enable_experience_coach=enable_experience_coach,
         memory_scheduler=memory_scheduler,
         enable_profile_bootstrap=enable_profile_bootstrap,
         inline_rows_per_session=inline_rows_per_session,

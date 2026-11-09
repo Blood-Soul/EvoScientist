@@ -116,8 +116,7 @@ def _build_experience_index(
             "by SUBJECT, not by process -- `search_experience(topic=...)` with "
             "the research content you care about. Use `list_experience` to browse "
             "by discipline or domain when you do not know the vocabulary, "
-            "`read_memory` for a known E-* ID, and `apply_experience` to turn "
-            "records into a plan bound to the current task."
+            "and `read_memory` for a known E-* ID."
         ),
         "</paper_experience_memory>",
     ]

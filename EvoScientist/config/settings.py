@@ -462,56 +462,9 @@ class EvoScientistConfig:
     # default on this branch, so the manual enqueue tool is not registered.
     memory_paper_autoqueue_enabled: bool = True
     memory_experience_search_enabled: bool = True
-    # Experience-to-policy reuse. An `E-*` record is source-bound prose about
-    # what one paper's authors did; injecting it directly makes an agent copy
-    # the source's datasets, models, and numbers. When enabled, the
-    # `apply_experience` tool rewrites the relevant records into a target-bound
-    # policy (procedure, values to re-derive, preconditions, checks) using the
-    # auxiliary model. Disabling stops tool registration and prompt injection;
-    # policies already cached on disk are left alone.
-    memory_experience_policy_enabled: bool = True
-    # How many stored experiences one policy may draw on. More widens coverage
-    # and surfaces conflicts between papers; fewer keeps the policy tight and
-    # the synthesis call small.
-    memory_experience_policy_max_selected: int = 4
-    # Experience coach. `apply_experience` only fires when the agent thinks to
-    # call it and phrases its own query; the coach instead judges every step on
-    # the auxiliary model -- does stored experience bear on the action about to
-    # be taken -- and when it does, derives the retrieval facets itself and
-    # injects the resulting guidance into that one model call. The injection is
-    # per-call and never written to state, so it does not grow the trajectory or
-    # invalidate the prompt cache. Costs one auxiliary call per step that is not
-    # short-circuited in code, plus two more when the gate opens. Disabling
-    # leaves the pull path (`apply_experience`, held by the main agent only
-    # when the coach is off) as the only route into the reuse layer.
-    memory_experience_coach_enabled: bool = False
-    # How much of the trajectory tail the coach's gate reads. The gate names the
-    # decision immediately ahead, so it needs the originating request plus the
-    # last few steps; paying for the whole trajectory on the auxiliary model buys
-    # context the gate does not use.
-    memory_experience_coach_recent_messages: int = 6
-    # Whether the main agent takes part in experience reuse at all. False: no
-    # coach on it, no `apply_experience` in its tool set (nor in the general-purpose
-    # subagent that inherits it), and no reuse paragraph in its memory
-    # instructions. For runs where the main agent only coordinates and reuse
-    # belongs to subagents (`memory_experience_coach_subagents`).
-    memory_experience_main_reuse_enabled: bool = False
-    # The main agent holds `apply_experience` (the pull route) without a coach on
-    # it. Independent of `memory_experience_main_reuse_enabled`: that switch gives
-    # the main agent the coach (or, with the coach off, the tool); this one gives
-    # it the tool alone, so the coach can sit on the subagents while the main
-    # agent decides for itself when to call. A coached subagent still never holds
-    # the tool.
-    memory_experience_main_pull_enabled: bool = True
     # Register `review_plan` for the sub-agents whose YAML lists it: a finished plan is read against the experience
-    # library and comes back with suggestions that cite their records. Independent of the step-by-step coach.
+    # library and comes back with suggestions that cite their records.
     memory_plan_review_enabled: bool = True
-    # Comma-separated subagent names that get their own coach, same middleware
-    # and same pipeline as the main agent's. The gate then reads that subagent's
-    # own trajectory, whose first human turn is the task the main agent handed
-    # it. A coached subagent must not also hold `apply_experience`: the two
-    # routes are mutually exclusive (see TestRouteExclusivity). Empty: none.
-    memory_experience_coach_subagents: str = ""
 
     # Research tree. Registers the `tree_*` tools and appends the research-tree
     # section to the system prompt: the agent runs an end-to-end research task as
@@ -781,36 +734,6 @@ class EvoScientistConfig:
             )
             self.memory_paper_chunk_overlap_chars = 200
 
-        # Zero selected records would make every policy empty; an unbounded
-        # value would push the whole experience library into one synthesis call.
-        selected = self.memory_experience_policy_max_selected
-        if (
-            not isinstance(selected, int)
-            or isinstance(selected, bool)
-            or not 1 <= selected <= 6
-        ):
-            logging.getLogger(__name__).warning(
-                "Invalid memory_experience_policy_max_selected %r; falling back to 4.",
-                selected,
-            )
-            self.memory_experience_policy_max_selected = 4
-
-        # Zero recent messages would leave the gate judging on the originating
-        # request alone, blind to everything the run has already done; an
-        # unbounded value would put the whole trajectory on the auxiliary model
-        # every step, which is the cost the coach exists to avoid.
-        recent = self.memory_experience_coach_recent_messages
-        if (
-            not isinstance(recent, int)
-            or isinstance(recent, bool)
-            or not 1 <= recent <= 30
-        ):
-            logging.getLogger(__name__).warning(
-                "Invalid memory_experience_coach_recent_messages %r; falling back to 6.",
-                recent,
-            )
-            self.memory_experience_coach_recent_messages = 6
-
         # shell_allow_list is typed as a comma-separated string, but a YAML list
         # spelling (``shell_allow_list: [ls, cat]``) survives here as a list.
         # The policy resolver calls ``.split`` on it, so normalise to CSV once at
@@ -910,13 +833,6 @@ class MemoryControls:
     workers_enabled: bool
     paper_fulltext_enabled: bool = True
     experience_search_enabled: bool = True
-    experience_policy_enabled: bool = True
-    experience_policy_max_selected: int = 4
-    experience_coach_enabled: bool = True
-    experience_coach_recent_messages: int = 6
-    experience_main_reuse_enabled: bool = True
-    experience_main_pull_enabled: bool = False
-    experience_coach_subagents: tuple[str, ...] = ()
 
     @classmethod
     def from_config(cls, config: EvoScientistConfig) -> MemoryControls:
@@ -927,19 +843,6 @@ class MemoryControls:
             workers_enabled=config.memory_workers_enabled,
             paper_fulltext_enabled=config.memory_paper_fulltext_enabled,
             experience_search_enabled=config.memory_experience_search_enabled,
-            experience_policy_enabled=config.memory_experience_policy_enabled,
-            experience_policy_max_selected=config.memory_experience_policy_max_selected,
-            experience_coach_enabled=config.memory_experience_coach_enabled,
-            experience_coach_recent_messages=(
-                config.memory_experience_coach_recent_messages
-            ),
-            experience_main_reuse_enabled=config.memory_experience_main_reuse_enabled,
-            experience_main_pull_enabled=config.memory_experience_main_pull_enabled,
-            experience_coach_subagents=tuple(
-                name.strip()
-                for name in str(config.memory_experience_coach_subagents or "").split(",")
-                if name.strip()
-            ),
         )
 
     @property
@@ -1514,27 +1417,10 @@ _ENV_MAPPINGS = {
     "memory_experience_search_enabled": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_SEARCH_ENABLED"
     ),
-    "memory_experience_policy_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_ENABLED",
-    "memory_experience_policy_max_selected": (
-        "EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_MAX_SELECTED"
-    ),
-    "memory_experience_coach_enabled": "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED",
     "research_tree_enabled": "EVOSCIENTIST_RESEARCH_TREE_ENABLED",
     "research_tree_require_plans": "EVOSCIENTIST_RESEARCH_TREE_REQUIRE_PLANS",
     "research_tree_background_tasks": "EVOSCIENTIST_RESEARCH_TREE_BACKGROUND_TASKS",
-    "memory_experience_coach_recent_messages": (
-        "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES"
-    ),
-    "memory_experience_main_reuse_enabled": (
-        "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_REUSE_ENABLED"
-    ),
     "memory_plan_review_enabled": "EVOSCIENTIST_MEMORY_PLAN_REVIEW_ENABLED",
-    "memory_experience_main_pull_enabled": (
-        "EVOSCIENTIST_MEMORY_EXPERIENCE_MAIN_PULL_ENABLED"
-    ),
-    "memory_experience_coach_subagents": (
-        "EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_SUBAGENTS"
-    ),
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
 

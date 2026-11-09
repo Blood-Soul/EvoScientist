@@ -2,15 +2,12 @@ planner-agent:
   description: "Plan experiments: stages, success signals, and dependencies (no web search, no implementation)."
   # No web search by design, but planning decisions should be checkable against
   # papers already stored for this project rather than recalled from summaries.
-  # Reuse guidance is pulled by the agent that does the work: with the coach
-  # gone from subagents, `apply_experience` is how a plan written here carries
-  # the stored policy; search/list stay read-only for grounding it.
+  # search/list stay read-only for grounding a plan in what the stored papers found.
   tools:
     [
       think_tool,
       search_experience,
       list_experience,
-      apply_experience,
       search_paper_text,
       read_paper,
     ]

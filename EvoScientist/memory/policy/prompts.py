@@ -1,4 +1,4 @@
-"""Prompt loading for the reuse-policy pipeline.
+"""Prompt loading for plan review.
 
 Mirrors ``experiences.extraction.load_experience_prompts``: prompts live as
 editable Markdown under ``prompt/`` rather than as string literals, so the
@@ -8,15 +8,9 @@ the experience prompts so a packaged install resolves both the same way.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 from pathlib import Path
-
-RERANK_PROMPT_FILENAME = "policy_rerank.md"
-WRITER_PROMPT_FILENAME = "policy_write.md"
-GATE_PROMPT_FILENAME = "policy_gate.md"
-SUMMARIZE_PROMPT_FILENAME = "policy_summarize.md"
 
 
 def _prompt_dir_candidates() -> list[Path]:
@@ -47,34 +41,4 @@ def load_policy_prompt(filename: str) -> str:
     raise FileNotFoundError(f"Policy prompt {filename} not found; searched: {joined}")
 
 
-async def load_rerank_prompt() -> str:
-    """Load the candidate-reranker prompt off the event loop."""
-    return await asyncio.to_thread(load_policy_prompt, RERANK_PROMPT_FILENAME)
-
-
-async def load_writer_prompt() -> str:
-    """Load the policy-writer prompt off the event loop."""
-    return await asyncio.to_thread(load_policy_prompt, WRITER_PROMPT_FILENAME)
-
-
-async def load_gate_prompt() -> str:
-    """Load the coach gate prompt off the event loop."""
-    return await asyncio.to_thread(load_policy_prompt, GATE_PROMPT_FILENAME)
-
-
-async def load_summarize_prompt() -> str:
-    """Load the recent-activity summary prompt off the event loop."""
-    return await asyncio.to_thread(load_policy_prompt, SUMMARIZE_PROMPT_FILENAME)
-
-
-__all__ = [
-    "GATE_PROMPT_FILENAME",
-    "RERANK_PROMPT_FILENAME",
-    "SUMMARIZE_PROMPT_FILENAME",
-    "WRITER_PROMPT_FILENAME",
-    "load_gate_prompt",
-    "load_policy_prompt",
-    "load_rerank_prompt",
-    "load_summarize_prompt",
-    "load_writer_prompt",
-]
+__all__ = ["load_policy_prompt"]

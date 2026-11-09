@@ -184,9 +184,6 @@ def test_inject_subagent_gates_experience_on_the_yaml_tool_names(
     cfg.memory_workers_enabled = False
     cfg.memory_paper_autoqueue_enabled = False
     cfg.memory_experience_search_enabled = True
-    cfg.memory_experience_policy_enabled = True
-    cfg.memory_experience_coach_enabled = False
-    cfg.memory_experience_coach_subagents = ""
     cfg.auxiliary_model = ""
     cfg.auxiliary_provider = ""
     mock_config.return_value = cfg
@@ -197,7 +194,7 @@ def test_inject_subagent_gates_experience_on_the_yaml_tool_names(
         {
             "name": "planner-agent",
             "tools": [],
-            "_tool_names": ["think_tool", "search_experience", "apply_experience"],
+            "_tool_names": ["think_tool", "search_experience"],
         }
     ]
 
@@ -205,7 +202,6 @@ def test_inject_subagent_gates_experience_on_the_yaml_tool_names(
 
     middleware = _single_middleware(subs[0], "EvoMemoryMiddleware")
     assert middleware._enable_experience_search is True
-    assert middleware._enable_experience_policy is True
 
 
 @patch("EvoScientist.EvoScientist._ensure_chat_model")

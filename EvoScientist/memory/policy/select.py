@@ -1,42 +1,24 @@
-"""Two-tier selection: retrieve candidates, rerank to a small working set.
+"""Candidate lookup for plan review.
 
-A target task arrives with no annotation. The retriever indexes show only
-compact locators. We cannot read 98 full experience records (500K characters)
-in search of the relevant handful; that is what the working set delivers.
-
-Step 1 (retrieve): TF-IDF against the summary/domain/scope via
-`search_experience_records`, the same experience-only retrieval core that backs
-the `search_experience` tool; returns `E-*` IDs plus match snippets. It replaced
-a call into the old merged retriever that passed `scope=project` and
-`memory_type=semantic` to keep observations out -- filter values that had to
-match the experience store's hardcoded pair exactly, so the reuse layer's
-candidate supply depended on an incidental coupling between two stores.
-
-Step 2 (rerank): a lightweight aux-model prompt reading compact *descriptors*
-(id, level, confidence, core statement, domain, scope -- 200-300 chars each)
-along with the target task, selecting 3-5 records and stating the reason. If
-the rerank parse fails, the fallback is the top scoring candidates from step 1.
+Retrieval is lexical (`search_experience_records`, the same core behind the `search_experience` tool) and returns the
+stored records with a compact descriptor for the trace. Plan review reads them in full; there is no second ranking
+stage.
 """
 
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
 
-from ...utils import format_message_content
 from ..experiences.retrieval import search_experience_records
 from ..experiences.store import list_experience_documents
 from ..types import ExperienceLevel, ObservationSearchMode
-from .prompts import load_rerank_prompt
-from .trace import emit_trace, emit_trace_async, response_usage
+from .trace import emit_trace
 
 DEFAULT_RETRIEVE_LIMIT = 8
-DEFAULT_MAX_SELECTED = 4
 
 
 def _experience_record(text: str) -> dict[str, Any] | None:
@@ -48,50 +30,27 @@ def _experience_record(text: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def transferable_core(experience: Mapping[str, Any]) -> str:
-    """Return the paper-agnostic core, falling back to the prose statement.
-
-    `transferable_core` is written by the current extraction prompts. Records
-    extracted before that field existed fall back to the head of `statement` --
-    a truncated paragraph opening, which is a weak descriptor but keeps every
-    pre-existing record usable without re-extraction.
-    """
-    core = experience.get("transferable_core")
-    if isinstance(core, str) and core.strip():
-        return " ".join(core.split())
-    statement = experience.get("statement")
-    if isinstance(statement, str) and statement.strip():
-        return " ".join(statement.split())[:200]
-    return ""
-
-
 def _descriptor(record: Mapping[str, Any]) -> str:
-    """Compact one-line candidate for reranking (~200-300 chars).
-
-    The full 2.5K-char statement is withheld until synthesis, so eight
-    candidates fit in one small rerank call.
-    """
+    """Compact one-line candidate for the trace."""
     experience = record.get("experience", {})
     if not isinstance(experience, Mapping):
         experience = {}
-    confidence = experience.get("confidence")
-    confidence_text = (
-        f"{float(confidence):.2f}" if isinstance(confidence, int | float) else "n/a"
-    )
     paper = record.get("paper", {})
     title = paper.get("title", "") if isinstance(paper, Mapping) else ""
+    methods = experience.get("method")
+    method = "; ".join(str(m) for m in methods[:3]) if isinstance(methods, list) else ""
+    gist = experience.get("problem") or experience.get("transferable_core") or experience.get("statement") or ""
     return " | ".join(
         part
         for part in (
-            f"{record.get('id', '')} [{str(record.get('experience_level', '')).upper()}"
-            f" conf={confidence_text}]",
+            f"{record.get('id', '')} [{str(experience.get('comparison') or record.get('experience_level', '')).upper()}]",
             str(experience.get("domain") or ""),
             str(experience.get("task") or ""),
-            transferable_core(experience),
-            f"scope: {' '.join(str(experience.get('scope') or '').split())[:160]}",
+            method,
+            " ".join(str(gist).split())[:200],
             f"source: {' '.join(str(title).split())[:80]}",
         )
-        if part and not part.endswith((": ", "scope: ", "source: "))
+        if part and not part.endswith(("source: ",))
     )
 
 
@@ -214,89 +173,4 @@ def fetch_candidates(
     return candidates
 
 
-async def rerank_candidates(
-    *,
-    candidates: list[dict[str, Any]],
-    task: str,
-    max_selected: int,
-    model: Any,
-    prompt: str,
-    memory_dir: str | Path | None = None,
-    call_id: str | None = None,
-) -> dict[str, Any]:
-    """Select the small working set for synthesis.
-
-    Returns ``{"selected": [{"id", "record", "descriptor"}, ...], "reason": ""}``
-    on success. The fallback when the model's JSON is unparseable is the first
-    `max_selected` candidates from the scored list -- a degraded but safe path
-    that keeps the tool from outright failing on one parse error.
-    """
-    descriptors_text = "\n".join(
-        f"{i + 1}. {item['descriptor']}" for i, item in enumerate(candidates)
-    )
-    filled = prompt.format(
-        task=task.strip(),
-        descriptors=descriptors_text,
-        max_selected=max_selected,
-    )
-    started = time.monotonic()
-    response = await model.ainvoke(
-        [SystemMessage(content=filled), HumanMessage(content="Rerank now.")]
-    )
-    seconds = round(time.monotonic() - started, 2)
-    output = format_message_content(response).strip()
-
-    async def _traced(result: dict[str, Any]) -> dict[str, Any]:
-        if memory_dir is not None:
-            await emit_trace_async(
-                memory_dir,
-                "rerank",
-                call_id=call_id,
-                task=task.strip(),
-                raw_output=output,
-                seconds=seconds,
-                usage=response_usage(response),
-                selected_ids=[item["id"] for item in result["selected"]],
-                reason=result["reason"],
-            )
-        return result
-
-    fenced = output.removeprefix("```json").removeprefix("```").removesuffix("```")
-    try:
-        payload = json.loads(fenced)
-    except json.JSONDecodeError:
-        return await _traced(
-            {
-                "selected": candidates[:max_selected],
-                "reason": "rerank parse failed; using top scored candidates",
-            }
-        )
-    if not isinstance(payload, dict):
-        return await _traced(
-            {
-                "selected": candidates[:max_selected],
-                "reason": "rerank returned non-object; using top scored candidates",
-            }
-        )
-    selected_ids = payload.get("selected", [])
-    if not isinstance(selected_ids, list):
-        selected_ids = []
-    lookup = {item["id"]: item for item in candidates}
-    selected = [lookup[eid] for eid in selected_ids if eid in lookup][:max_selected]
-    return await _traced(
-        {
-            "selected": selected or candidates[:max_selected],
-            "reason": str(payload.get("reason") or ""),
-        }
-    )
-
-
-__all__ = [
-    "DEFAULT_MAX_SELECTED",
-    "DEFAULT_RETRIEVE_LIMIT",
-    "fetch_candidates",
-    "gather_candidates",
-    "load_rerank_prompt",
-    "rerank_candidates",
-    "transferable_core",
-]
+__all__ = ["DEFAULT_RETRIEVE_LIMIT", "fetch_candidates", "gather_candidates"]

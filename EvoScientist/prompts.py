@@ -485,7 +485,7 @@ For an end-to-end research task, one that comes with a statement of your working
 
 - **Facts come from the tools, decisions from you.** Scores, deltas against the parent, the clock, parent links and outcomes are written by `tree_finish` and `tree_status`; the score comes from a frozen judge you cannot change. Never state a score as fact that `tree_finish` did not return. You choose what to try, which history to read, and write the narrative of each node.
 - **Start.** Read the conditions and the task in full and write the hard limits down. Put the task data in place, then call `tree_init`. Then survey the field before you open any node. When paper-navigator is installed, hand the literature work to `research-agent` with the `task` tool: say what the task is and which difficulties to look into, tell it to follow `/skills/paper-navigator/SKILL.md`, and ask for notes on what the closest papers offer. Without paper-navigator, survey from the data and what you know. Group what you find into mechanism families so that candidate directions differ in kind and not in hyperparameters, and record them with `tree_survey`. Take the time the survey needs; there is no prize for the fastest first node. **You do not build anything in the project root.** Every line of code of this run, the first baseline included, is written inside a node directory `nodes/<id>/` by a sub-agent, after a node was opened with `tree_new`. The only file you create yourself is a placeholder deliverable (one `execute` command, for example an all-abstain `submission.csv`), so that something valid exists; the champion's replaces it.
-- **Stored experience.** `search_experience`, `list_experience` and `read_paper` show what the papers searched in this project teach, and `apply_experience` turns that into guidance bound to your task. Look something up when a decision calls for it, and apply it when the result will shape the decision.
+- **Stored experience.** `search_experience`, `list_experience` and `read_paper` show what the papers searched in this project teach. Look something up when a decision calls for it.
 - **Every step starts from the record.** Call `tree_status`, then `tree_history` for the nodes that bear on the decision. Read them in order, not only the best one: what a node tried depends on what the earlier nodes showed, and a failed node says what not to repeat. Do not repeat a direction the record shows failed under the same conditions; if you retry one, say what is different. Prefer a surveyed family that has not been tried yet (`tree_status` lists which were). Cite what you built on in `based_on`.
 - **One hypothesis per node.** Open each node with `tree_new`, stating what you expect and what would refute it, which family it belongs to (`cluster`), which component it changes, what to build (`plan`), what to reuse, which dead ends to avoid and when to stop early. The budget of a node is yours to set from what the task needs. To refine a finished node, diagnose from its own errors first (the slices in its record), then change one major thing. When `tree_status` shows two nodes that are right on different rows, consider a merge. A difference inside the reported interval is not resolved: treat it as neither a win nor a loss.
 - **Use the literature where a step is stuck.** When a refinement has a specific weakness that papers might fix (for example how others decide that a question has no answer), search for it before `tree_new` with the paper-navigator skill, read the closest papers, propose directions that differ in mechanism, and pick one.
@@ -619,26 +619,13 @@ _LITERATURE_BULLET = (
 )
 
 
-def _stored_experience_bullet(*, search: bool, policy: bool) -> str:
-    if search and policy:
-        body = (
-            "`search_experience`, `list_experience` and `read_paper` show what the papers "
-            "searched in this project teach, and `apply_experience` turns that into "
-            "guidance bound to your task. Look something up when a decision calls for it, "
-            "and apply it when the result will shape the decision."
-        )
-    elif search:
-        body = (
-            "`search_experience`, `list_experience` and `read_paper` show what the papers "
-            "searched in this project teach. Look something up when a decision calls for it."
-        )
-    elif policy:
-        body = (
-            "`apply_experience` turns the stored records into guidance bound to your task. "
-            "Apply it when the result will shape the decision."
-        )
-    else:
+def _stored_experience_bullet(*, search: bool) -> str:
+    if not search:
         return ""
+    body = (
+        "`search_experience`, `list_experience` and `read_paper` show what the papers "
+        "searched in this project teach. Look something up when a decision calls for it."
+    )
     return f"- **Stored experience.** {body}\n"
 
 
@@ -646,10 +633,9 @@ def _for_capabilities(
     text: str,
     *,
     experience_search: bool,
-    experience_policy: bool,
 ) -> str:
     """Select the tree bullets that name tools by the tools the run registered."""
-    if not (experience_search or experience_policy):
+    if not experience_search:
         # Without the experience tools nothing the survey finds is stored as
         # experience, so the background section cannot claim the plans stand on it.
         text = _SURVEY_STORED_EXPERIENCE.sub(
@@ -657,9 +643,7 @@ def _for_capabilities(
             "that does not have it.",
             text,
         )
-    bullet = _stored_experience_bullet(
-        search=experience_search, policy=experience_policy
-    )
+    bullet = _stored_experience_bullet(search=experience_search)
     text = _STORED_EXPERIENCE.sub(lambda _m: bullet, text)
     return _TREE_LITERATURE.sub(lambda _m: _LITERATURE_BULLET, text)
 
@@ -758,7 +742,6 @@ def get_system_prompt(
             _for_capabilities(
                 section,
                 experience_search="search_experience" in names,
-                experience_policy="apply_experience" in names,
             )
             for section in sections
         ]

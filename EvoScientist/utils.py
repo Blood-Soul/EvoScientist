@@ -23,7 +23,6 @@ console = Console()
 # logged at DEBUG; anything else not in the registry is still a warning.
 OPTIONAL_SUBAGENT_TOOLS = frozenset(
     {
-        "apply_experience",
         "search_experience",
         "list_experience",
         "search_paper_text",
