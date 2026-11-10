@@ -177,6 +177,62 @@ def refresh_all_experience_catalogs(*, memory_dir: str | Path) -> list[Path]:
     return catalogs
 
 
+def _payloads_are_v2(payloads: Mapping[str, Mapping[str, Any]], levels: tuple[str, ...]) -> bool:
+    """Tell the current schema from the v1 pair by the fields its records carry.
+
+    A v2 record either has `source_setting` (L1) or `compared_options` (L2); a v1 record has `statement`. Reading the
+    records rather than trusting a caller argument keeps old libraries, which were written by an older worker, from
+    being tagged as current.
+    """
+    for level in levels:
+        for record in payloads[level].get("experiences") or []:
+            if not isinstance(record, Mapping):
+                continue
+            if "source_setting" in record or "compared_options" in record:
+                return True
+            if "statement" in record:
+                return False
+    return False
+
+
+def _with_resolved_source_ids(
+    payloads: Mapping[str, Mapping[str, Any]],
+    *,
+    levels: tuple[str, ...],
+    project_id: str,
+    paper_key: str,
+) -> Mapping[str, Mapping[str, Any]]:
+    """Replace an induced L2 record's positional `l1-N` citations with the stored `E-*` ids.
+
+    Induction sees the L1 records only as an ordered list, so it can say "drawn from records 1 and 3" but not what
+    those records are called once stored. The ids are content-derived (`_experience_id`), so they can be computed here
+    from the same payload that is about to be written; a citation that names no existing L1 record is dropped so a
+    reader never follows a dangling id.
+    """
+    if "l2" not in levels:
+        return payloads
+    l1_records = [r for r in (payloads.get("l1") or {}).get("experiences") or [] if isinstance(r, Mapping)]
+    resolved = {
+        f"l1-{index}": _experience_id(
+            project_id=project_id, paper_key=paper_key, level="l1", index=index - 1, item=record
+        )
+        for index, record in enumerate(l1_records, start=1)
+    }
+    rewritten: dict[str, Any] = {}
+    for record in payloads["l2"].get("experiences") or []:
+        if not isinstance(record, Mapping):
+            rewritten.setdefault("experiences", []).append(record)
+            continue
+        cited = record.get("source_l1_ids")
+        if isinstance(cited, list) and any(str(c).startswith("l1-") for c in cited):
+            record = {
+                **record,
+                "source_l1_ids": [resolved[str(c)] for c in cited if str(c) in resolved],
+            }
+        rewritten.setdefault("experiences", []).append(record)
+    return {**payloads, "l2": {**payloads["l2"], "experiences": rewritten.get("experiences", [])}}
+
+
 def store_paper_experiences(
     *,
     memory_dir: str | Path,
@@ -189,13 +245,16 @@ def store_paper_experiences(
     payloads: Mapping[ExperienceLevel, Mapping[str, Any]],
     domain_arxiv: str | None = None,
 ) -> Path:
-    """Atomically persist the extraction payloads: one level (current) or the older L1 and L2 pair."""
+    """Atomically persist the extraction payloads: the v2 pair, one v2 level, or the older v1 L1/L2 pair."""
     directory = _paper_dir(
         memory_dir, project_id=project_id, paper_id=paper_id, url=url
     )
     now = datetime.now(UTC).isoformat()
     levels = tuple(level for level in ("l1", "l2") if level in payloads)
-    single_level = levels == ("l1",)
+    v2 = _payloads_are_v2(payloads, levels)
+    payloads = _with_resolved_source_ids(
+        payloads, levels=levels, project_id=project_id, paper_key=directory.name
+    ) if v2 else payloads
     for level in levels:
         atomic_write_json(directory / f"{level}.json", payloads[level])
         # The parse cache validates on (mtime_ns, size). A re-extraction that
@@ -216,7 +275,7 @@ def store_paper_experiences(
             "domain_arxiv": domain_arxiv,
             "paper_sha256": _sha256(paper_text),
             "prompt_sha256": {level: _sha256(prompts[level]) for level in levels},
-            "extraction_schema": "v2" if single_level else "v1",
+            "extraction_schema": "v2" if v2 else "v1",
             "confidence_policy": "single_paper_evidence_v1",
             "supporting_papers": [canonical_paper_identifier(paper_id or url)],
             "contradicting_papers": [],
@@ -353,6 +412,11 @@ def _summary(item: Mapping[str, Any], *, title: str, level: ExperienceLevel) -> 
         item.get("declaration"),
         item.get("keywords_summary"),
         item.get("narrative"),
+        # Current-shape records have neither of the fields above. The claim itself (`action`) and, for an L2
+        # finding, the reason (`mechanism`) are the text a searcher would match, so they take the tail when there
+        # is no pre-digested core to use.
+        item.get("mechanism"),
+        item.get("action"),
     )
     for value in candidates:
         if isinstance(value, str) and value.strip():

@@ -91,9 +91,8 @@ class FakeModel:
 
 
 @pytest.mark.asyncio
-async def test_the_default_prompt_selects_the_single_level_runner_and_retries_once():
-    prompts = load_experience_prompts()
-    assert set(prompts) == {"l1"}
+async def test_an_l1_only_prompt_mapping_still_selects_the_single_level_runner_and_retries_once():
+    prompts = {"l1": load_experience_prompts()["l1"]}
     model = FakeModel('{"experiences": [{"domain"', reply(record()))
     out = await run_experience_extraction(paper_id="p1", paper_text=PAPER, prompts=prompts, model=model)
     assert set(out) == {"l1"} and len(out["l1"]["experiences"]) == 1
@@ -104,7 +103,9 @@ async def test_the_default_prompt_selects_the_single_level_runner_and_retries_on
 async def test_it_gives_up_after_three_bad_replies():
     model = FakeModel("nope", "nope", "nope")
     with pytest.raises(ExperienceOutputError):
-        await run_experience_extraction(paper_id="p1", paper_text=PAPER, prompts=load_experience_prompts(), model=model)
+        await run_experience_extraction(
+            paper_id="p1", paper_text=PAPER, prompts={"l1": load_experience_prompts()["l1"]}, model=model
+        )
     assert model.calls == 3
 
 

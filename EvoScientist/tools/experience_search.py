@@ -106,8 +106,9 @@ class SearchExperienceArgs(BaseModel):
         description=(
             "Optional layer filter. l1 records one concrete practice from one "
             "paper: what was done, in what setting, with what measured result. "
-            "l2 records an inductive claim generalized across observations. Omit "
-            "to search both."
+            "l2 records a mechanism-level finding: why something works, the "
+            "options the paper compared, and the conditions under which it "
+            "holds or stops holding. Omit to search both."
         ),
     )
     limit: int = Field(

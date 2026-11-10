@@ -56,7 +56,7 @@ class ExtractPaperExperiencesArgs(BaseModel):
 
 def _render_extraction(completed: list[dict[str, Any]], failed: list[dict[str, str]]) -> str:
     """What the extraction produced, as text: one block per paper, one line per record."""
-    from ..memory.experiences.render import is_current
+    from ..memory.experiences.render import is_current, is_l2_current
 
     lines: list[str] = []
     for paper in completed:
@@ -68,7 +68,10 @@ def _render_extraction(completed: list[dict[str, Any]], failed: list[dict[str, s
         text = "full text stored" if paper.get("full_text_available") else "no full text stored"
         lines.append(f"{paper.get('title') or paper.get('paper_id')} ({paper.get('paper_id')}): {len(records)} record(s), {source}, {text}")
         for record, level in records:
-            if is_current(record):
+            if is_l2_current(record):
+                origin = "induced" if record.get("origin") == "induced" else "from paper"
+                lines.append(f"  - [L2 {origin}] {' '.join(str(record.get('task') or '').split())}: {' '.join(str(record.get('action') or '').split())[:200]}")
+            elif is_current(record):
                 effect = record.get("effect") or {}
                 lines.append(f"  - [{record.get('comparison')}] {' '.join(str(record.get('task') or '').split())}: {' '.join(str(effect.get('benefit') or '').split())[:200]}")
             else:

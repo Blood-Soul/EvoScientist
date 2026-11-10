@@ -51,8 +51,14 @@ def _items(value: Any) -> list[Any]:
 
 
 def is_current(item: Mapping[str, Any]) -> bool:
-    """True for the current record shape."""
-    return isinstance(item.get("effect"), Mapping) and "problem" in item and "source_setting" in item
+    """True for a current-shape record, either level (L1 carries `source_setting`, L2 `compared_options`)."""
+    if not isinstance(item.get("effect"), Mapping) and "compared_options" not in item:
+        return False
+    return "problem" in item and ("source_setting" in item or "compared_options" in item)
+
+
+def is_l2_current(item: Mapping[str, Any]) -> bool:
+    return "compared_options" in item and "source_setting" not in item
 
 
 def _paper_line(paper: Mapping[str, Any] | None) -> str:
@@ -144,6 +150,58 @@ def _render_current(record_id: str, item: Mapping[str, Any], paper: Mapping[str,
     return "\n".join(lines)
 
 
+def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[str, Any] | None) -> str:
+    """An L2 finding: a mechanism-level claim, plus the options and conditions that make it checkable."""
+    origin = _s(item.get("origin"))
+    label = (
+        "L2 finding · induced from this paper's own experimental records"
+        if origin == "induced"
+        else "L2 finding · mechanism-level claim drawn from the paper"
+    )
+    lines = [f"{record_id} · {label}"]
+    task, domain = _s(item.get("task")), _s(item.get("domain"))
+    lines.append(f"Task: {task}" + (f"  [{domain}]" if domain else ""))
+    if _s(item.get("problem")):
+        lines.append(f"Problem it answers: {_s(item.get('problem'))}")
+    if item.get("method"):
+        lines.append(f"Method: {_method_line(item.get('method'))}")
+    if _s(item.get("action")):
+        lines.append(f"What to do: {_s(item.get('action'))}")
+
+    options = [o for o in _items(item.get("compared_options")) if isinstance(o, Mapping) and _s(o.get("option"))]
+    if options:
+        lines.append("Options compared:")
+        for option in options:
+            tail = f"  [{_s(option.get('from'))}]" if _s(option.get("from")) else ""
+            result = _s(option.get("result"))
+            lines.append(f"  - {_s(option.get('option'))}" + (f": {result}" if result else "") + tail)
+
+    if _s(item.get("mechanism")):
+        lines.append(f"Why it works: {_s(item.get('mechanism'))}")
+
+    requires = [r for r in _items(item.get("requires")) if isinstance(r, Mapping) and _s(r.get("text"))]
+    if requires:
+        lines.append("Holds when (what must be true for the finding to apply):")
+        for r in requires:
+            lines.append(f"  - {_s(r.get('text'))}" + (" (inferred)" if _s(r.get("basis")) == "inferred" else ""))
+
+    limits = [x for x in _items(item.get("limits_stated")) if isinstance(x, Mapping) and _s(x.get("text"))]
+    if limits:
+        lines.append("Stops holding when:")
+        for x in limits:
+            lines.append(f"  - {_s(x.get('text'))}" + (" (inferred)" if _s(x.get("basis")) == "inferred" else ""))
+
+    source = _paper_line(paper)
+    where = _s(item.get("locator"))
+    cited = [c for c in _items(item.get("source_l1_ids")) if _s(c)]
+    parts = [p for p in (source, f"see {where}" if where else "") if p]
+    if cited:
+        parts.append("drawn from " + ", ".join(_s(c) for c in cited))
+    if parts:
+        lines.append("Source: " + " · ".join(parts))
+    return "\n".join(lines)
+
+
 def _render_legacy(record_id: str, level: str, item: Mapping[str, Any], paper: Mapping[str, Any] | None) -> str:
     lines = [f"{record_id} · {LEVEL_MEANING.get(level, level)}"]
     task, domain = _s(item.get("task")), _s(item.get("domain"))
@@ -188,6 +246,8 @@ def render_record(document: Mapping[str, Any] | str) -> str:
     item = document.get("experience") if isinstance(document.get("experience"), Mapping) else document
     record_id = _s(document.get("id") or item.get("id"))
     paper = document.get("paper") if isinstance(document.get("paper"), Mapping) else None
+    if is_l2_current(item):
+        return _render_current_l2(record_id, item, paper)
     if is_current(item):
         return _render_current(record_id, item, paper)
     return _render_legacy(record_id, _s(document.get("experience_level") or item.get("layer") or ""), item, paper)
@@ -199,7 +259,16 @@ def render_hit(index: int, document: Mapping[str, Any], *, score: Any = None, ma
     record_id = _s(document.get("id") or item.get("id"))
     paper = document.get("paper") if isinstance(document.get("paper"), Mapping) else None
     head = f"{index}. {record_id}"
-    if is_current(item):
+    if is_l2_current(item):
+        label = "L2 induced" if _s(item.get("origin")) == "induced" else "L2"
+        lines = [f"{head} [{label}] {_s(item.get('task'))}"]
+        if _s(item.get("problem")):
+            lines.append(f"   Problem: {_clip(item.get('problem'), 180)}")
+        if _s(item.get("action")):
+            lines.append(f"   Claim: {_clip(item.get('action'), 220)}")
+        if _s(item.get("mechanism")):
+            lines.append(f"   Why: {_clip(item.get('mechanism'), 160)}")
+    elif is_current(item):
         effect = item.get("effect") if isinstance(item.get("effect"), Mapping) else {}
         label = _s(item.get("comparison"))
         lines = [f"{head} [{label}] {_s(item.get('task'))}"]
