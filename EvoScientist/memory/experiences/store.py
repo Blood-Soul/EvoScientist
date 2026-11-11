@@ -233,6 +233,32 @@ def _with_resolved_source_ids(
     return {**payloads, "l2": {**payloads["l2"], "experiences": rewritten.get("experiences", [])}}
 
 
+def _with_trimmed_param_bases(
+    payloads: Mapping[str, Mapping[str, Any]], *, levels: tuple[str, ...]
+) -> Mapping[str, Mapping[str, Any]]:
+    """Drop `basis`/`from` on a param whose basis is `unstated` (the paper does not say how it was chosen).
+
+    Storing `"basis": "unstated"` records a non-answer. Omitting the key says the same thing in fewer bytes and keeps
+    the rendered setting free of a bracket that carries no information. The value itself is untouched.
+    """
+    if "l1" not in levels:
+        return payloads
+    trimmed: list[Any] = []
+    for record in payloads["l1"].get("experiences") or []:
+        setting = record.get("source_setting") if isinstance(record, Mapping) else None
+        params = setting.get("params") if isinstance(setting, Mapping) else None
+        if not isinstance(params, list):
+            trimmed.append(record)
+            continue
+        kept_params = []
+        for param in params:
+            if isinstance(param, Mapping) and str(param.get("basis") or "").strip().lower() in {"", "unstated"}:
+                param = {k: v for k, v in param.items() if k not in {"basis", "from"}}
+            kept_params.append(param)
+        trimmed.append({**record, "source_setting": {**setting, "params": kept_params}})
+    return {**payloads, "l1": {**payloads["l1"], "experiences": trimmed}}
+
+
 def store_paper_experiences(
     *,
     memory_dir: str | Path,
@@ -255,6 +281,8 @@ def store_paper_experiences(
     payloads = _with_resolved_source_ids(
         payloads, levels=levels, project_id=project_id, paper_key=directory.name
     ) if v2 else payloads
+    if v2:
+        payloads = _with_trimmed_param_bases(payloads, levels=levels)
     for level in levels:
         atomic_write_json(directory / f"{level}.json", payloads[level])
         # The parse cache validates on (mtime_ns, size). A re-extraction that

@@ -28,7 +28,6 @@ BASIS_MEANING = {
     "derived": "computed from a measurement or rule the paper states",
     "prior_work": "taken from earlier work or a standard recipe",
     "default": "a library or framework default",
-    "unstated": "the paper does not say how this was chosen",
 }
 
 LEVEL_MEANING = {
@@ -84,6 +83,10 @@ def _method_line(method: Any) -> str:
 def _knob_line(knob: Mapping[str, Any]) -> str:
     name, value = _s(knob.get("name")), _s(knob.get("value"))
     basis, origin = _s(knob.get("basis")), _s(knob.get("from"))
+    # New records omit the key when the paper does not say how the value was chosen; older records still carry
+    # `"basis": "unstated"`. Both mean the same thing, and neither earns a bracket in the rendered text.
+    if basis in {"", "unstated"}:
+        return f"{name} = {value}"
     why = BASIS_MEANING.get(basis, basis)
     if basis == "swept":
         detail = f"swept, tried: {origin}" if origin else f"swept ({why})"
@@ -137,6 +140,8 @@ def _render_current(record_id: str, item: Mapping[str, Any], paper: Mapping[str,
             for k in knobs:
                 lines.append(f"  - {_knob_line(k)}")
 
+    # `limits_stated.quote` is stored for audit but deliberately not rendered: the agent acts on the authors' stated
+    # limit, not on a verbatim excerpt.
     limits = [x for x in _items(item.get("limits_stated")) if isinstance(x, Mapping) and _s(x.get("text"))]
     if limits:
         lines.append("Limits the authors themselves state:")
@@ -193,6 +198,7 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
 
     source = _paper_line(paper)
     where = _s(item.get("locator"))
+    # `origin` labels the finding above; `source_l1_ids` stays as an audit trail and is shown only as provenance.
     cited = [c for c in _items(item.get("source_l1_ids")) if _s(c)]
     parts = [p for p in (source, f"see {where}" if where else "") if p]
     if cited:

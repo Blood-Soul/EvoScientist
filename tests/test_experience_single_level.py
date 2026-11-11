@@ -119,3 +119,17 @@ def test_one_level_is_stored_listed_and_reloaded(tmp_path: Path):
     cached = load_paper_experiences(**kwargs)
     assert cached is not None and cached["l2"] == {"experiences": []}
     assert cached["metadata"]["extraction_schema"] == "v2"
+
+
+def test_an_unstated_param_basis_is_stored_as_absent(tmp_path: Path):
+    prompts = load_experience_prompts()
+    setting = {"environment": [], "params": [
+        {"name": "batch size", "value": "32", "basis": "unstated", "from": ""},
+        {"name": "share", "value": "33%", "basis": "swept", "from": "20, 33, 66"},
+    ]}
+    payload = parse_experience_v2(reply(record(source_setting=setting)), paper_id="p1")
+    kwargs = dict(memory_dir=tmp_path, project_id="P-y", paper_id="p1", url="https://arxiv.org/abs/p1")
+    store_paper_experiences(**kwargs, title="T", paper_text=PAPER, prompts=prompts, payloads={"l1": payload})
+    params = load_paper_experiences(**kwargs)["l1"]["experiences"][0]["source_setting"]["params"]
+    assert params[0] == {"name": "batch size", "value": "32"}
+    assert params[1]["basis"] == "swept" and params[1]["from"] == "20, 33, 66"

@@ -63,7 +63,7 @@ def test_current_record_is_text_with_each_field_explained():
     assert "a per-window null label (inferred)" in out and "windowed documents (inferred)" not in out
     assert "downsampling factor = 50  [derived from: 98% null rate]" in out
     assert "share of null = 33%  [swept, tried: 20%, 33%, 66%]" in out
-    assert "the paper does not say how this was chosen" in out
+    assert "batch size = 32" in out and "batch size = 32  [" not in out
     assert "Limits the authors themselves state" in out
     assert "see Table 1" in out and "search_paper_text" in out
 
