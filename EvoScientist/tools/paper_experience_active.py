@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..memory.experiences import (
     download_paper_text,
+    gate_extraction,
     load_experience_prompts,
     load_paper_experiences,
     run_experience_extraction,
@@ -67,6 +68,11 @@ def _render_extraction(completed: list[dict[str, Any]], failed: list[dict[str, s
         source = "from cache" if paper.get("cached") else "extracted now"
         text = "full text stored" if paper.get("full_text_available") else "no full text stored"
         lines.append(f"{paper.get('title') or paper.get('paper_id')} ({paper.get('paper_id')}): {len(records)} record(s), {source}, {text}")
+        gate = paper.get("gate")
+        if gate:
+            lines.append(f"  quality gate ({gate['mode']}): {gate['admitted']} of {gate['graded']} admitted"
+                         + (f", {gate['rejected']} kept out" if gate["mode"] == "enforce" and gate["rejected"] else "")
+                         + (f", {gate['rejected']} would be kept out" if gate["mode"] == "audit" and gate["rejected"] else ""))
         for record, level in records:
             if is_l2_current(record):
                 origin = "induced" if record.get("origin") == "induced" else "from paper"
@@ -185,6 +191,9 @@ def create_extract_paper_experiences_tool(
                     prompts=active_prompts,
                     domain_arxiv=paper.domain_arxiv,
                 )
+                payloads, gate_report = await gate_extraction(
+                    paper_id=paper_id, paper_text=paper_text, payloads=payloads
+                )
                 await asyncio.to_thread(
                     store_paper_experiences,
                     memory_dir=memory_dir,
@@ -196,6 +205,7 @@ def create_extract_paper_experiences_tool(
                     prompts=active_prompts,
                     payloads=payloads,
                     domain_arxiv=paper.domain_arxiv,
+                    gate_report=gate_report,
                 )
                 return {
                     "paper_id": paper_id,
@@ -203,6 +213,7 @@ def create_extract_paper_experiences_tool(
                     "url": paper.url,
                     "cached": False,
                     "full_text_available": stored is not None,
+                    "gate": gate_report,
                     "l1": payloads["l1"],
                     "l2": payloads.get("l2", {"experiences": []}),
                 }

@@ -7,6 +7,7 @@ from .extraction import (
     parse_experience_json,
     run_experience_extraction,
 )
+from .gate import GateError, gate_extraction
 from .queue import (
     PaperExperienceTask,
     claim_next_task,
@@ -44,6 +45,7 @@ __all__ = [
     "DISCIPLINES",
     "EXPERIENCE_CATALOG_FILENAME",
     "FALLBACK_DISCIPLINE",
+    "GateError",
     "ExperienceOutputError",
     "PaperExperienceTask",
     "browse_experience_facets",
@@ -67,6 +69,7 @@ __all__ = [
     "refresh_experience_catalog",
     "requeue_running_tasks",
     "resolve_discipline",
+    "gate_extraction",
     "run_experience_extraction",
     "search_experience_records",
     "store_paper_experiences",

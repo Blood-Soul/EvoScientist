@@ -356,6 +356,7 @@ coach 是因为**每个子 agent 内部再跑一遍逐步 gate，会把辅助模
 | `memory_experience_policy_max_selected` | `4`（钳制 [1,6]） | `EVOSCIENTIST_MEMORY_EXPERIENCE_POLICY_MAX_SELECTED` |
 | `memory_experience_coach_enabled` | `true` | `EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_ENABLED` |
 | `memory_experience_coach_recent_messages` | `6`（钳制 [1,30]） | `EVOSCIENTIST_MEMORY_EXPERIENCE_COACH_RECENT_MESSAGES` |
+| `memory_experience_gate` | `off`（`off` / `audit` / `enforce`） | `EVOSCIENTIST_MEMORY_EXPERIENCE_GATE` |
 | `memory_paper_fulltext_enabled` | `true` | `EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED` |
 | `memory_paper_chunk_max_chars` | `2000` | `EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS` |
 | `memory_paper_chunk_overlap_chars` | `200` | `EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS` |
@@ -374,6 +375,33 @@ registry 解析的。这三处（middleware、base_tools、说明块）必须同
 1——`0` 会让 gate 看不到这次运行做过什么；上界是 30——无上界等于每步把整条轨迹
 送上辅助模型，正好抵消掉用辅助模型的理由。
 
+### 提取质量门控（`memory_experience_gate`）
+
+自动提取的经验质量参差，门控在**写入经验库之前**逐条评分，评分用 expbench 的 21 项 rubric
+（Eval 仓库 `experiment/expbench/rubric`，提交 `feffe92`；`experiences/gate_rubric/` 里的
+schema 和四份维度提示词是原样拷贝，改 rubric 时两边要一起改）。
+
+- 每条记录跑最多 18 个二值检查，分四个维度：faithfulness、validity、scope、inference。
+  其中 F1–F3 是程序检查（引文逐字、数字出现在论文里、locator 存在），不调模型；其余每个维度
+  调一次辅助模型，每个 `pass` 必须附一段**从论文里逐字复制**的 span，程序在论文里找不到就
+  降为 `fail`（先给一次修复机会）。actionability（A1–A3）不影响状态，所以不评。
+- 维度分和状态都由代码按二值检查算出，模型不产生数字。状态五种：
+  `ACCEPT`、`PROVISIONAL`、`REVISE`、`REJECT`、`INSUFFICIENT`。
+- **放行 `ACCEPT` 和 `PROVISIONAL`。** `PROVISIONAL` 表示唯一的问题是机制断言没有论文证据（I1），
+  记录入库，`mechanism` 前加 `UNVERIFIED_MECHANISM: `，并带 `gate: PROVISIONAL`。
+  `REVISE`、`REJECT`、`INSUFFICIENT` 不入库。
+- L1 与 L2 的规则不同：L2 不要求数字对比和完整实验设置，只评 F1/F4/F5/S3/S5/I1–I3。
+  引用了被丢弃 L1 的归纳型 L2 一并丢弃，其余 L2 的 `source_l1_ids` 按保留下来的 L1 重新编号。
+- 三档：`off` 什么都不做；`audit` 评分并写 `gate.json`，但**所有记录照常入库**；
+  `enforce` 在此基础上丢掉未放行的记录。被丢记录的原文和失败原因留在
+  `experiences/projects/<项目>/<论文>/gate.json`，不在 `l1.json`/`l2.json` 里。
+- judge 是辅助模型，每个检查采样 1 次（Eval 里是 3 次取多数）。成本约每条记录 4 次模型调用，
+  加一次可能的修复。**judge 没给出可用回复时门控抛错**，任务失败后重试，而不是放过未评分的记录。
+- 只评 v2 记录；旧的 v1 记录（有 `statement`）会被拒绝并报错。
+- 门控是同步串在提取和入库之间的，不会让经验库先出现再被撤回。
+
+建议先开 `audit` 跑一批，看 `gate.json` 里各状态占比和失败原因，再决定是否 `enforce`。
+
 工具授权：`apply_experience`/`search_experience`/`list_experience`/
 `search_paper_text`/`read_paper` 只授予 `research-agent` 和 `planner-agent`
 （YAML 里的 `tools:` 列表）；memory worker 恒为不启用（它只写观察）。主 agent 默认
@@ -389,6 +417,7 @@ EvoScientist/memory/
     retrieval.py      search_experience_records + list + degenerate_facets
     taxonomy.py       discipline 词表与解析
     queue.py          被动入队队列
+    gate.py           提取质量门控：rubric 评分 + 放行/丢弃（gate_rubric/ 是 rubric 的拷贝）
   papers/
     chunking.py        section-aware 切分算法
     store.py           原子写、目录发现、chunk 索引加载

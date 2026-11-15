@@ -270,6 +270,7 @@ def store_paper_experiences(
     prompts: Mapping[ExperienceLevel, str],
     payloads: Mapping[ExperienceLevel, Mapping[str, Any]],
     domain_arxiv: str | None = None,
+    gate_report: Mapping[str, Any] | None = None,
 ) -> Path:
     """Atomically persist the extraction payloads: the v2 pair, one v2 level, or the older v1 L1/L2 pair."""
     directory = _paper_dir(
@@ -291,6 +292,9 @@ def store_paper_experiences(
         # explicitly on the one path that writes them.
         with _cache_lock:
             _level_parse_cache.pop(str(directory / f"{level}.json"), None)
+    if gate_report is not None:
+        # What the quality gate decided, including the records it kept out: they are not in l1.json or l2.json.
+        atomic_write_json(directory / "gate.json", gate_report)
     atomic_write_json(
         directory / "metadata.json",
         {

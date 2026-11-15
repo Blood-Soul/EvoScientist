@@ -133,6 +133,7 @@ EvoScientist = [
     "subagents/*.yaml",
     "langgraph_dev/*.json",
     "skills/**/*",
+    "memory/experiences/gate_rubric/*",
 ]
 
 [tool.setuptools.data-files]

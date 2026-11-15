@@ -1,0 +1,270 @@
+{
+  "version": "expbench-rubric-v1",
+  "schema_ref": "prompt/experience_extract_v2.md",
+  "unit": "one experience record and its evidence; the layer contract is L1 or L2",
+  "layers": {
+    "l1": {
+      "role": "A reusable fact pattern grounded in one paper. Preserve transfer-critical conditions; numbers are optional unless the record uses them as evidence.",
+      "gating": ["faithfulness", "validity", "scope"],
+      "numeric_fields_optional": true,
+      "mechanism_required": false
+    },
+    "l2": {
+      "role": "A synthesis or mechanism supported by the paper or by source L1 records. Do not require a numeric comparison or a full experiment setting.",
+      "gating": ["faithfulness", "scope", "inference"],
+      "numeric_fields_optional": true,
+      "mechanism_required": false,
+      "lineage_required": true
+    }
+  },
+  "outputs": ["pass", "fail", "na"],
+  "dimensions": {
+    "faithfulness": {
+      "label": "Faithfulness",
+      "gating": true,
+      "prompt": "faithfulness.md",
+      "checks": [
+        {
+          "id": "F1",
+          "name": "evidence_quotes_verbatim",
+          "mode": "program",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["limits_stated[].quote"],
+          "question": "Every limits_stated[].quote is copied verbatim from the paper."
+        },
+        {
+          "id": "F2",
+          "name": "numbers_grounded",
+          "mode": "program",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["effect.compared", "effect.benefit", "effect.cost",
+                     "source_setting.params[].value", "source_setting.params[].from"],
+          "question": "Every number in effect and source_setting.params appears in the paper."
+        },
+        {
+          "id": "F3",
+          "name": "locator_exists",
+          "mode": "program",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["locator"],
+          "question": "The locator names a table, figure or section that exists in the paper."
+        },
+        {
+          "id": "F4",
+          "name": "method_terms_supported",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "paper",
+          "fields": ["method[]"],
+          "question": "Each method entry is a technique the paper names, tests or compares, or a common alias of one. A synonym or descriptive equivalent of a named technique is a valid alias; only a distinct technique or quantity the paper neither names nor tests fails this check."
+        },
+        {
+          "id": "F5",
+          "name": "effect_supported",
+          "mode": "judge",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["effect"],
+          "question": "The effect block reports only comparisons the paper actually ran and attributes only findings the paper reports to this paper: no borrowed result, textbook prior, extractor inference or result from another work is stated as the paper's result. A wrong number is F2 and a reversed direction is V3; neither by itself fails this check. A scope clause inside benefit (\"this holds for every dataset and model\") is S5's failure, not this check's, when the comparison it accompanies is one the paper ran. A statement that one level the record names has the highest or lowest value of the reported metric among the levels the record lists is a reading of that table, not an inference; it does not claim a table-wide ranking."
+        }
+      ]
+    },
+    "validity": {
+      "label": "Experimental validity",
+      "gating": true,
+      "prompt": "validity.md",
+      "checks": [
+        {
+          "id": "V1",
+          "name": "comparison_label_correct",
+          "mode": "judge",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["comparison"],
+          "question": "The comparison label matches the design: controlled only when one factor changed with the rest held fixed; vs_baseline when more than one thing differs between the arms; absolute_only when no comparison is reported. The label describes what differs, not whether an arm is called a baseline: a single-component ablation (including an arm that removes a component, written `no X` or `w/o X`) or one-knob sweep is controlled even when one arm is named the baseline or the full model."
+        },
+        {
+          "id": "V2",
+          "name": "factor_isolated",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "paper",
+          "fields": ["effect.compared"],
+          "question": "For a controlled claim, the paper's evidence isolates the named factor (ablation, removal or sweep) rather than confounding it with another change."
+        },
+        {
+          "id": "V3",
+          "name": "direction_matches_evidence",
+          "mode": "judge",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["effect.benefit"],
+          "question": "The direction of effect.benefit agrees with the reported numbers: the level or method the record calls better is the better one under the metric's polarity (lower is better for loss, perplexity, latency, cost). A sentence of the form `improves from A to B` asserts that B is better than A; if B's number is worse under the polarity, V3 fails."
+        },
+        {
+          "id": "V4",
+          "name": "delta_reported",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "paper",
+          "fields": ["effect.benefit"],
+          "question": "If the paper reports a number for this comparison, effect.benefit includes it; if the paper reports none, the record does not imply one."
+        },
+        {
+          "id": "V5",
+          "name": "units_preserved",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "paper",
+          "fields": ["effect", "source_setting.params[]"],
+          "question": "Numbers keep the paper's unit and scale: no silent x100, no percent/fraction switch, no unit change."
+        }
+      ]
+    },
+    "scope": {
+      "label": "Scope accuracy",
+      "gating": true,
+      "prompt": "scope.md",
+      "checks": [
+        {
+          "id": "S1",
+          "name": "environment_grounded",
+          "mode": "judge",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["source_setting.environment[]"],
+          "question": "Every environment property/value is stated in the paper for this experiment; nothing is inferred, and nothing is borrowed from a different setting."
+        },
+        {
+          "id": "S2",
+          "name": "param_basis_correct",
+          "mode": "judge",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["source_setting.params[].basis", "source_setting.params[].from"],
+          "question": "Each params[].basis matches its meaning: swept only if several values were tried, derived only if the paper states the rule or measurement, prior_work/default only if the paper says so, unstated when the paper prints the value without giving its source or rationale. Printing a value without explanation is unstated, not a failure."
+        },
+        {
+          "id": "S3",
+          "name": "requires_not_overstated",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "paper",
+          "fields": ["requires[]"],
+          "question": "requires[] lists only what the technique itself needs, and every item marked basis=stated is said in words in the paper. Generalities and suitability judgements are not requirements."
+        },
+        {
+          "id": "S4",
+          "name": "environment_not_narrowed",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "paper",
+          "fields": ["source_setting.environment[]"],
+          "question": "environment does not omit a condition that defines the tested comparison (dataset, domain, model, metric, subset, evaluation setting), i.e. the source setting is not narrowed to make the result look cleaner than it was. Evaluation bookkeeping - repeated runs or seeds, hardware, hyperparameter housekeeping - does not define what is compared; omitting it is not S4."
+        },
+        {
+          "id": "S5",
+          "name": "effect_scope_not_overstated",
+          "mode": "judge",
+          "hard": true,
+          "evidence": "paper",
+          "fields": ["effect.benefit", "source_setting.environment[]"],
+          "question": "The benefit is not generalised beyond the setting, dataset, subset or model where it was measured. A paired statement of the measured values ('improves from A to B') is not a generalisation: it claims only that comparison. A ranking limited to the levels the record lists is not a generalisation either. An explicit claim that the benefit holds beyond the measured setting ('this holds for every dataset and model') is S5 even when the record also omits those datasets; S4 covers a silent omission with no such claim. Failing to name the dataset is S4 (omission), not S5."
+        }
+      ]
+    },
+    "inference": {
+      "label": "Inference strength",
+      "gating": false,
+      "prompt": "inference.md",
+      "checks": [
+        {
+          "id": "I1",
+          "name": "mechanism_grounded",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "either",
+          "fields": ["mechanism", "effect.benefit"],
+          "question": "Mechanism claims are supported by the paper's own analysis. If the paper gives no mechanism evidence, the record must mark the claim UNVERIFIED_MECHANISM instead of asserting it."
+        },
+        {
+          "id": "I2",
+          "name": "inference_flagged",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "either",
+          "fields": ["requires[].basis", "source_setting.params[].basis"],
+          "question": "Prerequisites or parameter values that follow from inference are marked inferred/unstated, not stated/swept."
+        },
+        {
+          "id": "I3",
+          "name": "no_causal_overreach",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "paper",
+          "fields": ["effect.benefit", "mechanism"],
+          "question": "The record does not assert a causal explanation that the paper only shows as correlation or speculation."
+        }
+      ]
+    },
+    "actionability": {
+      "label": "Actionability",
+      "gating": false,
+      "prompt": "actionability.md",
+      "checks": [
+        {
+          "id": "A1",
+          "name": "action_concrete",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "record",
+          "fields": ["action"],
+          "question": "action gives an operation, its order, and the real values needed to carry it out, rather than a description of the idea."
+        },
+        {
+          "id": "A2",
+          "name": "action_consistent",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "record",
+          "fields": ["action", "method", "source_setting.params[]"],
+          "question": "action does not contradict method, params or effect, and does not instruct a value the paper did not test."
+        },
+        {
+          "id": "A3",
+          "name": "action_reusable",
+          "mode": "judge",
+          "hard": false,
+          "evidence": "record",
+          "fields": ["action"],
+          "question": "action is usable without the paper: no dangling references to the authors, the study, or names defined only in the paper."
+        }
+      ]
+    }
+  },
+  "scoring": {
+    "dimension_range": [0, 1, 2],
+    "rule": {
+      "2": "no hard failure and no soft failure among applicable checks",
+      "1": "no hard failure with at least one soft failure, or exactly one hard failure with no soft failure",
+      "0": "two or more hard failures, or one hard failure together with any soft failure"
+    },
+    "na": "na checks are excluded; a dimension with no applicable check scores null and is not gating"
+  },
+  "status_rule": {
+    "INSUFFICIENT": "fewer than 3 applicable checks across all dimensions",
+    "REJECT": "faithfulness = 0, or validity = 0, or (faithfulness = 1, validity = 1 and scope = 0)",
+    "ACCEPT": "faithfulness = 2, validity = 2, scope >= 1, no hard check fails, and no inference check fails",
+    "PROVISIONAL": "same as ACCEPT except I1 fails alone: the mechanism is asserted without paper evidence and the record should carry UNVERIFIED_MECHANISM",
+    "REVISE": "otherwise, including any inference failure other than I1 alone; actionability never changes the status"
+  },
+  "l2_status_rule": {
+    "REJECT": "faithfulness = 0, scope = 0, or inference = 0 when the dimension is applicable",
+    "ACCEPT": "faithfulness = 2, scope >= 1, inference >= 1 when applicable, no hard check fails",
+    "PROVISIONAL": "same as ACCEPT except I1 fails alone and the record marks the mechanism UNVERIFIED_MECHANISM",
+    "REVISE": "otherwise; numeric comparison and validity are not gates for L2"
+  }
+}

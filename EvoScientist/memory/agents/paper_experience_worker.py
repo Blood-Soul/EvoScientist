@@ -17,6 +17,7 @@ from ..experiences import (
     complete_task,
     download_paper_text,
     fail_task,
+    gate_extraction,
     load_experience_prompts,
     queue_worker_lock_path,
     requeue_running_tasks,
@@ -88,6 +89,12 @@ async def drain_paper_experience_queue(
                         model=model,
                         domain_arxiv=task.domain_arxiv,
                     )
+                    payloads, gate_report = await gate_extraction(
+                        paper_id=task.paper_id or task.url,
+                        paper_text=paper_text,
+                        payloads=payloads,
+                        model=model,
+                    )
                     await asyncio.to_thread(
                         store_paper_experiences,
                         memory_dir=memory_dir,
@@ -99,6 +106,7 @@ async def drain_paper_experience_queue(
                         prompts=prompts,
                         payloads=payloads,
                         domain_arxiv=task.domain_arxiv,
+                        gate_report=gate_report,
                     )
                     await asyncio.to_thread(
                         complete_task, memory_dir=memory_dir, task=task

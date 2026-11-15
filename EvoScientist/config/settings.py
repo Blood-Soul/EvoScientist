@@ -461,6 +461,11 @@ class EvoScientistConfig:
     # `enqueue_paper_experiences`. Needs `memory_paper_extraction_enabled`. On by
     # default on this branch, so the manual enqueue tool is not registered.
     memory_paper_autoqueue_enabled: bool = True
+    # Quality gate on extracted experience records (see memory/experiences/gate.py). `off` stores everything;
+    # `audit` grades every record and writes gate.json but still stores everything; `enforce` also drops the records
+    # the rubric does not admit (ACCEPT and PROVISIONAL are admitted). Costs about one judge call per dimension per
+    # record, on the auxiliary model.
+    memory_experience_gate: str = "off"
     memory_experience_search_enabled: bool = True
     # Register `review_plan` for the sub-agents whose YAML lists it: a finished plan is read against the experience
     # library and comes back with suggestions that cite their records.
@@ -1413,6 +1418,7 @@ _ENV_MAPPINGS = {
     "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
     "memory_paper_extraction_enabled": "EVOSCIENTIST_MEMORY_PAPER_EXTRACTION_ENABLED",
     "memory_paper_autoqueue_enabled": "EVOSCIENTIST_MEMORY_PAPER_AUTOQUEUE_ENABLED",
+    "memory_experience_gate": "EVOSCIENTIST_MEMORY_EXPERIENCE_GATE",
     "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",
     "memory_experience_search_enabled": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_SEARCH_ENABLED"
