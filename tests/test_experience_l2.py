@@ -183,6 +183,40 @@ def test_storing_resolves_the_citation_to_the_stored_l1_id(tmp_path: Path):
 def test_an_l2_record_renders_its_options_mechanism_and_conditions():
     text = render_record({"id": "E-1", "experience_level": "l2", "experience": l2_record()})
     assert "Options compared:" in text and "head features + initialisation" in text
-    assert "Why it works:" in text and "Holds when" in text and "Stops holding when:" in text
+    assert "Why it works:" in text and "Holds when" in text
+    # an older stored L2 record may still carry limits_stated; it is not shown
+    assert "Stops holding when:" not in text and "trained for answer type" not in text
     hit = render_hit(1, {"id": "E-1", "experience_level": "l2", "experience": l2_record()})
     assert "[L2]" in hit and "Claim:" in hit
+
+
+def test_l2_records_do_not_carry_failure_conditions():
+    out = parse_experience_v2(reply(l2_record()), paper_id="p1", level="l2")
+    assert "limits_stated" not in out["experiences"][0]
+    rec = l2_record(); del rec["limits_stated"]
+    assert parse_experience_v2(reply(rec), paper_id="p1", level="l2")["experiences"]
+
+
+def test_the_l2_prompts_ask_for_no_failure_conditions():
+    root = Path(__file__).resolve().parents[1] / "prompt"
+    for name in ("l2_extract_v2.md", "l2_from_l1_v2.md"):
+        text = (root / name).read_text(encoding="utf-8")
+        out_contract = text[text.index("## Output contract"):]
+        assert '"limits_stated"' not in out_contract, name
+
+
+def test_plan_review_retrieval_keeps_a_share_of_l1(tmp_path: Path):
+    from EvoScientist.memory.policy.select import gather_candidates
+
+    # one paper with 3 L1 and 6 L2 records, all about the verifier: a pure L2-first fill would return no L1
+    l1s = [l1_record(problem=f"verifier problem {i}", action=f"Train the answer verifier, variant {i}.") for i in range(3)]
+    l2s = [l2_record(problem=f"When does the answer verifier help, case {i}?") for i in range(6)]
+    store_paper_experiences(
+        memory_dir=tmp_path, project_id="P-x", paper_id="p1", url="https://arxiv.org/abs/p1", title="T",
+        paper_text=PAPER, prompts={"l1": "a", "l2": "b"},
+        payloads={"l1": parse_experience_v2(reply(*l1s), paper_id="p1"),
+                  "l2": parse_experience_v2(reply(*l2s), paper_id="p1", level="l2")},
+    )
+    got = gather_candidates(memory_dir=tmp_path, project_id="P-x", query="answer verifier", limit=6)
+    levels = [c["level"] for c in got]
+    assert len(got) == 6 and levels.count("l1") == 2 and levels.count("l2") == 4

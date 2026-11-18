@@ -163,3 +163,21 @@ async def test_the_tool_never_rewrites_the_plan_file(tmp_path: Path, monkeypatch
     out = await tool.coroutine(path="reports/plan.md", task="t")
     assert out == "Plan review: 1 suggestion"
     assert plan.read_text(encoding="utf-8") == "# Plan: original\n"
+
+
+def test_round_robin_gives_every_query_its_best_record_first() -> None:
+    from EvoScientist.memory.policy.review import merge_round_robin
+
+    # query 0 scored low across the board, query 1 high: scores must not be compared across queries
+    q0 = [{"id": "a1", "condition": 0.1}, {"id": "a2", "condition": 0.05}]
+    q1 = [{"id": "b1", "condition": 1.0}, {"id": "b2", "condition": 0.9}, {"id": "a1", "condition": 0.8}]
+    assert list(merge_round_robin([q0, q1])) == ["a1", "b1", "a2", "b2"]
+    assert merge_round_robin([]) == {}
+
+
+def test_stopwords_and_template_words_do_not_count_as_a_condition_match() -> None:
+    from EvoScientist.memory.policy.select import _condition_score, _tokens_of
+
+    assert _tokens_of("2. What the model sees") == {"sees"}
+    record = {"experience": {"task": "what the model does", "domain": "", "problem": "the data"}}
+    assert _condition_score("What the model sees", record) == 0.0

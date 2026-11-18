@@ -69,6 +69,22 @@ def plan_queries(plan: str, limit: int = 6) -> list[str]:
     return uniq[:limit]
 
 
+def merge_round_robin(per_query: Sequence[Sequence[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    """Merge each query's ranked candidates by taking rank 1 of every query, then rank 2, and so on.
+
+    Scores from different queries are not comparable (a three-word heading and a sixty-word hypothesis line give
+    condition scores on different scales), so they are never sorted against each other. Every query that found
+    something gets its best record in before any query gets its second. Duplicates keep their first position.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    depth = max((len(q) for q in per_query), default=0)
+    for rank in range(depth):
+        for candidates in per_query:
+            if rank < len(candidates):
+                merged.setdefault(candidates[rank]["id"], candidates[rank])
+    return merged
+
+
 def _rendered(c: dict[str, Any]) -> str:
     from ..experiences.render import render_record
 
@@ -178,27 +194,28 @@ async def review_plan(
     if not plan.strip():
         return {"status": "empty_plan", "suggestions": [], "text": "Plan review: the plan is empty."}
     queries = plan_queries(plan)
-    found: dict[str, dict[str, Any]] = {}
+    per_query: list[list[dict[str, Any]]] = []
     for q in queries:
-        for c in await asyncio.to_thread(
+        per_query.append(await asyncio.to_thread(
             gather_candidates, memory_dir=memory_dir, project_id=project_id, query=q, limit=record_limit, call_id=call_id
-        ):
-            found.setdefault(c["id"], c)
-    # the plan may already name records; make sure the reviewer sees them
-    named = [i for i in _ID.findall(plan) if i not in found]
+        ))
+    retrieved = merge_round_robin(per_query)
+    # The plan may already name records: those go first so the cut below never drops them.
+    found: dict[str, dict[str, Any]] = {}
+    named = list(dict.fromkeys(_ID.findall(plan)))
     if named:
         for c in await asyncio.to_thread(
             fetch_candidates, memory_dir=memory_dir, project_id=project_id, ids=named, call_id=call_id
         ):
             found.setdefault(c["id"], c)
+    for key, c in retrieved.items():
+        found.setdefault(key, c)
     if not found:
         return {"status": "no_records", "suggestions": [], "queries": queries,
                 "text": "Plan review: no stored experience matched this plan."}
-    # L2 first, then same-condition records; lexical order breaks the rest.
-    shown = sorted(
-        found.values(),
-        key=lambda c: (-float(c.get("condition") or 0.0), 0 if c.get("level") == "l2" else 1),
-    )[: max(record_limit * 2, 12)]
+    # `found` is already in round-robin order across the plan's queries: each
+    # query's best record first, then each query's second, and so on.
+    shown = list(found.values())[: max(record_limit * 2, 12)]
     prompt = await asyncio.to_thread(load_policy_prompt, REVIEW_PROMPT_FILENAME)
     filled = prompt.format(task=task.strip()[:20000], plan=plan[:MAX_PLAN_CHARS], records=_render_records(shown),
                            max_suggestions=max_suggestions)
@@ -226,4 +243,4 @@ async def review_plan(
     return {"status": "ok", "queries": queries, "shown": [c["id"] for c in shown], "text": text, **review}
 
 
-__all__ = ["REVIEW_PROMPT_FILENAME", "parse_review", "plan_queries", "render_review", "review_plan"]
+__all__ = ["REVIEW_PROMPT_FILENAME", "merge_round_robin", "parse_review", "plan_queries", "render_review", "review_plan"]

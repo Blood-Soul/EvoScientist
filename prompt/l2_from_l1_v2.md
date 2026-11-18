@@ -57,15 +57,14 @@ Return only a JSON object with this shape:
   ],
   "mechanism": "why, as supported by comparing the records. Empty string if they do not support a reason.",
   "requires": [{"text": "a condition that must hold for the finding to apply", "basis": "inferred"}],
-  "limits_stated": [{"text": "a condition in which the finding stops holding", "basis": "inferred"}],
   "origin": "induced",
   "source_l1_ids": ["l1-1", "l1-3"]
 }]}
 ```
 
-All keys must be present. `compared_options`, `requires` and `limits_stated` may be empty arrays; `mechanism` may be
+All keys must be present. `compared_options` and `requires` may be empty arrays; `mechanism` may be
 `""`. `source_l1_ids` must be non-empty and must list only records that genuinely contributed — not every record you
-were given. The example marks both conditions `inferred`, the usual case; `stated` is the exception, used only where a
+were given. The example marks the condition `inferred`, the usual case; `stated` is the exception, used only where a
 contributing record argues the condition itself.
 
 ## Field rules specific to induction
@@ -86,10 +85,6 @@ in some records and false in others, and that lines up with where the effect app
 `basis` is `stated` only when a contributing record says in words that the condition matters; a condition that merely
 follows from how the technique works, or from the settings the records ran in, is `inferred`. **Most entries should be
 `inferred`; when in doubt, use it.**
-
-**`limits_stated`** — take it from the contributing records' `limits_stated` or from the cost side of their `effect`.
-A limit is a condition in which the finding stops holding, not a reproduction difficulty. `basis` is `stated` only
-when a contributing record reports it; otherwise, including a limit that follows from the mechanism above, `inferred`.
 
 **`action`** — say what a reader should do differently, not what the paper did. If the induced claim only repeats the
 action of a contributing record, there is nothing induced: drop it.

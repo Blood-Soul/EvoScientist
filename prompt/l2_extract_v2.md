@@ -54,15 +54,14 @@ Return only a JSON object, no prose and no Markdown fences:
   ],
   "mechanism": "why it works, in the terms the paper uses. Empty string if the paper gives no reason.",
   "requires": [{"text": "a condition that must hold for the finding to apply", "basis": "inferred"}],
-  "limits_stated": [{"text": "a condition in which the finding stops holding or the authors report it failing", "basis": "inferred"}],
   "origin": "paper",
   "locator": "Section 5.2"
 }]}
 ```
 
-All keys must be present in every record. `compared_options`, `requires` and `limits_stated` may be empty arrays;
-`mechanism` may be `""`. The example above marks both conditions `inferred`, because that is the usual case;
-`stated` is the exception, used only where the authors argue the condition themselves.
+All keys must be present in every record. `compared_options` and `requires` may be empty arrays; `mechanism` may be
+`""`. The example above marks the condition `inferred`, because that is the usual case; `stated` is the exception,
+used only where the authors argue the condition themselves.
 
 ## How to fill each field
 
@@ -100,13 +99,6 @@ true property of the paper's own system ("the encoder is bidirectional") is not 
 mark it `inferred` unless they argue that the effect depends on it. **When in doubt, use `inferred`.**
 
 Keep the list short: a condition that is always true for the task is not worth writing.
-
-**`limits_stated`** -- where the finding stops holding or the authors report it failing: a threshold beyond which the
-effect reverses, a regime where it does not help, a cost that outweighs it. `basis` follows the same rule as
-`requires`: `stated` only when the authors themselves report or argue it ("does not help on …", "hurts when …");
-otherwise, including a limit that follows from the stated mechanism, `inferred`. A price paid in the tested comparison
-(more parameters, slower inference) is not a limit. Do not list reproduction difficulties — those are not limits of
-the claim. An empty array is the normal answer when the authors state no limit.
 
 **`locator`** -- the section, table or figure where the supporting material is.
 

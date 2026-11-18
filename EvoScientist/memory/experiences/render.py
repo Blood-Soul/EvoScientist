@@ -190,11 +190,8 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
         for r in requires:
             lines.append(f"  - {_s(r.get('text'))}" + (" (inferred)" if _s(r.get("basis")) == "inferred" else ""))
 
-    limits = [x for x in _items(item.get("limits_stated")) if isinstance(x, Mapping) and _s(x.get("text"))]
-    if limits:
-        lines.append("Stops holding when:")
-        for x in limits:
-            lines.append(f"  - {_s(x.get('text'))}" + (" (inferred)" if _s(x.get("basis")) == "inferred" else ""))
+    # Older L2 records may still carry `limits_stated`; it is not shown. Most of those failure conditions had no source
+    # in the paper or the L1 records they were induced from.
 
     source = _paper_line(paper)
     where = _s(item.get("locator"))

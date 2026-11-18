@@ -56,10 +56,23 @@ def _descriptor(record: Mapping[str, Any]) -> str:
 
 
 _WORD = re.compile(r"[a-z0-9]+")
+# Function words and plan-template words. Without this a short query such as a
+# section heading ("2. What the model sees") matched almost every record on
+# "what"/"the"/"model" and scored as high as a real condition match.
+_STOP = frozenset(
+    """the and for with from that this these those what when where which while whose into onto over under than then
+    there their them they its are was were been being have has had does did not but any all each per via how why who
+    can could should would may might must will shall use used using our your one two more most less least also only
+    such same other about after before between both within without whether model models data task plan build step
+    steps section""".split()
+)
 
 
 def _tokens_of(text: Any) -> set[str]:
-    return {w for w in _WORD.findall(" ".join(str(text or "").lower().split())) if len(w) > 2}
+    return {
+        w for w in _WORD.findall(" ".join(str(text or "").lower().split()))
+        if len(w) > 2 and w not in _STOP
+    }
 
 
 def _record_experience(record: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -146,13 +159,20 @@ def gather_candidates(
             mode=ObservationSearchMode.RANKED,
         )
 
-    # L2-first: the synthesis layer answers "when does this transfer"; L1 is
-    # the evidence layer.  Keep L1 as a fallback so a library with no L2 yet
-    # still returns something instead of an empty review.
-    hits = search("l2" if (prefer_l2 and level is None) else level, limit)
-    if prefer_l2 and level is None and len(hits) < limit:
+    # L2-first, but L1 keeps a share: L2 says when a finding transfers, L1
+    # carries the source experiment's setting and numbers. A pure L2-first
+    # fill (as in 36e0891) left no L1 at all once the library had enough L2.
+    if prefer_l2 and level is None:
+        n_l1 = max(1, limit // 3)
+        l2_hits = search("l2", limit)
+        l1_hits = search("l1", limit)
+        hits = l2_hits[: limit - min(n_l1, len(l1_hits))]
+        hits += l1_hits[: limit - len(hits)]
         seen = {hit["observation_id"] for hit in hits}
-        hits += [hit for hit in search(None, limit * 2) if hit["observation_id"] not in seen]
+        if len(hits) < limit:  # one level is short: fill from the other, best first
+            hits += [h for h in l2_hits + l1_hits if h["observation_id"] not in seen][: limit - len(hits)]
+    else:
+        hits = search(level, limit)
     hits = hits[:limit]
     ranked_ids = [hit["observation_id"] for hit in hits]
     if not ranked_ids:
@@ -179,8 +199,11 @@ def gather_candidates(
                 "lexical_rank": rank[experience_id],
             }
         )
-    # Inside the window, same-condition records go first; lexical rank breaks ties.
+    # Inside this query's window, same-condition records go first; lexical rank
+    # breaks ties. The condition score is only comparable within one query.
     candidates.sort(key=lambda c: (-c["condition"], c["lexical_rank"]))
+    for position, candidate in enumerate(candidates):
+        candidate["query_rank"] = position
     emit_trace(
         memory_dir,
         "retrieve",

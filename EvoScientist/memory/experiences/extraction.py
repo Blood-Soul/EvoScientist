@@ -545,13 +545,15 @@ _V2_L1_KEYS = (
     "domain", "task", "problem", "method", "requires", "source_setting", "limits_stated",
     "action", "effect", "comparison", "locator",
 )
-# L2 keeps the L1 fields whose job is the same (domain/task/method/requires/limits_stated/action) and replaces the
-# measured outcome with the claim's three supports: the options that were compared, the mechanism, and the provenance
-# (a locator in the paper, or the L1 ids the induction drew on). There is no source_setting: an L2 finding is stated
-# as a condition (`requires`), not as a value from the source experiment.
+# L2 keeps the L1 fields whose job is the same (domain/task/method/requires/action) and replaces the measured outcome
+# with the claim's three supports: the options that were compared, the mechanism, and the provenance (a locator in the
+# paper, or the L1 ids the induction drew on). There is no source_setting: an L2 finding is stated as a condition
+# (`requires`), not as a value from the source experiment. There is no limits_stated either: an audit of r35 found
+# most L2 failure conditions had no source (41 of 76 induced ones matched nothing in their L1 records), so L2 does
+# not carry them; the author-stated limits with a verbatim quote stay on L1.
 _V2_L2_KEYS = (
     "domain", "task", "problem", "method", "action", "compared_options", "mechanism",
-    "requires", "limits_stated", "origin", "locator", "source_l1_ids",
+    "requires", "origin", "locator", "source_l1_ids",
 )
 _V2_COMPARISONS = {"controlled", "vs_baseline", "absolute_only"}
 _V2_PARAM_BASES = {"swept", "derived", "prior_work", "default", "unstated"}
@@ -652,7 +654,6 @@ def _validate_v2_l2_record(
         ):
             raise ExperienceOutputError("compared_options entries need a non-empty option and result")
     _validate_conditions(item["requires"], "requires")
-    _validate_conditions(item["limits_stated"], "limits_stated")
     origin = item["origin"]
     if origin not in _V2_ORIGINS:
         raise ExperienceOutputError(f"origin {origin!r} is not one of {sorted(_V2_ORIGINS)}")
@@ -715,7 +716,7 @@ def parse_experience_v2(
                 row.setdefault("compared_options", [])
                 row.setdefault("mechanism", "")
                 row.setdefault("requires", [])
-                row.setdefault("limits_stated", [])
+                row.pop("limits_stated", None)  # L2 does not carry failure conditions (see _V2_L2_KEYS)
                 row.setdefault("locator", "")
                 row.setdefault("source_l1_ids", [])
                 _validate_v2_l2_record(row, source_ids=source_ids)
