@@ -461,6 +461,8 @@ class EvoScientistConfig:
     # `enqueue_paper_experiences`. Needs `memory_paper_extraction_enabled`. On by
     # default on this branch, so the manual enqueue tool is not registered.
     memory_paper_autoqueue_enabled: bool = True
+    # Cross-paper L1 -> L2 induction (memory/experiences/cross_paper.py); off unless an arm turns it on.
+    memory_cross_paper_enabled: bool = False
     # Quality gate on extracted experience records (see memory/experiences/gate.py). `off` stores everything;
     # `audit` grades every record and writes gate.json but still stores everything; `enforce` also drops the records
     # the rubric does not admit (ACCEPT and PROVISIONAL are admitted). Costs about one judge call per dimension per
@@ -1418,6 +1420,7 @@ _ENV_MAPPINGS = {
     "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
     "memory_paper_extraction_enabled": "EVOSCIENTIST_MEMORY_PAPER_EXTRACTION_ENABLED",
     "memory_paper_autoqueue_enabled": "EVOSCIENTIST_MEMORY_PAPER_AUTOQUEUE_ENABLED",
+    "memory_cross_paper_enabled": "EVOSCIENTIST_MEMORY_CROSS_PAPER_ENABLED",
     "memory_experience_gate": "EVOSCIENTIST_MEMORY_EXPERIENCE_GATE",
     "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",
     "memory_experience_search_enabled": (

@@ -119,9 +119,15 @@ async def drain_paper_experience_queue(
                     counts["failed"] += 1
 
         await asyncio.gather(*(work() for _ in range(DRAIN_CONCURRENCY)))
-        return counts
     finally:
         await lock.release()
+    # Outside the queue lock and in the background: cross-paper induction reads the stored library and takes its own
+    # lock, so it never holds up the next drain. It counts new L1 records itself and returns at once below its trigger.
+    if counts["processed"]:
+        from ..experiences.cross_paper import schedule_cross_paper
+
+        schedule_cross_paper(memory_dir=memory_dir, project_id=project_id, model=model)
+    return counts
 
 
 def build_paper_experience_worker_graph(

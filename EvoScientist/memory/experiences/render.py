@@ -158,14 +158,19 @@ def _render_current(record_id: str, item: Mapping[str, Any], paper: Mapping[str,
 def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[str, Any] | None) -> str:
     """An L2 finding: a mechanism-level claim, plus the options and conditions that make it checkable."""
     origin = _s(item.get("origin"))
+    papers = [p for p in _items(item.get("source_papers")) if _s(p)]
     label = (
-        "L2 finding · induced from this paper's own experimental records"
+        f"L2 finding · induced across {len(papers)} papers from their experimental records"
+        if origin == "cross_paper"
+        else "L2 finding · induced from this paper's own experimental records"
         if origin == "induced"
         else "L2 finding · mechanism-level claim drawn from the paper"
     )
     lines = [f"{record_id} · {label}"]
     task, domain = _s(item.get("task")), _s(item.get("domain"))
     lines.append(f"Task: {task}" + (f"  [{domain}]" if domain else ""))
+    if _s(item.get("context")):
+        lines.append(f"Applies in this situation: {_s(item.get('context'))}")
     if _s(item.get("problem")):
         lines.append(f"Problem it answers: {_s(item.get('problem'))}")
     if item.get("method"):
@@ -201,6 +206,13 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
         for x in limits:
             src = ", ".join(_s(s) for s in _items(x.get("from")))
             lines.append(f"  - {_s(x.get('text'))}" + (f"  [summarized from {src}]" if src else ""))
+
+    conflicts = [x for x in _items(item.get("conflicts")) if isinstance(x, Mapping) and _s(x.get("text"))]
+    if conflicts:
+        lines.append("Where the papers disagree:")
+        for x in conflicts:
+            src = ", ".join(_s(s) for s in _items(x.get("from")))
+            lines.append(f"  - {_s(x.get('text'))}" + (f"  [{src}]" if src else ""))
 
     source = _paper_line(paper)
     where = _s(item.get("locator"))
@@ -272,7 +284,8 @@ def render_hit(index: int, document: Mapping[str, Any], *, score: Any = None, ma
     paper = document.get("paper") if isinstance(document.get("paper"), Mapping) else None
     head = f"{index}. {record_id}"
     if is_l2_current(item):
-        label = "L2 induced" if _s(item.get("origin")) == "induced" else "L2"
+        origin = _s(item.get("origin"))
+        label = "L2 cross-paper" if origin == "cross_paper" else "L2 induced" if origin == "induced" else "L2"
         lines = [f"{head} [{label}] {_s(item.get('task'))}"]
         if _s(item.get("problem")):
             lines.append(f"   Problem: {_clip(item.get('problem'), 180)}")
