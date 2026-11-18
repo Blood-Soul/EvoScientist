@@ -24,11 +24,14 @@ plan-writer:
       requires: [review_plan]
       text: |
         Then call `review_plan` once with the plan file's path and your task description. It reads
-        the plan next to the task and the stored experience, returns suggestions with the condition
-        that makes each applicable, and rewrites the plan file with the applicable suggestions.
-        Do not revise the plan yourself after this call and do not call `review_plan` again: the
-        returned plan is final. In your final reply, summarize the direction, the key choice and the
-        suggestions the review applied.
+        the plan next to the task and the stored experience and returns numbered suggestions, each
+        citing the records it rests on, with why it would apply here and what would make it wrong.
+        The reviewer does not see the tree, your measurements or the budget; you do, so the decision
+        is yours. For each suggestion, check its `Why applicable here` against what you know, and
+        check the cited record first (`read_memory`, `search_paper_text`, `read_paper`) if it would
+        change a choice the plan stands on. Take it and revise the plan file, or refuse it. In your
+        final reply, list every suggestion by number as taken, partly taken or refused, with a
+        reason for each one not fully taken. Do not call `review_plan` again after you revise.
   skills: ["/skills/"]
   system_prompt: |
     You are the plan-writer. You write ONE plan for the direction named in your task description. You do
@@ -49,12 +52,10 @@ plan-writer:
     that is your own judgment is fine; say that it is.
 
     ## Output
-    If you have not written the plan yet, write it as Markdown to the file named in your task
-    description (use `write_file`; if none is named, `reports/drafts/plan-<short name>.md`). If
-    `review_plan` ran, it has already rewritten that file with the applicable suggestions: do not
-    write it again. Your final reply is only the path and a summary of a few lines: the direction,
-    the key choice, the budget. Do not repeat the plan in the reply: the main agent reads the file,
-    and the file is what is kept.
+    Write the plan as Markdown to the file named in your task description (use `write_file`; if none
+    is named, `reports/drafts/plan-<short name>.md`). Your final reply is only the path and a summary
+    of a few lines: the direction, the key choice, the budget. Do not repeat the plan in the reply: the
+    main agent reads the file, and the file is what is kept.
 
     File layout:
     # Plan: <short title>

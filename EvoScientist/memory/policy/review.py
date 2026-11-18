@@ -132,9 +132,7 @@ def parse_review(raw: str, allowed_ids: set[str], max_suggestions: int) -> dict[
         kept.append({"about": about, "suggestion": text, "because": because,
                      "sources": list(dict.fromkeys(srcs)), "kind": kind,
                      "why_applicable": why, "falsifier": falsifier})
-    revised = payload.get("revised_plan") or ""
     return {"suggestions": kept[:max_suggestions], "dropped_without_source": dropped,
-            "revised_plan": revised if isinstance(revised, str) else "",
             "no_suggestion_reason": " ".join(str(payload.get("no_suggestion_reason") or "").split())[:300]}
 
 
@@ -145,8 +143,10 @@ def render_review(review: dict[str, Any], titles: dict[str, str] | None = None) 
     if not sugg:
         why = review.get("no_suggestion_reason") or "no stored experience bears on this plan"
         return f"Plan review: no suggestions ({why})."
-    lines = ["Plan review against stored experience. Each item rests on the records named. You decide: take it and "
-             "revise the plan, or refuse it and say why in your reply. Check a record with `read_memory` before relying on it."]
+    lines = ["Plan review against stored experience. Each item rests on the records named and says why it would apply "
+             "here and what would make it wrong. The reviewer saw only your task description, the plan and these records, "
+             "not the tree, your measurements or the budget. You decide: check `Why applicable here` against what you know, "
+             "take the item and revise the plan file, or refuse it. Check a record with `read_memory` before relying on it."]
     for i, s in enumerate(sugg, 1):
         refs = ", ".join(f"{e}" + (f" ({titles[e]})" if e in titles else "") for e in s["sources"])
         lines.append(
@@ -223,8 +223,7 @@ async def review_plan(
                            plan_chars=len(plan), task_chars=len(task), raw_output=raw,
                            suggestions=review["suggestions"], dropped_without_source=review["dropped_without_source"],
                            seconds=round(time.monotonic() - started, 2), usage=response_usage(response))
-    return {"status": "ok", "queries": queries, "shown": [c["id"] for c in shown], "text": text,
-            "revised_plan_chars": len(review.get("revised_plan") or ""), **review}
+    return {"status": "ok", "queries": queries, "shown": [c["id"] for c in shown], "text": text, **review}
 
 
 __all__ = ["REVIEW_PROMPT_FILENAME", "parse_review", "plan_queries", "render_review", "review_plan"]

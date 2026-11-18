@@ -60,26 +60,17 @@ def create_review_plan_tool(
                                "hint": "The review failed. Finish the plan without it."})
         from ..memory.policy.trace import emit_tool_output
 
-        revised = (result.get("revised_plan") or "").strip()
-        text = result["text"]
-        if revised:
-            # The reviewer returns the final plan; there is no separate revision
-            # generation.  Write it here so the plan-writer cannot silently
-            # rewrite it again.
-            target.write_text(revised + "\n", encoding="utf-8")
-            text += ("\n\nThe plan file has been rewritten with the applicable suggestions. "
-                     "Do not rewrite it again; report the suggestions and finish.")
-        emit_tool_output(memory_dir, "review_plan", {"path": path}, text, status=result.get("status"))
-        return text
+        emit_tool_output(memory_dir, "review_plan", {"path": path}, result["text"], status=result.get("status"))
+        return result["text"]
 
     return StructuredTool.from_function(
         coroutine=_review_plan,
         name="review_plan",
         description=(
-            "Read the plan you just wrote against this project's stored paper experience. It returns suggestions, "
-            "each tied to the records it rests on and with the condition that makes it applicable, and it rewrites "
-            "the plan file with the applicable suggestions. Call it once after the plan file is written; do not "
-            "rewrite the plan yourself afterwards. `read_memory` on an `E-*` id shows the record behind a suggestion."
+            "Read the plan you just wrote against this project's stored paper experience and get suggestions, each tied to "
+            "the records it rests on, with why it would apply here and what would make it wrong. Call it once, after the "
+            "plan file is written and before you report. The suggestions are advice: you decide. Take one and revise the "
+            "plan file, or refuse it and say why in your reply. `read_memory` on an `E-*` id shows the record behind a suggestion."
         ),
         args_schema=ReviewPlanArgs,
         infer_schema=False,

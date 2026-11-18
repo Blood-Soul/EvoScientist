@@ -124,16 +124,42 @@ def test_the_review_prompt_formats() -> None:
     assert "T" in text and "at most 6" in text
 
 
-def test_the_revised_plan_is_returned_and_can_be_empty() -> None:
+def test_a_revised_plan_from_the_reviewer_is_ignored() -> None:
+    # The reviewer only advises; the writer revises the file itself.
     raw = json.dumps({"suggestions": [_item()], "revised_plan": "# Plan: x\n\nbody"})
-    out = parse_review(raw, ALLOWED, 6)
-    assert out["revised_plan"].startswith("# Plan: x")
-    assert parse_review(json.dumps({"suggestions": []}), ALLOWED, 6)["revised_plan"] == ""
+    assert "revised_plan" not in parse_review(raw, ALLOWED, 6)
 
 
-def test_the_prompt_asks_for_a_revised_plan() -> None:
+def test_the_review_text_shows_the_applicability_and_leaves_the_decision_to_the_writer() -> None:
+    review = parse_review(json.dumps({"suggestions": [_item()]}), ALLOWED, 6)
+    text = render_review(review)
+    assert "Why applicable here:" in text and "Falsifier:" in text and "You decide" in text
+
+
+def test_the_prompt_is_advice_only() -> None:
     from EvoScientist.memory.policy.prompts import load_policy_prompt
     from EvoScientist.memory.policy.review import REVIEW_PROMPT_FILENAME
 
     text = load_policy_prompt(REVIEW_PROMPT_FILENAME).format(task="T", plan="P", records="R", max_suggestions=6)
-    assert "revised_plan" in text and "No second revision" in text
+    assert "revised_plan" not in text and "why_applicable" in text and "falsifier" in text
+    assert "takes or refuses each suggestion" in text
+
+
+@pytest.mark.asyncio
+async def test_the_tool_never_rewrites_the_plan_file(tmp_path: Path, monkeypatch) -> None:
+    from EvoScientist.tools import plan_review as tool_mod
+
+    async def fake_review(**_kw):
+        return {"status": "ok", "text": "Plan review: 1 suggestion", "suggestions": [], "revised_plan": "# overwritten"}
+
+    monkeypatch.setattr(tool_mod, "review_plan", fake_review)
+    import EvoScientist.EvoScientist as evo
+
+    monkeypatch.setattr(evo, "_ensure_auxiliary_chat_model", lambda: object())
+    plan = tmp_path / "reports" / "plan.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("# Plan: original\n", encoding="utf-8")
+    tool = tool_mod.create_review_plan_tool(memory_dir=tmp_path / "mem", project_id="P-x", workspace_root=tmp_path)
+    out = await tool.coroutine(path="reports/plan.md", task="t")
+    assert out == "Plan review: 1 suggestion"
+    assert plan.read_text(encoding="utf-8") == "# Plan: original\n"
