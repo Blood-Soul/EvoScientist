@@ -35,7 +35,6 @@ ALLOWED = {"E-aaaaaaaa", "E-bbbbbbbb"}
 def _item(**over: Any) -> dict[str, Any]:
     base = {"about": "the null margin rule", "suggestion": "add the span's own score", "because": "in the source ...",
             "why_applicable": "the record's null-margin condition holds here",
-            "falsifier": "if the benchmark has no unanswerable rows",
             "sources": ["E-aaaaaaaa"], "kind": "add"}
     base.update(over)
     return base
@@ -53,9 +52,9 @@ class TestParse:
 
     def test_no_source_or_a_missing_field_is_dropped(self) -> None:
         raw = json.dumps({"suggestions": [_item(sources=[]), _item(because=""), _item(about=" "),
-                                          _item(why_applicable=""), _item(falsifier=""), "not a dict"]})
+                                          _item(why_applicable=""), "not a dict"]})
         out = parse_review(raw, ALLOWED, 6)
-        assert out["suggestions"] == [] and out["dropped_without_source"] == 6
+        assert out["suggestions"] == [] and out["dropped_without_source"] == 5
 
     def test_only_the_valid_ids_of_a_mixed_citation_survive(self) -> None:
         out = parse_review(json.dumps({"suggestions": [_item(sources=["E-ffffffff", "E-bbbbbbbb", "E-bbbbbbbb"])]}), ALLOWED, 6)
@@ -80,7 +79,7 @@ class TestRender:
         review = parse_review(json.dumps({"suggestions": [_item()]}), ALLOWED, 6)
         text = render_review(review, {"E-aaaaaaaa": "Read + Verify"})
         assert "E-aaaaaaaa (Read + Verify)" in text and "refuse it" in text and "[add]" in text
-        assert "Why applicable here" in text and "Falsifier" in text
+        assert "Why applicable here" in text and "Falsifier" not in text
 
     def test_an_empty_review_says_so(self) -> None:
         assert "no suggestions" in render_review({"suggestions": [], "no_suggestion_reason": "nothing bears on it"})
@@ -133,7 +132,7 @@ def test_a_revised_plan_from_the_reviewer_is_ignored() -> None:
 def test_the_review_text_shows_the_applicability_and_leaves_the_decision_to_the_writer() -> None:
     review = parse_review(json.dumps({"suggestions": [_item()]}), ALLOWED, 6)
     text = render_review(review)
-    assert "Why applicable here:" in text and "Falsifier:" in text and "You decide" in text
+    assert "Why applicable here:" in text and "Falsifier" not in text and "You decide" in text
 
 
 def test_the_prompt_is_advice_only() -> None:
@@ -141,7 +140,7 @@ def test_the_prompt_is_advice_only() -> None:
     from EvoScientist.memory.policy.review import REVIEW_PROMPT_FILENAME
 
     text = load_policy_prompt(REVIEW_PROMPT_FILENAME).format(task="T", plan="P", records="R", max_suggestions=6)
-    assert "revised_plan" not in text and "why_applicable" in text and "falsifier" in text
+    assert "revised_plan" not in text and "why_applicable" in text and "falsifier" not in text
     assert "takes or refuses each suggestion" in text
 
 

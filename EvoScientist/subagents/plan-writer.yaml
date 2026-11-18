@@ -25,7 +25,7 @@ plan-writer:
       text: |
         Then call `review_plan` once with the plan file's path and your task description. It reads
         the plan next to the task and the stored experience and returns numbered suggestions, each
-        citing the records it rests on, with why it would apply here and what would make it wrong.
+        citing the records it rests on, with why it would apply here.
         The reviewer does not see the tree, your measurements or the budget; you do, so the decision
         is yours. For each suggestion, check its `Why applicable here` against what you know, and
         check the cited record first (`read_memory`, `search_paper_text`, `read_paper`) if it would

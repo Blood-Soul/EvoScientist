@@ -138,16 +138,15 @@ def parse_review(raw: str, allowed_ids: set[str], max_suggestions: int) -> dict[
         kind = str(item.get("kind") or "check").strip().lower()
         kind = kind if kind in KINDS else "check"
         why = " ".join(str(item.get("why_applicable") or "").split())
-        falsifier = " ".join(str(item.get("falsifier") or "").split())
-        # A suggestion must say which condition in the record holds here and
-        # what would make it wrong.  "confirm" may omit them: it only says the
-        # plan already does what the record supports.
-        if kind != "confirm" and (not why or not falsifier):
+        # A suggestion must say which condition in the record holds here.
+        # "confirm" may omit it: it only says the plan already does what the
+        # record supports.
+        if kind != "confirm" and not why:
             dropped += 1
             continue
         kept.append({"about": about, "suggestion": text, "because": because,
                      "sources": list(dict.fromkeys(srcs)), "kind": kind,
-                     "why_applicable": why, "falsifier": falsifier})
+                     "why_applicable": why})
     return {"suggestions": kept[:max_suggestions], "dropped_without_source": dropped,
             "no_suggestion_reason": " ".join(str(payload.get("no_suggestion_reason") or "").split())[:300]}
 
@@ -160,7 +159,7 @@ def render_review(review: dict[str, Any], titles: dict[str, str] | None = None) 
         why = review.get("no_suggestion_reason") or "no stored experience bears on this plan"
         return f"Plan review: no suggestions ({why})."
     lines = ["Plan review against stored experience. Each item rests on the records named and says why it would apply "
-             "here and what would make it wrong. The reviewer saw only your task description, the plan and these records, "
+             "here. The reviewer saw only your task description, the plan and these records, "
              "not the tree, your measurements or the budget. You decide: check `Why applicable here` against what you know, "
              "take the item and revise the plan file, or refuse it. Check a record with `read_memory` before relying on it."]
     for i, s in enumerate(sugg, 1):
@@ -170,7 +169,6 @@ def render_review(review: dict[str, Any], titles: dict[str, str] | None = None) 
             f"\n   Suggestion: {s['suggestion']}"
             f"\n   Because: {s['because']}"
             f"\n   Why applicable here: {s.get('why_applicable') or '(not stated)'}"
-            f"\n   Falsifier: {s.get('falsifier') or '(not stated)'}"
             f"\n   Sources: {refs}"
         )
     return "\n".join(lines)

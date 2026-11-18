@@ -68,7 +68,7 @@ def create_review_plan_tool(
         name="review_plan",
         description=(
             "Read the plan you just wrote against this project's stored paper experience and get suggestions, each tied to "
-            "the records it rests on, with why it would apply here and what would make it wrong. Call it once, after the "
+            "the records it rests on, with why it would apply here. Call it once, after the "
             "plan file is written and before you report. The suggestions are advice: you decide. Take one and revise the "
             "plan file, or refuse it and say why in your reply. `read_memory` on an `E-*` id shows the record behind a suggestion."
         ),

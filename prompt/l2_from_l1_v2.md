@@ -57,12 +57,13 @@ Return only a JSON object with this shape:
   ],
   "mechanism": "why, as supported by comparing the records. Empty string if they do not support a reason.",
   "requires": [{"text": "a condition that must hold for the finding to apply", "basis": "inferred"}],
+  "limits_stated": [{"text": "a condition in which the induced finding stops holding", "from": ["l1-2", "l1-3"]}],
   "origin": "induced",
   "source_l1_ids": ["l1-1", "l1-3"]
 }]}
 ```
 
-All keys must be present. `compared_options` and `requires` may be empty arrays; `mechanism` may be
+All keys must be present. `compared_options`, `requires` and `limits_stated` may be empty arrays; `mechanism` may be
 `""`. `source_l1_ids` must be non-empty and must list only records that genuinely contributed — not every record you
 were given. The example marks the condition `inferred`, the usual case; `stated` is the exception, used only where a
 contributing record argues the condition itself.
@@ -85,6 +86,16 @@ in some records and false in others, and that lines up with where the effect app
 `basis` is `stated` only when a contributing record says in words that the condition matters; a condition that merely
 follows from how the technique works, or from the settings the records ran in, is `inferred`. **Most entries should be
 `inferred`; when in doubt, use it.**
+
+**`limits_stated`** — where the induced finding stops holding, **summarized from the contributing records' own
+`limits_stated`**: these are the limits the authors stated, each backed by a quote from the paper. An entry must
+draw on **at least two** contributing records' limits and say what they jointly show — the common boundary, or the
+condition under which the induced claim as a whole fails ("both the X and the Y result stop helping once Z"). When
+only one record states a limit, leave it out here: that record keeps its own limit, and a reader sees it there.
+`from` lists the `l1-*` ids whose `limits_stated` the entry draws on; each must be a contributing record with a
+non-empty `limits_stated`, and an entry with fewer than two such ids is dropped in code. Never take a limit from a record's `effect.cost` (a price is not a limit),
+never derive one from the mechanism, and never add a condition none of the records states. If no contributing record
+states a limit, return an empty array.
 
 **`action`** — say what a reader should do differently, not what the paper did. If the induced claim only repeats the
 action of a contributing record, there is nothing induced: drop it.

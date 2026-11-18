@@ -548,12 +548,16 @@ _V2_L1_KEYS = (
 # L2 keeps the L1 fields whose job is the same (domain/task/method/requires/action) and replaces the measured outcome
 # with the claim's three supports: the options that were compared, the mechanism, and the provenance (a locator in the
 # paper, or the L1 ids the induction drew on). There is no source_setting: an L2 finding is stated as a condition
-# (`requires`), not as a value from the source experiment. There is no limits_stated either: an audit of r35 found
-# most L2 failure conditions had no source (41 of 76 induced ones matched nothing in their L1 records), so L2 does
-# not carry them; the author-stated limits with a verbatim quote stay on L1.
+# (`requires`), not as a value from the source experiment.
+#
+# `limits_stated` on L2 holds only author-stated limits (an r35 audit found 41 of 76 induced limits had no source in
+# their L1 records, and 14 were a cost relabelled as a limit). A paper-read L2 entry carries a verbatim `quote`, checked
+# against the paper here and by the gate (F1). An induced entry is a summary of the contributing L1 records' own
+# stated limits and names them in `from`; an entry that names no such record is removed. A bad entry is removed from
+# its record, not the record from the payload.
 _V2_L2_KEYS = (
     "domain", "task", "problem", "method", "action", "compared_options", "mechanism",
-    "requires", "origin", "locator", "source_l1_ids",
+    "requires", "limits_stated", "origin", "locator", "source_l1_ids",
 )
 _V2_COMPARISONS = {"controlled", "vs_baseline", "absolute_only"}
 _V2_PARAM_BASES = {"swept", "derived", "prior_work", "default", "unstated"}
@@ -600,6 +604,39 @@ def _validate_conditions(value: Any, field: str) -> None:
             or not str(item.get("text") or "").strip()
         ):
             raise ExperienceOutputError(f"{field} entries need text and a basis of stated or inferred")
+
+
+def _grounded_l2_limits(
+    item: Mapping[str, Any], *, paper_text: str, limited_ids: Collection[str] | None
+) -> list[dict[str, Any]]:
+    """Keep only the L2 limits that rest on the authors' own words.
+
+    Paper-read (`origin: paper`): each entry needs a `quote` found in the paper text (when the text is available here;
+    the gate checks it again). Induced: each entry needs `from`, naming contributing records (`source_l1_ids`) that
+    have a non-empty `limits_stated`, at least two of them. Entries that fail are removed; the record stays.
+    """
+    from .gate import _quote_ok  # same normalisation the gate uses
+
+    raw = item.get("limits_stated")
+    if not isinstance(raw, list):
+        raise ExperienceOutputError("limits_stated must be a list")
+    kept: list[dict[str, Any]] = []
+    induced = item.get("origin") == "induced"
+    cited = {str(c) for c in item.get("source_l1_ids") or []}
+    for entry in raw:
+        if not isinstance(entry, Mapping) or not str(entry.get("text") or "").strip():
+            continue
+        text = " ".join(str(entry["text"]).split())
+        if induced:
+            sources = [str(s) for s in (entry.get("from") or []) if isinstance(s, str)] if isinstance(entry.get("from"), list) else []
+            sources = [s for s in dict.fromkeys(sources) if s in cited and (limited_ids is None or s in limited_ids)]
+            if len(sources) >= 2:  # a summary across records; one record's limit stays on that L1
+                kept.append({"text": text, "from": sources})
+        else:
+            quote = " ".join(str(entry.get("quote") or "").split())
+            if quote and (not paper_text or _quote_ok(quote, paper_text)):
+                kept.append({"text": text, "quote": quote})
+    return kept
 
 
 def _validate_v2_l1_record(item: Mapping[str, Any]) -> None:
@@ -654,6 +691,8 @@ def _validate_v2_l2_record(
         ):
             raise ExperienceOutputError("compared_options entries need a non-empty option and result")
     _validate_conditions(item["requires"], "requires")
+    if not isinstance(item["limits_stated"], list):
+        raise ExperienceOutputError("limits_stated must be a list")
     origin = item["origin"]
     if origin not in _V2_ORIGINS:
         raise ExperienceOutputError(f"origin {origin!r} is not one of {sorted(_V2_ORIGINS)}")
@@ -681,12 +720,14 @@ def parse_experience_v2(
     domain_arxiv: str | None = None,
     level: str = "l1",
     source_ids: Collection[str] | None = None,
+    limited_ids: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Parse a v2 extraction reply into the payload that is stored.
 
     `level` selects the record shape: ``l1`` (a tested practice and its measured outcome) or ``l2`` (a mechanism-level
     finding). `source_ids` is the set of ``l1-*`` labels an induction reply may cite; it is ``None`` for the two
-    paper-reading prompts, which have no L1 records to point at.
+    paper-reading prompts, which have no L1 records to point at. `limited_ids` is the subset of those labels whose
+    record has a non-empty `limits_stated`; an induced limit must draw on at least one of them.
 
     Records that break the shape, or whose numbers mostly never occur in the source text, are dropped one by one so a
     single bad record does not cost the paper; if the reply held records and none survived, that is an error and the
@@ -716,10 +757,13 @@ def parse_experience_v2(
                 row.setdefault("compared_options", [])
                 row.setdefault("mechanism", "")
                 row.setdefault("requires", [])
-                row.pop("limits_stated", None)  # L2 does not carry failure conditions (see _V2_L2_KEYS)
+                row.setdefault("limits_stated", [])
                 row.setdefault("locator", "")
                 row.setdefault("source_l1_ids", [])
                 _validate_v2_l2_record(row, source_ids=source_ids)
+                row["limits_stated"] = _grounded_l2_limits(
+                    row, paper_text=paper_text, limited_ids=limited_ids
+                )
                 if paper_text:
                     bad, total = _ungrounded_share_l2(row, paper_text)
                     if total >= 3 and bad / total > 0.5:
@@ -834,6 +878,7 @@ async def _invoke_v2(
     model: Any,
     domain_arxiv: str | None,
     source_ids: Collection[str] | None = None,
+    limited_ids: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Run one v2 prompt, retrying a rejected reply up to three times with the reason fed back."""
     note = ""
@@ -848,6 +893,7 @@ async def _invoke_v2(
                 domain_arxiv=domain_arxiv,
                 level=level,
                 source_ids=source_ids,
+                limited_ids=limited_ids,
             )
         except ExperienceOutputError as exc:
             last = exc
@@ -866,6 +912,7 @@ async def _induce_v2(
     domain_arxiv: str | None,
 ) -> list[dict[str, Any]]:
     labelled, source_ids = _induction_input(l1_experiences)
+    limited_ids = {record["id"] for record in labelled if record.get("limits_stated")}
     source_text = json.dumps(labelled, ensure_ascii=False)
     payload = await _invoke_v2(
         prompt=prompt,
@@ -876,6 +923,7 @@ async def _induce_v2(
         model=model,
         domain_arxiv=domain_arxiv,
         source_ids=source_ids,
+        limited_ids=limited_ids,
     )
     return payload["experiences"]
 

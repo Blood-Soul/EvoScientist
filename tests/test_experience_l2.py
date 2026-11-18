@@ -21,6 +21,7 @@ from EvoScientist.memory.experiences.store import (
 )
 
 PAPER = "The verifier without head features gained 1.2 and 0.7 F1; with head features and initialization it gained 2.9 and 3.1. " * 5
+QUOTE_L2 = "The verifier without head features gained 1.2 and 0.7 F1"
 
 
 def l1_record(**over):
@@ -48,7 +49,7 @@ def l2_record(**over):
         ],
         "mechanism": "The reader's logit margin is not comparable across questions.",
         "requires": [{"text": "the reader exposes top-layer logits", "basis": "stated"}],
-        "limits_stated": [{"text": "the reader's [CLS] is trained for answer type, not for wrongness", "basis": "stated"}],
+        "limits_stated": [{"text": "a text-only verifier gains little", "quote": QUOTE_L2}],
         "origin": "paper", "locator": "Section 4.2", "source_l1_ids": [],
     }
     base.update(over)
@@ -184,25 +185,48 @@ def test_an_l2_record_renders_its_options_mechanism_and_conditions():
     text = render_record({"id": "E-1", "experience_level": "l2", "experience": l2_record()})
     assert "Options compared:" in text and "head features + initialisation" in text
     assert "Why it works:" in text and "Holds when" in text
-    # an older stored L2 record may still carry limits_stated; it is not shown
-    assert "Stops holding when:" not in text and "trained for answer type" not in text
+    assert "Stops holding when (stated by the authors):" in text and "a text-only verifier gains little" in text
+    # an older record's ungrounded limit (basis only, no quote, no source) is not shown
+    old = l2_record(limits_stated=[{"text": "made up boundary", "basis": "inferred"}])
+    assert "made up boundary" not in render_record({"id": "E-1", "experience_level": "l2", "experience": old})
     hit = render_hit(1, {"id": "E-1", "experience_level": "l2", "experience": l2_record()})
     assert "[L2]" in hit and "Claim:" in hit
 
 
-def test_l2_records_do_not_carry_failure_conditions():
-    out = parse_experience_v2(reply(l2_record()), paper_id="p1", level="l2")
-    assert "limits_stated" not in out["experiences"][0]
-    rec = l2_record(); del rec["limits_stated"]
-    assert parse_experience_v2(reply(rec), paper_id="p1", level="l2")["experiences"]
+def test_a_paper_l2_limit_needs_a_quote_found_in_the_paper():
+    rec = l2_record(limits_stated=[
+        {"text": "kept", "quote": QUOTE_L2},
+        {"text": "no quote"},
+        {"text": "invented", "quote": "The authors never wrote this sentence anywhere."},
+    ])
+    out = parse_experience_v2(reply(rec), paper_id="p1", paper_text=PAPER, level="l2")
+    assert [x["text"] for x in out["experiences"][0]["limits_stated"]] == ["kept"]
 
 
-def test_the_l2_prompts_ask_for_no_failure_conditions():
+def test_an_induced_limit_must_summarize_cited_l1_records_that_state_limits():
+    rec = l2_record(origin="induced", locator="", source_l1_ids=["l1-1", "l1-2"], limits_stated=[
+        {"text": "both stop helping once answers are long", "from": ["l1-1", "l1-2"]},
+        {"text": "only from a record with no limits", "from": ["l1-2"]},
+        {"text": "from an uncited record", "from": ["l1-3"]},
+        {"text": "no source at all"},
+    ])
+    out = parse_experience_v2(reply(rec), paper_id="p1", level="l2",
+                              source_ids={"l1-1", "l1-2", "l1-3"}, limited_ids={"l1-1", "l1-2", "l1-3"})
+    assert out["experiences"][0]["limits_stated"] == [
+        {"text": "both stop helping once answers are long", "from": ["l1-1", "l1-2"]}]
+    # one limited source is not a summary: it stays on that L1
+    out = parse_experience_v2(reply(rec), paper_id="p1", level="l2",
+                              source_ids={"l1-1", "l1-2", "l1-3"}, limited_ids={"l1-1", "l1-3"})
+    assert out["experiences"][0]["limits_stated"] == []
+
+
+def test_the_l2_prompts_ground_their_limits():
     root = Path(__file__).resolve().parents[1] / "prompt"
-    for name in ("l2_extract_v2.md", "l2_from_l1_v2.md"):
-        text = (root / name).read_text(encoding="utf-8")
-        out_contract = text[text.index("## Output contract"):]
-        assert '"limits_stated"' not in out_contract, name
+    paper = (root / "l2_extract_v2.md").read_text(encoding="utf-8")
+    induced = (root / "l2_from_l1_v2.md").read_text(encoding="utf-8")
+    assert '"quote": "verbatim sentence from the paper"' in paper and "is a **cost**, not a limit" in paper
+    assert '"from": ["l1-2", "l1-3"]' in induced and "summarized from the contributing records" in induced
+    assert "Never take a limit from a record's `effect.cost`" in induced
 
 
 def test_plan_review_retrieval_keeps_a_share_of_l1(tmp_path: Path):
@@ -220,3 +244,21 @@ def test_plan_review_retrieval_keeps_a_share_of_l1(tmp_path: Path):
     got = gather_candidates(memory_dir=tmp_path, project_id="P-x", query="answer verifier", limit=6)
     levels = [c["level"] for c in got]
     assert len(got) == 6 and levels.count("l1") == 2 and levels.count("l2") == 4
+
+
+def test_storing_resolves_an_induced_limit_source_to_the_stored_l1_id(tmp_path: Path):
+    lim = [{"text": "fails on long answers", "quote": "q"}]
+    l1 = parse_experience_v2(reply(l1_record(limits_stated=lim), l1_record(limits_stated=lim, problem="Second.")),
+                             paper_id="p1")
+    induced = l2_record(origin="induced", locator="", source_l1_ids=["l1-1", "l1-2"],
+                        limits_stated=[{"text": "stops helping on long answers", "from": ["l1-1", "l1-2"]}])
+    l2 = parse_experience_v2(reply(induced), paper_id="p1", level="l2",
+                             source_ids={"l1-1", "l1-2"}, limited_ids={"l1-1", "l1-2"})
+    store_paper_experiences(
+        memory_dir=tmp_path, project_id="P-x", paper_id="p1", url="https://arxiv.org/abs/p1", title="T",
+        paper_text=PAPER, prompts={"l1": "a", "l2": "b"}, payloads={"l1": l1, "l2": l2},
+    )
+    docs = list_experience_documents(memory_dir=tmp_path, project_id="P-x")
+    l1_ids = [d.observation_id for d in docs if d.experience_level == "l1"]
+    stored = json.loads((tmp_path / "experiences" / "projects" / "P-x" / docs[0].paper_key / "l2.json").read_text())
+    assert stored["experiences"][0]["limits_stated"][0]["from"] == l1_ids[:2]

@@ -31,7 +31,6 @@ Return only a JSON object:
       "suggestion": "What to change, add, check or drop, in one or two sentences.",
       "because": "What the record found or did, stated as 'in the source ...', in one or two sentences.",
       "why_applicable": "Which condition in the record holds in this task/plan, and why the finding transfers. If it does not hold, do not make the suggestion.",
-      "falsifier": "What would make this suggestion wrong here.",
       "sources": ["E-aaa"],
       "kind": "change"
     }}
@@ -46,9 +45,9 @@ Return only a JSON object:
 ## Rules
 
 - **Every suggestion must cite at least one record id from the list above** in `sources`, and `because` must say what that record found. A suggestion you cannot tie to a record is your own opinion: leave it out.
-- **Say why it applies and what would falsify it.** Every `change`/`add`/`check` needs `why_applicable` (the record's condition that holds here) and `falsifier` (what would make it wrong). A `confirm` may omit them. A suggestion with no applicability reason is dropped in code.
+- **Say why it applies.** Every `change`/`add`/`check` needs `why_applicable`: the record's condition that holds here, and why the finding transfers. A `confirm` may omit it. A suggestion with no applicability reason is dropped in code. If a record states where the finding stops holding, check that against the plan before you suggest it.
 - **Prefer `check` or `confirm` when the condition match is partial; only `add` a component when the record's conditions match.** A finding from another task is evidence, not an instruction.
-- **Write `why_applicable` and `falsifier` for the agent.** They are what it weighs when it decides: name the condition concretely (the data, the model, the metric, the setting) so the agent can check it against what it knows about the run.
+- **Write `why_applicable` for the agent.** It is what the agent weighs when it decides: name the condition concretely (the data, the model, the metric, the setting) so the agent can check it against what it knows about the run.
 - **Tie it to the plan.** `about` must point at something the plan actually says. Do not give general advice.
 - **A finding from another task is evidence, not an instruction.** Write what the source found, not that it will work here. Source numbers (window sizes, ratios, learning rates) are provenance only; do not turn them into recommendations for this task's values.
 - **The task text is the only authority on what is required or forbidden.** Do not claim a requirement that the task text does not state.

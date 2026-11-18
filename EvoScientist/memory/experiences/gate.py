@@ -571,7 +571,15 @@ async def gate_extraction(*, paper_id: str, paper_text: str, payloads: Mapping[s
                 if cited is None:   # an induced finding that leans on a dropped L1 record is not trusted either
                     entry.update(admitted=False, reasons=[*entry["reasons"], "cites an L1 record that was dropped"])
                 else:
-                    new_record = {**record, "source_l1_ids": cited}
+                    limits = []
+                    for lim in record.get("limits_stated") or []:
+                        if isinstance(lim, Mapping) and isinstance(lim.get("from"), list):
+                            moved = _remap_citations(lim["from"], lineage)
+                            if not moved:   # its L1 source was dropped by the gate: the summary has no ground left
+                                continue
+                            lim = {**lim, "from": moved}
+                        limits.append(lim)
+                    new_record = {**record, "source_l1_ids": cited, "limits_stated": limits}
             if entry["admitted"] and result["status"] == "PROVISIONAL":
                 new_record = _mark_provisional(new_record)
             if not entry["admitted"]:

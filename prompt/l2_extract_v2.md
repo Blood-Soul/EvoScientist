@@ -54,13 +54,14 @@ Return only a JSON object, no prose and no Markdown fences:
   ],
   "mechanism": "why it works, in the terms the paper uses. Empty string if the paper gives no reason.",
   "requires": [{"text": "a condition that must hold for the finding to apply", "basis": "inferred"}],
+  "limits_stated": [{"text": "a condition in which the authors report the finding stops holding", "quote": "verbatim sentence from the paper"}],
   "origin": "paper",
   "locator": "Section 5.2"
 }]}
 ```
 
-All keys must be present in every record. `compared_options` and `requires` may be empty arrays; `mechanism` may be
-`""`. The example above marks the condition `inferred`, because that is the usual case; `stated` is the exception,
+All keys must be present in every record. `compared_options`, `requires` and `limits_stated` may be empty arrays;
+`mechanism` may be `""`. The example above marks the condition `inferred`, because that is the usual case; `stated` is the exception,
 used only where the authors argue the condition themselves.
 
 ## How to fill each field
@@ -99,6 +100,14 @@ true property of the paper's own system ("the encoder is bidirectional") is not 
 mark it `inferred` unless they argue that the effect depends on it. **When in doubt, use `inferred`.**
 
 Keep the list short: a condition that is always true for the task is not worth writing.
+
+**`limits_stated`** -- only conditions in which **the authors themselves** report the finding stops holding or
+fails: a threshold beyond which the effect reverses, a regime where it does not help, a setting where it was tried and
+lost ("this advantage does not exhibit when ...", "hurts when ..."). Each entry carries `quote`, the sentence copied
+verbatim from the paper; it is checked against the paper text and a record whose quote is not found is dropped. Do
+not rephrase the quote. A price paid for the method (more parameters, slower inference, more storage, a small margin
+below an oracle) is a **cost**, not a limit: leave it out. Do not infer a limit from the mechanism and do not turn
+missing evidence into a limit. An empty array is the normal answer when the authors state none.
 
 **`locator`** -- the section, table or figure where the supporting material is.
 

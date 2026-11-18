@@ -190,8 +190,17 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
         for r in requires:
             lines.append(f"  - {_s(r.get('text'))}" + (" (inferred)" if _s(r.get("basis")) == "inferred" else ""))
 
-    # Older L2 records may still carry `limits_stated`; it is not shown. Most of those failure conditions had no source
-    # in the paper or the L1 records they were induced from.
+    # Only grounded limits are shown: a paper-read entry with its verbatim quote, an induced one with the L1 records it
+    # summarizes. Older records may hold `basis: inferred` limits with neither; those had no source and are skipped.
+    limits = [
+        x for x in _items(item.get("limits_stated"))
+        if isinstance(x, Mapping) and _s(x.get("text")) and (_s(x.get("quote")) or _items(x.get("from")))
+    ]
+    if limits:
+        lines.append("Stops holding when (stated by the authors):")
+        for x in limits:
+            src = ", ".join(_s(s) for s in _items(x.get("from")))
+            lines.append(f"  - {_s(x.get('text'))}" + (f"  [summarized from {src}]" if src else ""))
 
     source = _paper_line(paper)
     where = _s(item.get("locator"))

@@ -24,7 +24,7 @@ node-analyst:
       text: |
         After the plan file is written, call `review_plan` once with its path and your task
         description. It returns numbered suggestions, each citing the records it rests on, with why
-        it would apply here and what would make it wrong. The reviewer does not see the tree, the
+        it would apply here. The reviewer does not see the tree, the
         node's files, your measurements or the budget; you do, so the decision is yours. For each
         suggestion, check its `Why applicable here` against what you know, and check the cited record
         first (`read_memory`, `search_paper_text`, `read_paper`) if it would change a choice the plan

@@ -229,6 +229,13 @@ def _with_resolved_source_ids(
                 **record,
                 "source_l1_ids": [resolved[str(c)] for c in cited if str(c) in resolved],
             }
+            limits = record.get("limits_stated")
+            if isinstance(limits, list):
+                record["limits_stated"] = [
+                    {**entry, "from": [resolved[str(s)] for s in entry["from"] if str(s) in resolved]}
+                    if isinstance(entry, Mapping) and isinstance(entry.get("from"), list) else entry
+                    for entry in limits
+                ]
         rewritten.setdefault("experiences", []).append(record)
     return {**payloads, "l2": {**payloads["l2"], "experiences": rewritten.get("experiences", [])}}
 
