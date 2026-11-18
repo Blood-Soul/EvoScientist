@@ -120,9 +120,21 @@ def parse_review(raw: str, allowed_ids: set[str], max_suggestions: int) -> dict[
             dropped += 1
             continue
         kind = str(item.get("kind") or "check").strip().lower()
+        kind = kind if kind in KINDS else "check"
+        why = " ".join(str(item.get("why_applicable") or "").split())
+        falsifier = " ".join(str(item.get("falsifier") or "").split())
+        # A suggestion must say which condition in the record holds here and
+        # what would make it wrong.  "confirm" may omit them: it only says the
+        # plan already does what the record supports.
+        if kind != "confirm" and (not why or not falsifier):
+            dropped += 1
+            continue
         kept.append({"about": about, "suggestion": text, "because": because,
-                     "sources": list(dict.fromkeys(srcs)), "kind": kind if kind in KINDS else "check"})
+                     "sources": list(dict.fromkeys(srcs)), "kind": kind,
+                     "why_applicable": why, "falsifier": falsifier})
+    revised = payload.get("revised_plan") or ""
     return {"suggestions": kept[:max_suggestions], "dropped_without_source": dropped,
+            "revised_plan": revised if isinstance(revised, str) else "",
             "no_suggestion_reason": " ".join(str(payload.get("no_suggestion_reason") or "").split())[:300]}
 
 
@@ -137,7 +149,14 @@ def render_review(review: dict[str, Any], titles: dict[str, str] | None = None) 
              "revise the plan, or refuse it and say why in your reply. Check a record with `read_memory` before relying on it."]
     for i, s in enumerate(sugg, 1):
         refs = ", ".join(f"{e}" + (f" ({titles[e]})" if e in titles else "") for e in s["sources"])
-        lines.append(f"\n{i}. [{s['kind']}] About: {s['about']}\n   Suggestion: {s['suggestion']}\n   Because: {s['because']}\n   Sources: {refs}")
+        lines.append(
+            f"\n{i}. [{s['kind']}] About: {s['about']}"
+            f"\n   Suggestion: {s['suggestion']}"
+            f"\n   Because: {s['because']}"
+            f"\n   Why applicable here: {s.get('why_applicable') or '(not stated)'}"
+            f"\n   Falsifier: {s.get('falsifier') or '(not stated)'}"
+            f"\n   Sources: {refs}"
+        )
     return "\n".join(lines)
 
 
@@ -175,7 +194,11 @@ async def review_plan(
     if not found:
         return {"status": "no_records", "suggestions": [], "queries": queries,
                 "text": "Plan review: no stored experience matched this plan."}
-    shown = list(found.values())[: max(record_limit * 2, 12)]
+    # L2 first, then same-condition records; lexical order breaks the rest.
+    shown = sorted(
+        found.values(),
+        key=lambda c: (-float(c.get("condition") or 0.0), 0 if c.get("level") == "l2" else 1),
+    )[: max(record_limit * 2, 12)]
     prompt = await asyncio.to_thread(load_policy_prompt, REVIEW_PROMPT_FILENAME)
     filled = prompt.format(task=task.strip()[:20000], plan=plan[:MAX_PLAN_CHARS], records=_render_records(shown),
                            max_suggestions=max_suggestions)
@@ -200,7 +223,8 @@ async def review_plan(
                            plan_chars=len(plan), task_chars=len(task), raw_output=raw,
                            suggestions=review["suggestions"], dropped_without_source=review["dropped_without_source"],
                            seconds=round(time.monotonic() - started, 2), usage=response_usage(response))
-    return {"status": "ok", "queries": queries, "shown": [c["id"] for c in shown], "text": text, **review}
+    return {"status": "ok", "queries": queries, "shown": [c["id"] for c in shown], "text": text,
+            "revised_plan_chars": len(review.get("revised_plan") or ""), **review}
 
 
 __all__ = ["REVIEW_PROMPT_FILENAME", "parse_review", "plan_queries", "render_review", "review_plan"]

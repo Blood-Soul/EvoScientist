@@ -8,6 +8,7 @@ stage.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,50 @@ def _descriptor(record: Mapping[str, Any]) -> str:
     )
 
 
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _tokens_of(text: Any) -> set[str]:
+    return {w for w in _WORD.findall(" ".join(str(text or "").lower().split())) if len(w) > 2}
+
+
+def _record_experience(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    exp = record.get("experience") if isinstance(record, Mapping) else None
+    return exp if isinstance(exp, Mapping) else {}
+
+
+def _record_level(record: Mapping[str, Any]) -> str:
+    exp = _record_experience(record)
+    return str(record.get("experience_level") or exp.get("layer") or "").lower()
+
+
+def _condition_score(query: str, record: Mapping[str, Any]) -> float:
+    """How well the record's task/conditions match the query's own words.
+
+    L2-first already narrows the level; this score decides the order inside the
+    window. Task/domain match counts double; problem, requires and source
+    environment count once. Method names are deliberately not scored: a query
+    asks which conditions hold, not which method the record used.
+    """
+    exp = _record_experience(record)
+    q = _tokens_of(query)
+    if not q:
+        return 0.0
+    task = _tokens_of(f"{exp.get('task') or ''} {exp.get('domain') or ''}")
+    setting_values: list[str] = []
+    source = exp.get("source_setting")
+    if isinstance(source, Mapping):
+        for entry in source.get("environment") or []:
+            if isinstance(entry, Mapping):
+                setting_values.append(f"{entry.get('property') or ''} {entry.get('value') or ''}")
+        for entry in source.get("params") or []:
+            if isinstance(entry, Mapping):
+                setting_values.append(f"{entry.get('name') or ''} {entry.get('value') or ''}")
+    requires = " ".join(str(r.get("text") or "") for r in (exp.get("requires") or []) if isinstance(r, Mapping))
+    cond = _tokens_of(f"{exp.get('problem') or ''} {' '.join(setting_values)} {requires}")
+    return 2.0 * (len(q & task) / max(1, len(q))) + 1.0 * (len(q & cond) / max(1, len(q)))
+
+
 def gather_candidates(
     *,
     memory_dir: str | Path,
@@ -65,6 +110,7 @@ def gather_candidates(
     domain: str = "",
     level: ExperienceLevel | None = None,
     limit: int = DEFAULT_RETRIEVE_LIMIT,
+    prefer_l2: bool = True,
     call_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve experience candidates for one target task.
@@ -85,19 +131,30 @@ def gather_candidates(
     facet; when it is not, ``query`` stands in as the topic, as before.
     """
     topic = topic.strip()
-    hits = search_experience_records(
-        memory_dir=memory_dir,
-        project_id=project_id,
-        topic=topic or query,
-        method=method,
-        task=query if topic else "",
-        discipline=discipline,
-        domain=domain,
-        level=level,
-        limit=limit,
-        mode=ObservationSearchMode.RANKED,
-    )
-    ranked_ids = [hit["observation_id"] for hit in hits][:limit]
+
+    def search(level_arg: ExperienceLevel | None, n: int) -> list[dict[str, Any]]:
+        return search_experience_records(
+            memory_dir=memory_dir,
+            project_id=project_id,
+            topic=topic or query,
+            method=method,
+            task=query if topic else "",
+            discipline=discipline,
+            domain=domain,
+            level=level_arg,
+            limit=n,
+            mode=ObservationSearchMode.RANKED,
+        )
+
+    # L2-first: the synthesis layer answers "when does this transfer"; L1 is
+    # the evidence layer.  Keep L1 as a fallback so a library with no L2 yet
+    # still returns something instead of an empty review.
+    hits = search("l2" if (prefer_l2 and level is None) else level, limit)
+    if prefer_l2 and level is None and len(hits) < limit:
+        seen = {hit["observation_id"] for hit in hits}
+        hits += [hit for hit in search(None, limit * 2) if hit["observation_id"] not in seen]
+    hits = hits[:limit]
+    ranked_ids = [hit["observation_id"] for hit in hits]
     if not ranked_ids:
         return []
     bodies = {
@@ -107,6 +164,7 @@ def gather_candidates(
         )
     }
     candidates: list[dict[str, Any]] = []
+    rank = {hit["observation_id"]: i for i, hit in enumerate(hits)}
     for experience_id in ranked_ids:
         record = _experience_record(bodies.get(experience_id, ""))
         if record is None:
@@ -116,8 +174,13 @@ def gather_candidates(
                 "id": experience_id,
                 "record": record,
                 "descriptor": _descriptor(record),
+                "level": _record_level(record),
+                "condition": round(_condition_score(query, record), 4),
+                "lexical_rank": rank[experience_id],
             }
         )
+    # Inside the window, same-condition records go first; lexical rank breaks ties.
+    candidates.sort(key=lambda c: (-c["condition"], c["lexical_rank"]))
     emit_trace(
         memory_dir,
         "retrieve",

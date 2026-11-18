@@ -34,6 +34,8 @@ ALLOWED = {"E-aaaaaaaa", "E-bbbbbbbb"}
 
 def _item(**over: Any) -> dict[str, Any]:
     base = {"about": "the null margin rule", "suggestion": "add the span's own score", "because": "in the source ...",
+            "why_applicable": "the record's null-margin condition holds here",
+            "falsifier": "if the benchmark has no unanswerable rows",
             "sources": ["E-aaaaaaaa"], "kind": "add"}
     base.update(over)
     return base
@@ -50,9 +52,10 @@ class TestParse:
         assert len(out["suggestions"]) == 1 and out["dropped_without_source"] == 1
 
     def test_no_source_or_a_missing_field_is_dropped(self) -> None:
-        raw = json.dumps({"suggestions": [_item(sources=[]), _item(because=""), _item(about=" "), "not a dict"]})
+        raw = json.dumps({"suggestions": [_item(sources=[]), _item(because=""), _item(about=" "),
+                                          _item(why_applicable=""), _item(falsifier=""), "not a dict"]})
         out = parse_review(raw, ALLOWED, 6)
-        assert out["suggestions"] == [] and out["dropped_without_source"] == 4
+        assert out["suggestions"] == [] and out["dropped_without_source"] == 6
 
     def test_only_the_valid_ids_of_a_mixed_citation_survive(self) -> None:
         out = parse_review(json.dumps({"suggestions": [_item(sources=["E-ffffffff", "E-bbbbbbbb", "E-bbbbbbbb"])]}), ALLOWED, 6)
@@ -77,6 +80,7 @@ class TestRender:
         review = parse_review(json.dumps({"suggestions": [_item()]}), ALLOWED, 6)
         text = render_review(review, {"E-aaaaaaaa": "Read + Verify"})
         assert "E-aaaaaaaa (Read + Verify)" in text and "refuse it" in text and "[add]" in text
+        assert "Why applicable here" in text and "Falsifier" in text
 
     def test_an_empty_review_says_so(self) -> None:
         assert "no suggestions" in render_review({"suggestions": [], "no_suggestion_reason": "nothing bears on it"})
@@ -118,3 +122,18 @@ def test_the_review_prompt_formats() -> None:
 
     text = load_policy_prompt(REVIEW_PROMPT_FILENAME).format(task="T", plan="P", records="R", max_suggestions=6)
     assert "T" in text and "at most 6" in text
+
+
+def test_the_revised_plan_is_returned_and_can_be_empty() -> None:
+    raw = json.dumps({"suggestions": [_item()], "revised_plan": "# Plan: x\n\nbody"})
+    out = parse_review(raw, ALLOWED, 6)
+    assert out["revised_plan"].startswith("# Plan: x")
+    assert parse_review(json.dumps({"suggestions": []}), ALLOWED, 6)["revised_plan"] == ""
+
+
+def test_the_prompt_asks_for_a_revised_plan() -> None:
+    from EvoScientist.memory.policy.prompts import load_policy_prompt
+    from EvoScientist.memory.policy.review import REVIEW_PROMPT_FILENAME
+
+    text = load_policy_prompt(REVIEW_PROMPT_FILENAME).format(task="T", plan="P", records="R", max_suggestions=6)
+    assert "revised_plan" in text and "No second revision" in text
