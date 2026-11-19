@@ -114,6 +114,11 @@ class TestPlanLifecycle:
             tree.plan(text=PLAN, parents=["n9"])
 
 
+def record_analysis(tree, node: str, text: str = "# Analysis\n## What the node showed\n- x\n") -> str:
+    """What node-analyst's file becomes once the main agent records it."""
+    return tree.analysis(node=node, text=text, path=f"reports/drafts/analysis-{node}.md")
+
+
 class TestNodesNeedPlans:
     def test_explore_needs_an_accepted_plan(self, strict) -> None:
         tree, *_ = strict
@@ -188,10 +193,14 @@ class TestNodesNeedPlans:
         p_root = new_plan(tree)
         with pytest.raises(TreeError, match="must match"):
             tree.new_node(**refine, plan_id=p_root)
-        # no written analysis of the parent is asked for: the matching accepted plan is enough
+        # a plan that builds on n1 is written from n1's analysis: refused until it is recorded
+        with pytest.raises(TreeError, match="n1 has no analysis yet"):
+            new_plan(tree, parents=[n1])
+        record_analysis(tree, n1)
         p2 = new_plan(tree, parents=[n1])
         tree.new_node(**refine, plan_id=p2)
-        assert (root / "nodes" / "n2" / "BRIEF.md").is_file()
+        brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
+        assert "reports/analysis/n1.md" in brief
 
     def test_the_default_tree_is_unchanged(self, tmp_path) -> None:
         tree, root, clock = make(tmp_path, require_plans=False)
@@ -313,6 +322,13 @@ def test_a_tree_run_keeps_one_report_and_drops_the_single_agent_template() -> No
         assert "TRAJECTORY.md` is the report" in text
         assert "tree_finalize" in text
         assert "Confirm `tree_finalize` published the champion's deliverable" in text
+
+
+def test_the_literature_and_diagnosis_bullets_belong_to_node_analyst_in_a_plan_run() -> None:
+    plans = get_system_prompt(research_tree=True, research_tree_reports=True)
+    assert "Use the literature where a step is stuck" not in plans
+    assert "diagnose from its own errors first" not in plans
+    assert "starts from that node's analysis" in plans
 
 
 def test_the_tree_bullets_follow_the_main_agents_tools() -> None:
@@ -520,11 +536,10 @@ class TestArmWithoutExperience:
 
         registry, _ = self._tools(tmp_path, **self.OFF)
         sub = resolve_subagent_tools(TestSubagents._load(name), registry)
-        assert {t.name for t in sub["tools"]} == {
-            "think_tool",
-            "tree_status",
-            "tree_history",
-        }
+        reading = {"think_tool", "tree_status", "tree_history"}
+        # node-analyst records the choices a node leaves open; plan-writer lists them in its plan
+        expected = reading | {"tree_choice"} if name == "node-analyst" else reading
+        assert {t.name for t in sub["tools"]} == expected
 
     def test_the_review_step_is_rendered_only_when_the_tool_is_on(self, tmp_path) -> None:
         from EvoScientist.utils import resolve_subagent_tools
@@ -535,7 +550,9 @@ class TestArmWithoutExperience:
         analyst_on = resolve_subagent_tools(
             TestSubagents._load("node-analyst"), on_registry
         )
-        assert "After the plan file is written" in analyst_on["system_prompt"]
+        # node-analyst writes an analysis, not a plan: the review belongs to the plan
+        assert "review_plan" not in analyst_on["system_prompt"]
+        assert "review_plan" not in {t.name for t in analyst_on["tools"]}
 
         off_registry, _ = self._tools(tmp_path, **self.OFF)
         for name in ("plan-writer", "node-analyst"):
@@ -679,7 +696,11 @@ class TestKeepingTheCoordinatorOnTheFlow:
         clock.advance(30)
         tree.finish("n1", change="c", observation="o")
         after = tree.status().splitlines()[-1]
-        assert "plan-writer" in after and "analys" not in after.lower()
+        assert "plan-writer" in after
+        assert "Analysis due for n1" in after and "node-analyst" in after
+        assert "nothing waits on it except a plan that builds on that node" in after
+        record_analysis(tree, "n1")
+        assert "Analysis due" not in tree.status().splitlines()[-1]
 
     def test_the_hints_are_only_for_runs_that_require_plans(self, tmp_path) -> None:
         tree, *_ = make(tmp_path, require_plans=False)
@@ -897,7 +918,10 @@ class TestCodeOnlyNodes:
 
 
 class TestNextPlanFromTheAnalyst:
-    """node-analyst writes one plan that builds on a node; tree_plan records it and a refine opens on it."""
+    """node-analyst analyses a finished node; tree_analysis records it; plan-writer's plan that builds on
+    the node is then recorded with tree_plan and a refine opens on it."""
+
+    ANALYSIS = "# Analysis: n1\n## What the node showed\n- the end label is off by one (slice x)\n"
 
     NEXT = "# Plan: fix the end label\n## What to build\n1. one line\n## Evidence\n- the choice (n1 slice)\n"
 
@@ -922,11 +946,48 @@ class TestNextPlanFromTheAnalyst:
         (n / "holdout_predictions.csv").write_text("1\n" * 400)
         (n / "submission.csv").write_text("d")
         clock.advance(30)
-        made["tree_finish"].invoke({"node": "n1", "change": "c", "observation": "o"})
+        finished = made["tree_finish"].invoke({"node": "n1", "change": "c", "observation": "o"})
+        assert "Start node-analyst on n1 now with task_start" in finished
         return made, root
 
-    def test_the_plan_is_recorded_and_the_refine_opens_without_an_analysis(self, tools) -> None:
+    @staticmethod
+    def analyse(made, root, text: str = ANALYSIS) -> str:
+        (root / "reports" / "drafts" / "analysis-n1.md").write_text(text)
+        return made["tree_analysis"].invoke({"node": "n1", "path": "reports/drafts/analysis-n1.md"})
+
+    def test_a_plan_that_builds_on_a_node_waits_for_its_analysis(self, tools) -> None:
         made, root = tools
+        d = root / "reports" / "drafts"
+        (d / "plan-next-n1.md").write_text(self.NEXT)
+        refused = made["tree_plan"].invoke({"path": "reports/drafts/plan-next-n1.md", "parents": ["n1"], "cluster": "A"})
+        assert refused.startswith("ERROR: n1 has no analysis yet")
+        assert "task_start" in refused and "tree_analysis" in refused and "new direction" in refused
+        # a plan for a new direction does not wait
+        (d / "plan-b.md").write_text(PLAN)
+        assert made["tree_plan"].invoke({"path": "reports/drafts/plan-b.md", "cluster": "A"}).startswith("P2 recorded")
+        assert "Analysis of n1 recorded" in self.analyse(made, root)
+        assert (root / "reports" / "analysis" / "n1.md").read_text().startswith("# Analysis: n1")
+        out = made["tree_plan"].invoke({"path": "reports/drafts/plan-next-n1.md", "parents": ["n1"], "cluster": "A"})
+        assert out.startswith("P3 recorded")
+        made["tree_plan"].invoke({"plan_id": "P3", "decision": "accepted"})
+        opened = made["tree_new"].invoke(
+            {"kind": "refine", "title": "r", "hypothesis": "h", "parents": ["n1"], "based_on": ["n1"], "plan_id": "P3"}
+        )
+        assert opened.startswith("Created n2")  # node ids and plan ids are separate counters
+        brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
+        assert "fix the end label" in brief and "reports/analysis/n1.md" in brief
+
+    def test_an_analysis_is_of_a_finished_node_and_can_be_replaced(self, tools) -> None:
+        made, root = tools
+        assert made["tree_analysis"].invoke({"node": "n9", "path": "reports/drafts/x.md"}).startswith("ERROR")
+        self.analyse(made, root)
+        self.analyse(made, root, "# Analysis: n1 (v2)\n")
+        assert (root / "reports" / "analysis" / "n1.md").read_text().startswith("# Analysis: n1 (v2)")
+        assert (root / ".research" / "reports_history" / "n1.v1.md").is_file()
+
+    def test_the_plan_is_recorded_and_the_refine_opens_on_it(self, tools) -> None:
+        made, root = tools
+        self.analyse(made, root)
         d = root / "reports" / "drafts"
         (d / "plan-next-n1.md").write_text(self.NEXT)
         out = made["tree_plan"].invoke({"path": "reports/drafts/plan-next-n1.md", "parents": ["n1"], "cluster": "A"})
@@ -940,6 +1001,7 @@ class TestNextPlanFromTheAnalyst:
 
     def test_a_plan_or_an_observation_in_based_on_is_left_out_and_said_so(self, tools) -> None:
         made, root = tools
+        self.analyse(made, root)
         d = root / "reports" / "drafts"
         (d / "plan-next.md").write_text(self.NEXT)
         made["tree_plan"].invoke({"path": "reports/drafts/plan-next.md", "parents": ["n1"], "cluster": "A"})
@@ -967,6 +1029,7 @@ class TestNextPlanFromTheAnalyst:
 
     def test_a_rewrite_takes_the_new_parents_and_family(self, tools) -> None:
         made, root = tools
+        self.analyse(made, root)
         d = root / "reports" / "drafts"
         (d / "plan-b.md").write_text(PLAN)
         made["tree_plan"].invoke({"path": "reports/drafts/plan-b.md", "cluster": "A"})  # P2, from the root
@@ -995,36 +1058,50 @@ class TestNextPlanFromTheAnalyst:
         out = made["tree_new"].invoke({"kind": "explore", "title": "e", "hypothesis": "h", "plan_id": "P2", "based_on": ["n1"]})
         assert out.startswith("Created n2")
 
-    def test_nothing_after_a_finished_node_points_at_one_kind_of_next_step(self, tools) -> None:
-        made, _ = tools
+    def test_after_a_finished_node_both_kinds_of_next_step_stay_open(self, tools) -> None:
+        made, root = tools
+        self.analyse(made, root)
         last = made["tree_status"].invoke({}).splitlines()[-1]
-        assert "analys" not in last.lower() and "refine" not in last.lower() and "deepen" not in last.lower()
-        assert "plan-writer" in last
-        assert "tree_analysis" not in made
+        assert "plan-writer" in last and "new direction" in last and "builds on an analysed node" in last
+        assert "refine" not in last.lower() and "deepen" not in last.lower()
 
-    def test_the_definition_and_the_prompt_put_explore_and_refine_side_by_side(self) -> None:
-        text = get_system_prompt(research_tree=True, research_tree_reports=True)
-        assert "tree_analysis" not in text and "has an analysis" not in text
-        assert "plan-next-<node>.md" in text and "choose among them" in text
-        assert "An explore node starts from the task" in text and "a refine node starts from a node already built" in text
-        assert "Both are opened the same way" in text and "both stay open to you" in text
-        assert "that node has to be understood" in text and "with the paper-navigator skill" in text
-        assert "report" not in text.split("that node has to be understood")[1].split("Record any plan with")[0]
+    def test_the_roles_are_stated_once_and_agree(self) -> None:
+        text = get_system_prompt(research_tree=True, research_tree_reports=True, research_tree_background=True)
+        # who does what, with no "do it yourself or delegate" escape
+        assert "Do this yourself or leave it to" not in text
+        assert "You do not write the analysis yourself: read it." in text
+        assert "`plan-writer` writes every plan." in text
+        assert "tree_analysis(node=..., path=...)" in text and "analysis-<node>.md" in text
+        assert "choose among them" in text and "tree_choice" in text
+        assert "Do not fold an untested design change into a plan." in text
+        # no leftover from the flow where node-analyst wrote the plan
+        assert "plan-next-<node>.md" not in text
+        assert "planned by `node-analyst`" not in text
+        assert '"Read a finished node and write the plan for a step that builds on it" → node-analyst' not in text
         assert "ONE `code_interpreter` eval" not in text
         analyst = TestSubagents._load("node-analyst")["system_prompt"]
-        assert "plan-next-<node id>.md" in analyst and "## What the node showed" in analyst
-        assert "may run small experiments" in analyst and "Look at the literature before you plan" in analyst
-        assert "analysis-<node id>" not in analyst and "### The next plan" not in analyst
+        assert "You do not\nwrite a plan" in analyst and "analysis-<node id>.md" in analyst
+        assert "## What the node showed" in analyst and "may run small experiments" in analyst
+        assert "plan-next" not in analyst and "## What to build" not in analyst
         writer = TestSubagents._load("plan-writer")["system_prompt"]
         assert "states the result and the choice, not the story of the experiment" in writer
+        assert "reports/analysis/<node>.md" in writer and "## Open choices" in writer
+
+    def test_what_waits_for_what_is_stated(self) -> None:
+        text = get_system_prompt(research_tree=True, research_tree_reports=True, research_tree_background=True)
+        part = text.split("**What waits for what.**")[1].split("\n")[0]
+        assert "start node-analyst on it at once with `task_start`" in part
+        assert "The one thing that waits is a plan that builds on that node" in part
+        assert "a node can be opened on an accepted plan" in part
+        assert "Background sub-agents work on the CPU while a node holds the GPU" in part
 
 
-def test_planning_starts_from_the_literature_for_both_writers() -> None:
+def test_the_literature_is_read_by_the_writer_and_by_the_analyst() -> None:
     writer = TestSubagents._load("plan-writer")["system_prompt"]
     assert "Look at the literature for the direction before you write" in writer
     analyst = TestSubagents._load("node-analyst")["system_prompt"]
-    assert analyst.index("Look at the literature before you plan") < analyst.index("## Rules")
-    assert "before you write the next plan" in analyst
+    assert analyst.index("search for papers that address them") < analyst.index("## Rules")
+    assert "whether it\n  transfers to this task is a judgment you state as yours" in analyst
 
 
 def test_plans_are_asked_for_a_design_document_not_interfaces_and_a_source_for_every_choice() -> None:
@@ -1037,11 +1114,81 @@ def test_plans_are_asked_for_a_design_document_not_interfaces_and_a_source_for_e
     assert "Never present a detail as coming from a paper or a record unless you have read it there" in writer
     assert 'labelled "own derivation"' not in writer and "Every concrete choice" not in writer
     assert "Not every choice needs a line" in writer
+    # node-analyst writes no plan, so none of the plan-writing rules belong in its definition
     analyst = TestSubagents._load("node-analyst")["system_prompt"]
-    assert "written like a design document" in analyst
-    assert "are the plan's to decide" in " ".join(analyst.split())
-    assert "Not every choice needs a line" in analyst
+    assert "written like a design document" not in analyst
     # a hint, not a cap: no word or minute limit appears in either definition
     import re
     for text in (writer, analyst):
         assert not re.search(r"\b(under|at most|no more than) \d+ (words|minutes|lines)\b", text)
+
+
+class TestOpenChoices:
+    """A choice the run has not settled: recorded on a node, listed by tree_status, carried into briefs,
+    closed by a later node or by the analyst on saved outputs."""
+
+    @pytest.fixture
+    def run(self, tmp_path):
+        tree, root, clock = make(tmp_path, require_plans=True)
+        tree.survey([{"name": "A", "mechanism": "m"}])
+        n1 = first_node(tree, root, clock, new_plan(tree))
+        return tree, root, clock, n1
+
+    def test_a_choice_is_recorded_listed_and_ordered(self, run) -> None:
+        tree, _, _, n1 = run
+        low = tree.choice(node=n1, question="stride 128 or 64", options=["128", "64"], default="128",
+                          why_open="never compared", needs="full_node", effect="low")
+        high = tree.choice(node=n1, question="gold occurrence", options=["first", "random"], default="random",
+                           why_open="review suggestion, untested", needs="short_training", effect="high",
+                           source="review of P1, suggestion 1")
+        assert low.startswith("C1 recorded on n1") and "default (128) stays" in low
+        assert high.startswith("C2 recorded on n1") and f"refine node of {n1} that changes only this" in high
+        status = tree.status()
+        listed = status.split("Open choices")[1]
+        # higher expected effect first, whatever the order they were recorded in
+        assert listed.index("C2") < listed.index("C1")
+        assert "random (default)" in listed and "needs short_training, effect high" in listed
+
+    def test_bad_choices_are_refused(self, run) -> None:
+        tree, _, _, n1 = run
+        with pytest.raises(TreeError, match="at least two options"):
+            tree.choice(node=n1, question="q", options=["a"], why_open="w", needs="inference", effect="low")
+        with pytest.raises(TreeError, match="default must be one of the options"):
+            tree.choice(node=n1, question="q", options=["a", "b"], default="c", why_open="w", needs="inference", effect="low")
+        with pytest.raises(TreeError, match="needs must be one of"):
+            tree.choice(node=n1, question="q", options=["a", "b"], why_open="w", needs="soon", effect="low")
+        with pytest.raises(TreeError, match="is not a node"):
+            tree.choice(node="n9", question="q", options=["a", "b"], why_open="w", needs="inference", effect="low")
+
+    def test_a_choice_is_closed_with_its_result_and_leaves_the_list(self, run) -> None:
+        tree, _, _, n1 = run
+        tree.choice(node=n1, question="veto only or rescue", options=["veto", "veto+rescue"], why_open="w",
+                    needs="inference", effect="medium")
+        with pytest.raises(TreeError, match="settled or dropped"):
+            tree.choice(choice_id="C1", status="open", result="x")
+        with pytest.raises(TreeError, match="say what closed it"):
+            tree.choice(choice_id="C1", status="settled")
+        out = tree.choice(choice_id="C1", status="settled", result="veto kept: rescue -0.0001 on cached val",
+                          settled_by=n1)
+        assert out.startswith("C1 settled")
+        assert "Open choices" not in tree.status()
+
+    def test_the_open_choices_of_the_parent_are_in_the_brief(self, run) -> None:
+        tree, root, _, n1 = run
+        tree.choice(node=n1, question="gold occurrence", options=["first", "random"], default="random",
+                    why_open="untested", needs="short_training", effect="high")
+        record_analysis(tree, n1)
+        pid = new_plan(tree, parents=[n1])
+        tree.new_node(kind="refine", title="r", hypothesis="h", parents=[n1], based_on=[n1], plan_id=pid)
+        brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
+        assert "Choices still open on the parents" in brief and "Keep each default" in brief
+        assert "gold occurrence" in brief and "random (default)" in brief
+
+    def test_the_tools_carry_choices_and_analyses(self, tmp_path) -> None:
+        root = tmp_path / "ws"
+        root.mkdir()
+        made = {t.name: t for t in create_research_tree_tools(root, require_plans=True)}
+        assert {"tree_analysis", "tree_choice"} <= set(made)
+        assert {"node", "question", "options", "default", "needs", "effect", "choice_id", "status", "result"} <= set(
+            made["tree_choice"].args
+        )

@@ -1,5 +1,5 @@
 plan-writer:
-  description: "Write one executable, falsifiable plan for a single research direction, from the task's data facts and the research tree's record. Returns the plan as text; it does not implement anything."
+  description: "Write one executable, falsifiable plan: a new direction, or a step that builds on a finished node (written from that node's analysis and its open choices). Lists the design choices the plan leaves open. Returns the plan as a file; it does not implement anything."
   # One template for every arm: the review step appears only in runs that register
   # `review_plan`, and the experience and paper tools appear only where the config
   # registers them. The step-by-step coach (memory_experience_coach_subagents) is
@@ -29,9 +29,17 @@ plan-writer:
         The reviewer does not see the tree, your measurements or the budget; you do, so the decision
         is yours. For each suggestion, check its `Why applicable here` against what you know, and
         check the cited record first (`read_memory`, `search_paper_text`, `read_paper`) if it would
-        change a choice the plan stands on. Take it and revise the plan file, or refuse it. In your
-        final reply, list every suggestion by number as taken, partly taken or refused, with a
-        reason for each one not fully taken. Do not call `review_plan` again after you revise.
+        change a choice the plan stands on.
+        - A suggestion that adds a check, a measurement or a report, or confirms the plan: take it into the
+          plan or refuse it.
+        - A suggestion that would change the design (the data handling, the labels, the objective, the model,
+          the decision rule): if you can settle it on the data now, before any training (count it, compare the
+          two on what exists), do that and decide from the numbers. If it needs training to tell, the plan
+          keeps the current design and lists the suggestion under "Open choices", with both options. The
+          analysis of the node built from this plan records it, and a later step tries it. Folding an untested
+          design change into the plan makes every later node inherit it unmeasured.
+        In your final reply, list every suggestion by number as taken, partly taken, listed as an open
+        choice or refused, with a reason for each one not fully taken. Do not call `review_plan` again after you revise.
   skills: ["/skills/"]
   system_prompt: |
     You are the plan-writer. You write ONE plan for the direction named in your task description. You do
@@ -40,6 +48,9 @@ plan-writer:
     ## Before writing
     1. Call `tree_status`, then `tree_history` for the nodes that bear on the direction. Do not plan a
        step the record shows failed under the same conditions; if you plan it again, say what is different.
+       For a step that builds on a node, read that node's analysis (`reports/analysis/<node>.md`) and the open
+       choices on it in `tree_status`: the analysis is the diagnosis the step starts from. When the task names a
+       choice to try, the step changes that one thing from the parent and keeps every other default.
     2. Look at the literature for the direction before you write. With the paper-navigator skill, search
        for how others handle this problem or this step, read the closest papers, and let what you find shape
        the plan. Search as long as it is worth it, then plan. Without the skill, plan from the record and the data.
@@ -72,8 +83,12 @@ plan-writer:
     The most likely way it fails here, and the check that would show it.
     ## Budget and stop condition
     The time it needs on the stated hardware, and when to give up early.
+    ## Open choices
+    The choice this step settles, if it was built to try one (its id). Then every design choice the plan
+    leaves open, one line each: the question, the option this plan builds (the default), the other options,
+    and why it is open.
     Be as long as the plan needs and no longer. You may measure things on the data or the record to
-    ground a choice, but the plan states the result and the choice, not the story of the experiment, and it
+    ground a choice (on the CPU: a node may be training on the GPU while you work), but the plan states the result and the choice, not the story of the experiment, and it
     holds no code beyond short snippets: writing the code is the next step, in a node.
 
     The implementer who reads the plan can think for itself and writes the code. Write the plan the way you

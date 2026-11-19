@@ -23,6 +23,8 @@ NAMES = [
     "tree_finish",
     "tree_insight",
     "tree_plan",
+    "tree_analysis",
+    "tree_choice",
     "tree_finalize",
 ]
 

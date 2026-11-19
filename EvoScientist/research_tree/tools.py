@@ -226,6 +226,42 @@ class PlanArgs(BaseModel):
     )
 
 
+class AnalysisArgs(BaseModel):
+    node: str = Field(description="The finished node the analysis is about.")
+    path: str = Field(
+        description="The analysis file node-analyst wrote, relative to the workspace (reports/drafts/analysis-<node>.md)."
+    )
+
+
+class ChoiceArgs(BaseModel):
+    node: str = Field(default="", description="To open a choice: the node whose design it is about.")
+    question: str = Field(default="", description="What is undecided, in one sentence.")
+    options: list[str] = Field(default_factory=list, description="Two or more ways to do it.")
+    default: str = Field(
+        default="",
+        description="The option the node's code does now, written exactly as in `options`. It stays until the "
+        "choice is closed.",
+    )
+    why_open: str = Field(
+        default="",
+        description="Why it is undecided: what the evidence shows and what it does not settle.",
+    )
+    needs: str = Field(
+        default="",
+        description="What settles it: inference (decidable on the node's saved outputs, no training), "
+        "short_training, or full_node.",
+    )
+    effect: str = Field(default="", description="Expected effect on the metric if it goes the other way: low, medium or high.")
+    source: str = Field(default="", description="Where it came from: a review suggestion, a slice, a record id.")
+    choice_id: str = Field(default="", description="To close a choice: its id (C1, ...).")
+    status: str = Field(default="", description="To close a choice: settled or dropped.")
+    result: str = Field(
+        default="",
+        description="To close a choice: the option kept and the numbers that decided it, or why it no longer matters.",
+    )
+    settled_by: str = Field(default="", description="The node whose result (or analysis) settled it.")
+
+
 class StartArgs(BaseModel):
     node: str = Field(description="A prepared code-only node (opened with gpu=false) to give the GPU.")
     minutes: float | None = Field(
@@ -279,6 +315,9 @@ def create_research_tree_tools(
             args_schema=schema,
             infer_schema=False,
         )
+
+    def analysis_tool(**a) -> str:
+        return tree.analysis(node=a["node"], text=read_draft(tree.root, a["path"]), path=a["path"])
 
     def plan_tool(**a) -> str:
         path = a.pop("path", "")
@@ -363,6 +402,23 @@ def create_research_tree_tools(
             "tree_new. A plan can be rewritten twice; an accepted plan no node uses yet can be rewritten or "
             "rejected as the record changes.",
             PlanArgs,
+        ),
+        tool(
+            analysis_tool,
+            "tree_analysis",
+            "Record node-analyst's analysis of a finished node (`path` is the file it wrote). A plan that builds on "
+            "a node is refused until its analysis is recorded. Recording it again replaces it; the earlier version "
+            "is kept.",
+            AnalysisArgs,
+        ),
+        tool(
+            lambda **a: tree.choice(**a),
+            "tree_choice",
+            "Open a choice the run has not settled (node, question, options, default, why_open, needs, effect), or "
+            "close one (choice_id, status settled|dropped, result, settled_by). Open choices are listed by "
+            "tree_status and carried into the briefs of steps that build on their node; the default stays until a "
+            "choice is closed.",
+            ChoiceArgs,
         ),
         tool(
             lambda **a: tree.finalize(),

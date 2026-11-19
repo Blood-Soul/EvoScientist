@@ -69,6 +69,9 @@ CATEGORIES = ("method", "experiment", "ablation")
 INSIGHT_STATUS = ("open", "supported", "contradicted")
 NODE_MAX_MINUTES = 180.0
 INSIGHT_EVERY = 3  # closed nodes after which the tools ask for an insight
+CHOICE_STATUS = ("open", "settled", "dropped")
+CHOICE_NEEDS = ("inference", "short_training", "full_node")  # what it takes to settle a choice
+CHOICE_EFFECT = ("low", "medium", "high")  # the recorder's estimate, used only to order the list
 RELATED_NODES = 2  # other nodes (besides the parents) put into a sub-agent's brief
 
 
@@ -176,6 +179,16 @@ class ResearchTree:
         ]
         drafts = [k for k, p in plans.items() if p["status"] == "draft"]
         ready = [k for k, p in plans.items() if p["status"] == "accepted" and not p.get("node")]
+        due = [
+            k for k, n in nodes.items()
+            if n["status"] != "running" and n.get("score") is not None and k not in st.get("analyses", {})
+        ]
+        due_note = (
+            f" Analysis due for {', '.join(due)}: start node-analyst on it with task_start if it is not running yet; "
+            "nothing waits on it except a plan that builds on that node."
+            if due
+            else ""
+        )
         if not st.get("survey"):
             return "Next: record the survey with tree_survey. Nothing is built before it."
         parts = []
@@ -196,14 +209,17 @@ class ResearchTree:
                 "tree_finish(node, abandon_reason=...), which frees its plan"
             )
         if parts:
-            return "Next: " + "; ".join(parts) + "."
+            return "Next: " + "; ".join(parts) + "." + due_note
         if drafts:
-            return f"Next: read and decide on the draft plan(s) {', '.join(drafts)} (tree_plan with a decision)."
+            return f"Next: read and decide on the draft plan(s) {', '.join(drafts)} (tree_plan with a decision)." + due_note
         if ready:
-            return f"Next: open a node on an accepted plan with tree_new(plan_id=...): {', '.join(ready)}."
+            return f"Next: open a node on an accepted plan with tree_new(plan_id=...): {', '.join(ready)}." + due_note
         if not plans:
-            return "Next: ask plan-writer (task) for a plan for each direction worth trying, then record them with tree_plan(path)."
-        return "Next: ask plan-writer for a plan for the next direction, or finalize if the time is nearly up."
+            return "Next: ask plan-writer for a plan for each direction worth trying (task_start, one job per direction), then record them with tree_plan(path)." + due_note
+        return (
+            "Next: ask plan-writer for the next plan: a step that builds on an analysed node (from its analysis and "
+            "open choices) or a new direction; or finalize if the time is nearly up." + due_note
+        )
 
     @staticmethod
     def _closed(st: dict) -> int:
@@ -267,6 +283,8 @@ class ResearchTree:
                 survey=[],
                 plans={},
                 next_plan=1,
+                analyses={},
+                choices=[],
                 insight_mark=0,
                 finalized=False,
             )
@@ -279,8 +297,10 @@ class ResearchTree:
                 "tree_plan(path=...), read it, compare, decide.\n"
                 "3. tree_new(plan_id=...) opens a node and writes its brief; a sub-agent builds it inside "
                 "nodes/<id>/. You do not write code, and nothing is built in the project root.\n"
-                "4. tree_finish scores the node on the held-out rows; then the next plan, for an explore "
-                "or a refine node."
+                "4. tree_finish scores the node on the held-out rows. Start node-analyst on it in the background "
+                "(task_start): it writes the node's analysis (tree_analysis) and the choices it leaves open "
+                "(tree_choice). A plan that builds on the node is asked for once that analysis exists; a plan for "
+                "a new direction needs nothing."
                 if self.require_plans
                 else ""
             )
@@ -405,6 +425,15 @@ class ResearchTree:
         if st.get("plans"):
             lines += ["Plans:", *render_plans(st["plans"])]
         if self.require_plans:
+            done = [k for k, n in st["nodes"].items() if n["status"] != "running" and n.get("score") is not None]
+            have = set(st.get("analyses", {}))
+            lines.append(
+                "Analyses: "
+                + (", ".join(f"{k} {'recorded' if k in have else 'due'}" for k in done) or "none yet")
+            )
+            open_choices = self._choices_lines(st)
+            if open_choices:
+                lines += ["Open choices (most promising first; the default stays until one is closed):", *open_choices]
             lines.append(self._next_step(st))
         nudge = self._insight_nudge(st)
         if nudge:
@@ -785,6 +814,17 @@ class ResearchTree:
             found += "\n\nInsights that bear on it:\n" + "\n".join(
                 f"- {i['id']} [{i['status']}] {i['text']}" for i in insights
             )
+        analysed = [p for p in parents if p in st.get("analyses", {})]
+        if analysed:
+            found += "\n\nAnalyses of the parents (full text in reports/analysis/): " + ", ".join(
+                f"reports/analysis/{p}.md" for p in analysed
+            )
+        open_parent = self._choices_lines(st, nodes=set(parents))
+        if open_parent:
+            found += (
+                "\n\nChoices still open on the parents. Keep each default unless this step's plan says it tries the "
+                "other option:\n" + "\n".join(open_parent)
+            )
         if node["conflicts"]:
             found += (
                 "\n\nMerging the parents' code left conflicts in: "
@@ -1085,6 +1125,12 @@ class ResearchTree:
             champion=st["champion"],
             killed=len(killed),
         )
+        if self.require_plans and scored:
+            out.append(
+                f"Start node-analyst on {nid} now with task_start: its analysis (tree_analysis) and the choices it "
+                f"leaves open (tree_choice) are what a plan that builds on {nid} is written from. It runs in the "
+                "background; open a node on an accepted plan meanwhile if one is ready."
+            )
         nudge = self._insight_nudge(st)
         if nudge:
             out.append(nudge)
@@ -1130,6 +1176,19 @@ class ResearchTree:
                     "direction, record it with tree_plan, accept it, then pass plan_id here"
                 )
         return plan
+
+    def _analysed_parents(self, st: dict, parents: list[str]) -> None:
+        """A plan that builds on a node is written from that node's analysis (only when plans are required)."""
+        if not self.require_plans:
+            return
+        missing = [par for par in parents if par not in st.get("analyses", {})]
+        if missing:
+            raise TreeError(
+                f"{', '.join(missing)} has no analysis yet, and a plan that builds on a node is written from it. "
+                f"Start node-analyst on {missing[0]} (task_start); when its reply is back, record the analysis with "
+                f"tree_analysis(node='{missing[0]}', path=...), then ask plan-writer for this plan. Meanwhile a "
+                "plan for a new direction (no parents) or an accepted plan can go ahead."
+            )
 
     @staticmethod
     def _scored_parents(st: dict, parents: list[str] | tuple[str, ...]) -> list[str]:
@@ -1188,6 +1247,7 @@ class ResearchTree:
                     found["cluster"] = cluster
                 if parents:
                     found["parents"] = self._scored_parents(st, parents)
+                    self._analysed_parents(st, found["parents"])
                 found["rounds"] += 1
                 found["status"] = "draft"  # a rewritten plan is reviewed again
                 found["text"] = text.strip()
@@ -1207,6 +1267,7 @@ class ResearchTree:
                     ". A new family is added with tree_survey."
                 )
             parents = self._scored_parents(st, parents)
+            self._analysed_parents(st, parents)
             pid = f"P{st.setdefault('next_plan', 1)}"
             st["next_plan"] += 1
             plans[pid] = {
@@ -1255,6 +1316,112 @@ class ResearchTree:
         if decision == "accepted":
             return f"{plan_id} accepted. Open the node with tree_new(plan_id='{plan_id}', ...)."
         return f"{plan_id} rejected: {reason.strip()}"
+
+    # ------------------------------------------------------------ analyses
+
+    def analysis(self, *, node: str, text: str, path: str = "") -> str:
+        """Record node-analyst's analysis of a finished node. A plan that builds on the node needs it."""
+        with self._edit() as st:
+            n = st["nodes"].get(node)
+            if n is None or n["status"] == "running":
+                raise TreeError(f"{node} is not a finished node; an analysis is of a node that has closed")
+            if not text.strip():
+                raise TreeError("the analysis file is empty")
+            analyses = st.setdefault("analyses", {})
+            rounds = analyses[node]["rounds"] + 1 if node in analyses else 0
+            analyses[node] = {"node": node, "path": path, "text": text.strip(), "rounds": rounds,
+                              "recorded": self.now()}
+            write_report(self.root, "analysis", node, text, rounds + 1)
+            self._log(st, "analysis", node=node, round=rounds)
+            open_here = [c for c in st.get("choices", []) if c["node"] == node and c["status"] == "open"]
+            return (
+                f"Analysis of {node} recorded (reports/analysis/{node}.md)"
+                + (f", with {len(open_here)} open choice(s) attached to {node}" if open_here else "")
+                + f". A plan that builds on {node} can now be asked for; plan-writer reads the analysis"
+                + (" and those choices" if open_here else "")
+                + " from the record."
+            )
+
+    # ------------------------------------------------------------- choices
+
+    def choice(
+        self,
+        *,
+        node: str = "",
+        question: str = "",
+        options: list[str] | tuple[str, ...] = (),
+        default: str = "",
+        why_open: str = "",
+        needs: str = "",
+        effect: str = "",
+        source: str = "",
+        choice_id: str = "",
+        status: str = "",
+        result: str = "",
+        settled_by: str = "",
+    ) -> str:
+        """Record a choice the run has not settled, or settle / drop one."""
+        with self._edit() as st:
+            choices = st.setdefault("choices", [])
+            if choice_id:
+                found = next((c for c in choices if c["id"] == choice_id), None)
+                if found is None:
+                    raise TreeError(f"no choice {choice_id}")
+                if status not in ("settled", "dropped"):
+                    raise TreeError(f"to close {choice_id} give status settled or dropped, with a result")
+                if not result.strip():
+                    raise TreeError(
+                        "say what closed it: the option kept and the numbers, or why it no longer matters"
+                    )
+                if settled_by and settled_by not in st["nodes"]:
+                    raise TreeError(f"settled_by must be a node id; {settled_by} is not one")
+                found.update(status=status, result=flatten(result, 400), settled_by=settled_by or None,
+                             closed=self.now())
+                self._log(st, "choice", id=choice_id, status=status)
+                return f"{choice_id} {status}: {found['result']}"
+            if node not in st["nodes"]:
+                raise TreeError(
+                    f"{node or '(none)'} is not a node; a choice is attached to the node whose design it is about"
+                )
+            opts = [flatten(o, 160) for o in options if str(o).strip()]
+            if len(opts) < 2:
+                raise TreeError("a choice needs at least two options")
+            dflt = flatten(default, 160) if default.strip() else opts[0]
+            if dflt not in opts:
+                raise TreeError("default must be one of the options, written the same way")
+            if needs not in CHOICE_NEEDS:
+                raise TreeError(f"needs must be one of {', '.join(CHOICE_NEEDS)}")
+            if effect not in CHOICE_EFFECT:
+                raise TreeError(f"effect must be one of {', '.join(CHOICE_EFFECT)}")
+            if not question.strip() or not why_open.strip():
+                raise TreeError("question and why_open are required")
+            cid = f"C{len(choices) + 1}"
+            choices.append({
+                "id": cid, "node": node, "question": flatten(question, 240), "options": opts,
+                "default": dflt, "why_open": flatten(why_open, 300), "needs": needs, "effect": effect,
+                "source": flatten(source, 160), "status": "open", "result": "", "settled_by": None,
+                "opened": self.now(),
+            })
+            self._log(st, "choice", id=cid, node=node, needs=needs, effect=effect)
+            how = (
+                f"settle it on {node}'s saved outputs and close it with tree_choice(choice_id='{cid}', ...)"
+                if needs == "inference"
+                else f"try it as a refine node of {node} that changes only this, and close it from that node's result"
+            )
+            return f"{cid} recorded on {node}; the default ({dflt}) stays until it is closed. To close it: {how}."
+
+    def _choices_lines(self, st: dict, *, nodes: set[str] | None = None) -> list[str]:
+        """Open choices, most promising first: higher expected effect, then cheaper to settle."""
+        rank = {e: i for i, e in enumerate(reversed(CHOICE_EFFECT))}
+        cost = {e: i for i, e in enumerate(CHOICE_NEEDS)}
+        cs = [c for c in st.get("choices", []) if c["status"] == "open" and (nodes is None or c["node"] in nodes)]
+        cs.sort(key=lambda c: (rank.get(c["effect"], 9), cost.get(c["needs"], 9), c["id"]))
+        return [
+            f"  {c['id']} on {c['node']}: {c['question']} | options: "
+            + " / ".join(f"{o} (default)" if o == c["default"] else o for o in c["options"])
+            + f" | needs {c['needs']}, effect {c['effect']} | open because {c['why_open']}"
+            for c in cs
+        ]
 
     # ------------------------------------------------------------- insights
 
