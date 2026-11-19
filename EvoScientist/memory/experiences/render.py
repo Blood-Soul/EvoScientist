@@ -164,6 +164,20 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
         else "L2 finding · mechanism-level claim drawn from the paper"
     )
     lines = [f"{record_id} · {label}"]
+    cited_l1 = [c for c in _items(item.get("source_l1_ids")) if _s(c)]
+    if origin == "cross_paper":
+        n_papers = len([p for p in _items(item.get("source_papers")) if _s(p)])
+        strength = f"Evidence: {len(cited_l1)} experimental records from {n_papers} papers"
+    elif origin == "induced":
+        strength = f"Evidence: {len(cited_l1)} experimental records of one paper"
+    else:
+        quoted = any(isinstance(e, Mapping) and _s(e.get("quote")) for e in _items(item.get("evidence")))
+        strength = (
+            "Evidence: one paper's own sentences (quoted below); no other paper behind it"
+            if quoted
+            else "Evidence: one paper; no sentence of it was recorded with this finding"
+        )
+    lines.append(strength)
     task, domain = _s(item.get("task")), _s(item.get("domain"))
     lines.append(f"Task: {task}" + (f"  [{domain}]" if domain else ""))
     if _s(item.get("problem")):
@@ -201,6 +215,12 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
         for x in limits:
             src = ", ".join(_s(s) for s in _items(x.get("from")))
             lines.append(f"  - {_s(x.get('text'))}" + (f"  [summarized from {src}]" if src else ""))
+
+    quotes = [e for e in _items(item.get("evidence")) if isinstance(e, Mapping) and _s(e.get("quote"))]
+    if quotes:
+        lines.append("Where the paper says it (verbatim):")
+        for e in quotes[:3]:
+            lines.append(f"  - [{_s(e.get('supports'))}] \"{_clip(e.get('quote'), 300)}\"")
 
     source = _paper_line(paper)
     where = _s(item.get("locator"))

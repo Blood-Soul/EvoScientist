@@ -55,13 +55,17 @@ Return only a JSON object, no prose and no Markdown fences:
   "mechanism": "why it works, in the terms the paper uses. Empty string if the paper gives no reason.",
   "requires": [{"text": "a condition that must hold for the finding to apply", "basis": "inferred"}],
   "limits_stated": [{"text": "a condition in which the authors report the finding stops holding", "quote": "verbatim sentence from the paper"}],
+  "evidence": [
+    {"supports": "claim", "quote": "verbatim sentence from the paper that states or shows the finding"},
+    {"supports": "mechanism", "quote": "verbatim sentence from the paper that gives the reason"}
+  ],
   "origin": "paper",
   "locator": "Section 5.2"
 }]}
 ```
 
 All keys must be present in every record. `compared_options`, `requires` and `limits_stated` may be empty arrays;
-`mechanism` may be `""`. The example above marks the condition `inferred`, because that is the usual case; `stated` is the exception,
+`mechanism` may be `""`. `evidence` must hold at least one `claim` quote. The example above marks the condition `inferred`, because that is the usual case; `stated` is the exception,
 used only where the authors argue the condition themselves.
 
 ## How to fill each field
@@ -108,6 +112,15 @@ verbatim from the paper; it is checked against the paper text and a record whose
 not rephrase the quote. A price paid for the method (more parameters, slower inference, more storage, a small margin
 below an oracle) is a **cost**, not a limit: leave it out. Do not infer a limit from the mechanism and do not turn
 missing evidence into a limit. An empty array is the normal answer when the authors state none.
+
+**`evidence`** -- where the paper says it. Each entry is one sentence copied verbatim from the paper (do not
+rephrase, do not join two sentences) and what it supports: `claim` (the finding in `action` or the result in
+`compared_options`) or `mechanism` (the reason in `mechanism`). Quotes are checked against the paper text:
+- a record with no `claim` quote found in the paper is dropped;
+- a `mechanism` with no `mechanism` quote found in the paper is emptied, because a reason the paper does not give
+  is not the paper's. Write the mechanism the paper's sentence supports, not a fuller account of your own.
+Two or three quotes are usually enough; quote the result or the authors' own words, not the abstract's summary
+when the body says it more precisely.
 
 **`locator`** -- the section, table or figure where the supporting material is.
 

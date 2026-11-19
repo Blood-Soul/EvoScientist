@@ -22,6 +22,8 @@ from EvoScientist.memory.experiences.store import (
 
 PAPER = "The verifier without head features gained 1.2 and 0.7 F1; with head features and initialization it gained 2.9 and 3.1. " * 5
 QUOTE_L2 = "The verifier without head features gained 1.2 and 0.7 F1"
+MECH_QUOTE = "The margin is not comparable across questions because each question has its own scale."
+PAPER = PAPER + MECH_QUOTE + " "
 
 
 def l1_record(**over):
@@ -51,6 +53,7 @@ def l2_record(**over):
         "requires": [{"text": "the reader exposes top-layer logits", "basis": "stated"}],
         "limits_stated": [{"text": "a text-only verifier gains little", "quote": QUOTE_L2}],
         "origin": "paper", "locator": "Section 4.2", "source_l1_ids": [],
+        "evidence": [{"supports": "claim", "quote": QUOTE_L2}, {"supports": "mechanism", "quote": MECH_QUOTE}],
     }
     base.update(over)
     return base
@@ -262,3 +265,37 @@ def test_storing_resolves_an_induced_limit_source_to_the_stored_l1_id(tmp_path: 
     l1_ids = [d.observation_id for d in docs if d.experience_level == "l1"]
     stored = json.loads((tmp_path / "experiences" / "projects" / "P-x" / docs[0].paper_key / "l2.json").read_text())
     assert stored["experiences"][0]["limits_stated"][0]["from"] == l1_ids[:2]
+
+
+
+def test_a_paper_l2_needs_a_claim_quote_found_in_the_paper():
+    ok = parse_experience_v2(reply(l2_record()), paper_id="p1", paper_text=PAPER, level="l2")["experiences"][0]
+    assert {e["supports"] for e in ok["evidence"]} == {"claim", "mechanism"} and ok["mechanism"]
+    invented = l2_record(evidence=[{"supports": "claim", "quote": "Verifiers always win on every benchmark we tried."}])
+    with pytest.raises(ExperienceOutputError, match="no claim quote found verbatim"):
+        parse_experience_v2(reply(invented), paper_id="p1", paper_text=PAPER, level="l2")
+
+
+def test_a_mechanism_the_paper_does_not_give_is_emptied():
+    rec = l2_record(evidence=[{"supports": "claim", "quote": QUOTE_L2},
+                              {"supports": "mechanism", "quote": "Because annotators were penalised for other spans."}])
+    out = parse_experience_v2(reply(rec), paper_id="p1", paper_text=PAPER, level="l2")["experiences"][0]
+    assert out["mechanism"] == "" and "no supporting sentence" in out["mechanism_dropped"]
+    assert [e["supports"] for e in out["evidence"]] == ["claim"]
+
+
+def test_an_induced_l2_needs_no_paper_quote():
+    rec = l2_record(origin="induced", locator="", source_l1_ids=["l1-1", "l1-2"], evidence=[])
+    out = parse_experience_v2(reply(rec), paper_id="p1", level="l2", source_ids={"l1-1", "l1-2"}, limited_ids=set())
+    assert out["experiences"] and out["experiences"][0]["evidence"] == []
+
+
+def test_the_render_says_how_much_stands_behind_a_finding():
+    paper = render_record({"id": "E-1", "experience_level": "l2", "experience": l2_record()})
+    assert "Evidence: one paper's own sentences" in paper and "Where the paper says it (verbatim):" in paper
+    assert QUOTE_L2 in paper
+    old = l2_record(); del old["evidence"]
+    assert "no sentence of it was recorded" in render_record({"id": "E-2", "experience_level": "l2", "experience": old})
+    induced = render_record({"id": "E-3", "experience_level": "l2",
+                             "experience": l2_record(origin="induced", source_l1_ids=["E-a", "E-b"], evidence=[])})
+    assert "Evidence: 2 experimental records of one paper" in induced

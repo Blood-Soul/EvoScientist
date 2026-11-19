@@ -557,7 +557,7 @@ _V2_L1_KEYS = (
 # its record, not the record from the payload.
 _V2_L2_KEYS = (
     "domain", "task", "problem", "method", "action", "compared_options", "mechanism",
-    "requires", "limits_stated", "origin", "locator", "source_l1_ids",
+    "requires", "limits_stated", "origin", "locator", "source_l1_ids", "evidence",
 )
 _V2_COMPARISONS = {"controlled", "vs_baseline", "absolute_only"}
 _V2_PARAM_BASES = {"swept", "derived", "prior_work", "default", "unstated"}
@@ -604,6 +604,39 @@ def _validate_conditions(value: Any, field: str) -> None:
             or not str(item.get("text") or "").strip()
         ):
             raise ExperienceOutputError(f"{field} entries need text and a basis of stated or inferred")
+
+
+def _grounded_l2_evidence(item: dict[str, Any], *, paper_text: str) -> None:
+    """A paper-read L2 rests on the paper's own sentences.
+
+    Keeps the `evidence` quotes found in the paper. Without a `claim` quote the record is not the paper's finding
+    and is rejected; without a `mechanism` quote the mechanism is emptied (the paper does not give that reason).
+    Only for `origin: paper` when the paper text is at hand; induced records rest on their L1 ids instead.
+    """
+    from .gate import _quote_ok  # same normalisation the gate uses for quotes
+
+    if item.get("origin") != "paper" or not paper_text:
+        item.setdefault("evidence", [])
+        return
+    raw = item.get("evidence")
+    if not isinstance(raw, list):
+        raise ExperienceOutputError("evidence must be a list of {supports, quote}")
+    kept: list[dict[str, str]] = []
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        supports = str(entry.get("supports") or "").strip().lower()
+        quote = " ".join(str(entry.get("quote") or "").split())
+        if supports in ("claim", "mechanism") and quote and _quote_ok(quote, paper_text):
+            kept.append({"supports": supports, "quote": quote})
+    if not any(e["supports"] == "claim" for e in kept):
+        raise ExperienceOutputError(
+            "no claim quote found verbatim in the paper: an L2 read from the paper needs a sentence that states it"
+        )
+    if item.get("mechanism") and not any(e["supports"] == "mechanism" for e in kept):
+        item["mechanism"] = ""
+        item["mechanism_dropped"] = "no supporting sentence found in the paper"
+    item["evidence"] = kept
 
 
 def _grounded_l2_limits(
@@ -760,7 +793,9 @@ def parse_experience_v2(
                 row.setdefault("limits_stated", [])
                 row.setdefault("locator", "")
                 row.setdefault("source_l1_ids", [])
+                row.setdefault("evidence", [])
                 _validate_v2_l2_record(row, source_ids=source_ids)
+                _grounded_l2_evidence(row, paper_text=paper_text if source_ids is None else "")
                 row["limits_stated"] = _grounded_l2_limits(
                     row, paper_text=paper_text, limited_ids=limited_ids
                 )
