@@ -197,6 +197,11 @@ class ResearchTree:
                 f"{', '.join(running)} is being built by its sub-agent in its node directory; "
                 "close it with tree_finish when it is done"
             )
+            if not ready and not drafts:
+                parts.append(
+                    "no accepted plan is in reserve for when it closes: ask plan-writer now (task_start) for one that "
+                    "does not depend on the running node, so the GPU does not wait for an analysis"
+                )
         if waiting and not running:
             parts.append(
                 f"the GPU is free: start one of the prepared nodes ({', '.join(waiting)}) with tree_start(node)"

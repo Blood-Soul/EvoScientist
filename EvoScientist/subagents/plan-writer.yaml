@@ -33,8 +33,10 @@ plan-writer:
         - A suggestion that adds a check, a measurement or a report, or confirms the plan: take it into the
           plan or refuse it.
         - A suggestion that would change the design (the data handling, the labels, the objective, the model,
-          the decision rule): if you can settle it on the data now, before any training (count it, compare the
-          two on what exists), do that and decide from the numbers. If it needs training to tell, the plan
+          a loss weight or another training setting, the decision rule): if you can settle it on the data now,
+          before any training (count it, compare the two on what exists), do that and decide from the numbers.
+          This holds when the suggestion is phrased as a correction of the plan's reasoning too: correct the
+          reasoning in the text, but a setting it changes is still a design change. If it needs training to tell, the plan
           keeps the current design and lists the suggestion under "Open choices", with both options. The
           analysis of the node built from this plan records it, and a later step tries it. Folding an untested
           design change into the plan makes every later node inherit it unmeasured.

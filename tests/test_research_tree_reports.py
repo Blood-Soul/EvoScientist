@@ -1092,7 +1092,7 @@ class TestNextPlanFromTheAnalyst:
         part = text.split("**What waits for what.**")[1].split("\n")[0]
         assert "start node-analyst on it at once with `task_start`" in part
         assert "The one thing that waits is a plan that builds on that node" in part
-        assert "a node can be opened on an accepted plan" in part
+        assert "open the reserve plan if there is one" in part
         assert "Background sub-agents work on the CPU while a node holds the GPU" in part
 
 
@@ -1192,3 +1192,41 @@ class TestOpenChoices:
         assert {"node", "question", "options", "default", "needs", "effect", "choice_id", "status", "result"} <= set(
             made["tree_choice"].args
         )
+
+
+class TestKeepingTheGpuBusy:
+    """r39: the GPU sat idle 19 min on average between nodes (64% busy vs 83-92% in r38) because each refine waited
+    for its parent's analysis and no other plan was ready. A plan in reserve and a background builder fix that."""
+
+    def test_the_hint_asks_for_a_reserve_while_a_node_runs_without_one(self, strict) -> None:
+        tree, root, clock = strict
+        tree.survey([{"name": "a", "mechanism": "m"}])
+        tree.plan(text=PLAN)
+        tree.plan(plan_id="P1", decision="accepted")
+        tree.new_node(kind="explore", title="t", hypothesis="h", plan_id="P1")
+        last = tree.status().splitlines()[-1]
+        assert "n1 is being built" in last and "no accepted plan is in reserve" in last
+        assert "does not depend on the running node" in last
+        tree.plan(text=PLAN)
+        tree.plan(plan_id="P2", decision="accepted")
+        assert "no accepted plan is in reserve" not in tree.status().splitlines()[-1]
+
+    def test_the_background_section_runs_the_builder_in_the_background_and_keeps_a_reserve(self) -> None:
+        text = get_system_prompt(research_tree=True, research_tree_reports=True, research_tree_background=True)
+        part = text.split("## Work that runs while you decide")[1]
+        assert "Hand the brief to `code-agent` with `task_start`, not `task`" in part
+        assert "Keep one accepted plan in reserve." in part and "does not depend on that node" in part
+        assert "open the reserve plan if there is one" in part
+        # the order reads: start, survey, overlap, builder, reserve, what waits
+        order = ["The rule that keeps the run moving", "The survey comes first", "Plans and nodes overlap",
+                 "Run the node's builder", "Keep one accepted plan in reserve", "What waits for what"]
+        assert [part.index(o) for o in order] == sorted(part.index(o) for o in order)
+        without = get_system_prompt(research_tree=True, research_tree_reports=True, research_tree_background=False)
+        assert "Run the node's builder" not in without and "in reserve" not in without
+
+    def test_a_correction_that_changes_a_setting_is_still_a_design_change(self) -> None:
+        writer = " ".join(TestSubagents._load("plan-writer")["system_prompt"].split())
+        review = " ".join(open(Path(__file__).parents[1] / "EvoScientist" / "subagents" / "plan-writer.yaml").read().split())
+        assert "a loss weight or another training setting" in review
+        assert "phrased as a correction of the plan's reasoning" in review
+        assert "a setting it changes is still a design change" in review
