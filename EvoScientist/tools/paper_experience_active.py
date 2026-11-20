@@ -235,6 +235,10 @@ def create_extract_paper_experiences_tool(
                 )
             else:
                 completed.append(result)
+        if any(not r.get("cached") for r in completed):
+            from ..memory.experiences.cross_paper import schedule_cross_paper
+
+            schedule_cross_paper(memory_dir=memory_dir, project_id=active_project)
         return _render_extraction(completed, failed)
 
     return StructuredTool.from_function(
