@@ -1,6 +1,6 @@
 # Analyst, open choices and the order of work in a tree run
 
-Branch `feat/analyst-choices` (from local-dev `22550dd`), 2026-11-20. What changes and why.
+The analyst/plan split first landed on `feat/analyst-choices` (from `experience`, then called `local-dev`, at `22550dd`), 2026-11-20. What changes and why.
 
 ## What was wrong
 
