@@ -34,8 +34,6 @@ PROMPT_FILENAMES = {"l1": "l1_extract.md", "l2": "l2_inductive.md"}
 # does not fit the level->prompt map above. Its output is still stored under
 # level "l2" (see `run_experience_extraction`); only prompt *selection* needs a
 # third key. Loading it is best-effort — see `load_experience_prompts`.
-INDUCTION_PROMPT_KEY = "l2_induced"
-INDUCTION_PROMPT_FILENAME = "l2_induced_from_l1.md"
 
 
 class ExperienceOutputError(ValueError):
@@ -275,8 +273,6 @@ def _prompt_dir_candidates() -> list[Path]:
 
 V2_PROMPT_FILENAME = "experience_extract_v2.md"
 V2_L2_PROMPT_FILENAME = "l2_extract_v2.md"
-V2_INDUCED_PROMPT_FILENAME = "l2_from_l1_v2.md"
-V2_INDUCED_PROMPT_KEY = "l2_from_l1"
 
 # The loaded prompts are a plain `Mapping[str, str]` because the store hashes one entry per level.
 # This extra entry tags the schema so `run_experience_extraction` can tell the v2 trio from the legacy
@@ -288,12 +284,10 @@ _V2_MAX_PAPER_CHARS = 200_000
 
 
 def load_experience_prompts() -> dict[str, str]:
-    """Load the v2 prompts: L1 (facts from tested practices), L2 (mechanism-level findings) and induction.
+    """Load the v2 prompts: L1 (facts from tested practices) and L2 (mechanism-level findings).
 
-    The three have separate jobs. L1 reads a paper's controlled comparisons; L2 reads the whole paper for the
-    interpretive claims around them; the induction prompt reads this paper's own L1 output and induces findings that
-    need more than one record. The store writes one level file per level, so the induction prompt is kept under its
-    own key and merged into L2 before storing.
+    L1 reads a paper's controlled comparisons; L2 reads the whole paper for the interpretive claims around them.
+    Cross-paper L2 is a separate pass over all stored L1 records (`cross_paper.py`).
 
     A prompts mapping without an ``l2`` entry still selects the single-level path in
     `run_experience_extraction`; the older v1 L1/L2 pair is `load_legacy_experience_prompts`.
@@ -306,9 +300,6 @@ def load_experience_prompts() -> dict[str, str]:
                 "l1": l1.read_text(encoding="utf-8"),
                 "l2": l2.read_text(encoding="utf-8"),
             }
-            induction = directory / V2_INDUCED_PROMPT_FILENAME
-            if induction.is_file():
-                loaded[V2_INDUCED_PROMPT_KEY] = induction.read_text(encoding="utf-8")
             return loaded
     searched = ", ".join(str(path) for path in _prompt_dir_candidates())
     raise FileNotFoundError(
@@ -317,25 +308,13 @@ def load_experience_prompts() -> dict[str, str]:
 
 
 def load_legacy_experience_prompts() -> dict[str, str]:
-    """Load the existing L1/L2 prompts without changing their schemas.
-
-    Also loads the L1->L2 induction prompt under `INDUCTION_PROMPT_KEY` when a
-    matching file sits alongside l1/l2 in the same directory. That file is
-    optional: its absence never raises, since the induction step itself
-    degrades gracefully when its prompt is missing (see
-    `run_experience_extraction`).
-    """
+    """Load the legacy L1/L2 prompts without changing their schemas."""
     for directory in _prompt_dir_candidates():
         paths = {level: directory / name for level, name in PROMPT_FILENAMES.items()}
         if all(path.is_file() for path in paths.values()):
             loaded = {
                 level: path.read_text(encoding="utf-8") for level, path in paths.items()
             }
-            induction_path = directory / INDUCTION_PROMPT_FILENAME
-            if induction_path.is_file():
-                loaded[INDUCTION_PROMPT_KEY] = induction_path.read_text(
-                    encoding="utf-8"
-                )
             return loaded
     searched = ", ".join(str(path) for path in _prompt_dir_candidates())
     raise FileNotFoundError(f"Experience prompts not found; searched: {searched}")
@@ -490,41 +469,6 @@ def parse_experience_json(
     if supplied_id is not None and supplied_id != canonical_id:
         raise ExperienceOutputError("model paper_id does not match the requested paper")
     return _clean_surrogates(payload)
-
-
-async def _induce_l2_from_l1(
-    *,
-    paper_id: str,
-    l1_experiences: list[dict[str, Any]],
-    prompt: str,
-    model: Any,
-    domain_arxiv: str | None,
-) -> list[dict[str, Any]]:
-    """Run the L1->L2 induction prompt and return its normalized L2 records.
-
-    Failures here are logged and swallowed rather than raised: induction is an
-    additional, coexisting path (per the approved design) alongside direct L2
-    extraction, so it must never take down extraction for a paper that already
-    produced valid direct L1/L2 output.
-    """
-    response = await model.ainvoke(
-        [
-            SystemMessage(content=prompt),
-            HumanMessage(
-                content=_without_lone_surrogates(
-                    f"[paper_id] {paper_id}\n\n"
-                    + json.dumps(l1_experiences, ensure_ascii=False)
-                )
-            ),
-        ]
-    )
-    result = parse_experience_json(
-        format_message_content(response).strip(),
-        level="l2",
-        paper_id=paper_id,
-        domain_arxiv=domain_arxiv,
-    )
-    return result["experiences"]
 
 
 def _json_was_cut_off(exc: ExperienceOutputError) -> bool:
@@ -820,67 +764,6 @@ def parse_experience_v2(
     return _clean_surrogates({"paper_id": paper_id, "domain_arxiv": domain_arxiv, "experiences": kept})
 
 
-def _induction_input(l1_experiences: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
-    """Label each L1 record with a local id so an induced claim can cite the records it drew on.
-
-    The labels are positional (``l1-1`` …) and are rewritten to the stored ``E-*`` ids when the paper is saved, so
-    nothing downstream has to guess which record a citation meant.
-    """
-    labelled, ids = [], []
-    for index, record in enumerate(l1_experiences, start=1):
-        label = f"l1-{index}"
-        ids.append(label)
-        labelled.append({**record, "id": label})
-    return labelled, ids
-
-
-def _record_tokens(text: Any) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if len(w) > 2}
-
-
-def _same_options(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
-    """True when two findings compare (almost) the same set of options.
-
-    Wording varies enough that comparing `problem`/`action` text misses near-duplicates (measured on a trial: the pair
-    restating one ablation in different words scored below 0.25 on combined problem+action). The option names do not
-    vary that much, because both prompts copy the paper's names for the variants, so they carry the signal.
-    """
-
-    def names(record: Mapping[str, Any]) -> set[str]:
-        options = record.get("compared_options")
-        if not isinstance(options, list):
-            return set()
-        return _record_tokens(" ".join(str(o.get("option") or "") for o in options if isinstance(o, Mapping)))
-
-    left_names, right_names = names(left), names(right)
-    if not left_names or not right_names:
-        return False
-    return len(left_names & right_names) / len(left_names | right_names) >= 0.45
-
-
-def _merge_induced(direct: list[dict[str, Any]], induced: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep both origins, but drop an induced record that restates a directly extracted one.
-
-    The two prompts work on different material and are meant to coexist. Duplicates still arise when the paper states a
-    finding and its own L1 records make the same claim. The direct record wins: it carries a locator, and an induced
-    record can only restate what the L1 records already say, so dropping it loses no information.
-    """
-    def key(record: Mapping[str, Any]) -> str:
-        return " ".join(str(record.get("problem") or "").lower().split())
-
-    kept = list(direct)
-    seen = {key(record) for record in direct if key(record)}
-    for record in induced:
-        record_key = key(record)
-        if record_key and record_key in seen:
-            continue
-        if any(_same_options(record, existing) for existing in kept):
-            continue
-        seen.add(record_key)
-        kept.append(record)
-    return kept
-
-
 async def _run_single_level_extraction(
     *, paper_id: str, paper_text: str, prompt: str, model: Any, domain_arxiv: str | None
 ) -> dict[str, dict[str, Any]]:
@@ -938,31 +821,6 @@ async def _invoke_v2(
     raise ExperienceOutputError(f"{level.upper()} extraction failed: {last}")
 
 
-async def _induce_v2(
-    *,
-    paper_id: str,
-    l1_experiences: Sequence[Mapping[str, Any]],
-    prompt: str,
-    model: Any,
-    domain_arxiv: str | None,
-) -> list[dict[str, Any]]:
-    labelled, source_ids = _induction_input(l1_experiences)
-    limited_ids = {record["id"] for record in labelled if record.get("limits_stated")}
-    source_text = json.dumps(labelled, ensure_ascii=False)
-    payload = await _invoke_v2(
-        prompt=prompt,
-        human=f"[paper_id] {paper_id}\n\n{source_text}",
-        level="l2",
-        paper_id=paper_id,
-        paper_text=source_text,
-        model=model,
-        domain_arxiv=domain_arxiv,
-        source_ids=source_ids,
-        limited_ids=limited_ids,
-    )
-    return payload["experiences"]
-
-
 async def _run_v2_pipeline(
     *,
     paper_id: str,
@@ -971,11 +829,11 @@ async def _run_v2_pipeline(
     model: Any,
     domain_arxiv: str | None,
 ) -> dict[str, dict[str, Any]]:
-    """L1 and L2 read the paper in parallel, then induction adds findings that need several L1 records.
+    """L1 and L2 read the paper in parallel.
 
     L1 is the backbone: if it fails, the paper fails and the worker retries. L2 is allowed to degrade to an empty list
     and is logged loudly when it does — a mechanism-level finding is additional value, not the reason the paper was
-    queued. Induction always degrades: it depends on L1 succeeding first.
+    queued.
     """
     text = _without_lone_surrogates(paper_text)[:_V2_MAX_PAPER_CHARS]
     human = f"[paper_id] {paper_id}\n\n{text}"
@@ -1005,24 +863,6 @@ async def _run_v2_pipeline(
 
     l1_payload: dict[str, Any] = l1_result
     l2_payload: dict[str, Any] = l2_result
-    induction_prompt = prompts.get(V2_INDUCED_PROMPT_KEY)
-    if induction_prompt and l1_payload["experiences"]:
-        try:
-            induced = await _induce_v2(
-                paper_id=paper_id,
-                l1_experiences=l1_payload["experiences"],
-                prompt=induction_prompt,
-                model=model,
-                domain_arxiv=domain_arxiv,
-            )
-        except Exception as exc:  # degrade, never block a paper whose L1 is good
-            print(
-                f"[extraction] L1->L2 induction skipped for {paper_id!r}: {exc}",
-                file=sys.stderr,
-            )
-        else:
-            l2_payload["experiences"] = _merge_induced(l2_payload["experiences"], induced)
-
     return {"l1": l1_payload, "l2": l2_payload}
 
 
@@ -1038,8 +878,8 @@ async def run_experience_extraction(
 
     Three shapes are supported, selected by the prompts that were loaded:
 
-    * v2 pair (current): ``l1`` + ``l2`` + the L1->L2 induction prompt. L1 records tested practices, L2 records
-      mechanism-level findings read from the whole paper, and induction adds findings that span several L1 records.
+    * v2 pair (current): ``l1`` + ``l2``. L1 records tested practices; L2 records mechanism-level findings read
+      from the whole paper. Cross-paper L2 is a separate pass over all stored L1 records.
     * single level (r30 fallback): only ``l1``; the old comparison-centred schema, no L2.
     * v1 pair (legacy): the original L1/L2/induction prompts, kept so old libraries can be re-checked.
     """
@@ -1095,24 +935,5 @@ async def run_experience_extraction(
         for level, result in zip(levels, results, strict=True)
         if isinstance(result, dict)
     }
-
-    induction_prompt = loaded.get(INDUCTION_PROMPT_KEY)
-    l1_experiences = output.get("l1", {}).get("experiences", [])
-    if induction_prompt and l1_experiences:
-        try:
-            induced = await _induce_l2_from_l1(
-                paper_id=paper_id,
-                l1_experiences=l1_experiences,
-                prompt=induction_prompt,
-                model=model,
-                domain_arxiv=domain_arxiv,
-            )
-        except Exception as exc:  # degrade, never block direct output
-            print(
-                f"[extraction] L1->L2 induction skipped for {paper_id!r}: {exc}",
-                file=sys.stderr,
-            )
-        else:
-            output["l2"]["experiences"].extend(induced)
 
     return output

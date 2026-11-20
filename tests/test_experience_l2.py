@@ -9,7 +9,6 @@ import pytest
 
 from EvoScientist.memory.experiences.extraction import (
     ExperienceOutputError,
-    _merge_induced,
     load_experience_prompts,
     parse_experience_v2,
     run_experience_extraction,
@@ -102,32 +101,15 @@ def test_a_finding_whose_numbers_the_paper_never_writes_is_dropped():
     assert len(out["experiences"]) == 1
 
 
-def test_an_induced_record_is_dropped_when_it_restates_a_direct_one():
-    direct = l2_record()
-    same = l2_record(origin="induced", locator="", source_l1_ids=["l1-1"])
-    assert _merge_induced([direct], [same]) == [direct]
-    other = l2_record(
-        origin="induced", locator="", source_l1_ids=["l1-1"], problem="A different question.",
-        compared_options=[{"option": "frozen encoder", "result": "saves a pass"}],
-    )
-    assert len(_merge_induced([direct], [other])) == 2
 
 
-def test_an_induced_record_comparing_the_same_options_in_other_words_is_dropped():
-    direct = l2_record()
-    reworded = l2_record(
-        origin="induced", locator="", source_l1_ids=["l1-1"],
-        problem="Which design makes a verifier work?",
-        action="Use the reader's head features and start from the reader.",
-    )
-    assert _merge_induced([direct], [reworded]) == [direct]
 
 
 class LevelModel:
     """Answer each prompt with the reply meant for it."""
 
-    def __init__(self, *, l1=None, l2=None, induced=None):
-        self.replies = {"Experience Extraction": l1, "L2 Extraction": l2, "L2 Induction": induced}
+    def __init__(self, *, l1=None, l2=None):
+        self.replies = {"Experience Extraction": l1, "L2 Extraction": l2}
         self.seen: list[str] = []
 
     async def ainvoke(self, messages):
@@ -140,34 +122,21 @@ class LevelModel:
 
 
 @pytest.mark.asyncio
-async def test_the_pipeline_reads_l1_and_l2_and_merges_the_induction():
-    model = LevelModel(
-        l1=reply(l1_record()),
-        l2=reply(l2_record()),
-        induced=reply(l2_record(
-            origin="induced", locator="", source_l1_ids=["l1-1"], problem="Induced question.",
-            compared_options=[{"option": "frozen encoder", "result": "saves a pass"}],
-        )),
-    )
+async def test_the_pipeline_reads_l1_and_l2():
+    model = LevelModel(l1=reply(l1_record()), l2=reply(l2_record()))
     out = await run_experience_extraction(paper_id="p1", paper_text=PAPER, prompts=load_experience_prompts(), model=model)
     assert set(out) == {"l1", "l2"}
-    assert [r["origin"] for r in out["l2"]["experiences"]] == ["paper", "induced"]
-    assert sorted(model.seen) == ["Experience Extraction", "L2 Extraction", "L2 Induction"]
+    assert [r["origin"] for r in out["l2"]["experiences"]] == ["paper"]
+    assert sorted(model.seen) == ["Experience Extraction", "L2 Extraction"]
 
 
 @pytest.mark.asyncio
 async def test_a_failed_l2_does_not_fail_the_paper():
-    model = LevelModel(l1=reply(l1_record()), l2="nope", induced=None)
-    model.replies["L2 Induction"] = reply()
+    model = LevelModel(l1=reply(l1_record()), l2="nope")
     out = await run_experience_extraction(paper_id="p1", paper_text=PAPER, prompts=load_experience_prompts(), model=model)
     assert len(out["l1"]["experiences"]) == 1 and out["l2"]["experiences"] == []
 
 
-@pytest.mark.asyncio
-async def test_an_induction_failure_is_skipped_and_l1_still_lands():
-    model = LevelModel(l1=reply(l1_record()), l2=reply(l2_record()), induced="nope")
-    out = await run_experience_extraction(paper_id="p1", paper_text=PAPER, prompts=load_experience_prompts(), model=model)
-    assert [r["origin"] for r in out["l2"]["experiences"]] == ["paper"]
 
 
 def test_storing_resolves_the_citation_to_the_stored_l1_id(tmp_path: Path):
@@ -223,13 +192,10 @@ def test_an_induced_limit_must_summarize_cited_l1_records_that_state_limits():
     assert out["experiences"][0]["limits_stated"] == []
 
 
-def test_the_l2_prompts_ground_their_limits():
+def test_the_l2_prompt_grounds_its_limits():
     root = Path(__file__).resolve().parents[1] / "prompt"
     paper = (root / "l2_extract_v2.md").read_text(encoding="utf-8")
-    induced = (root / "l2_from_l1_v2.md").read_text(encoding="utf-8")
     assert '"quote": "verbatim sentence from the paper"' in paper and "is a **cost**, not a limit" in paper
-    assert '"from": ["l1-2", "l1-3"]' in induced and "summarized from the contributing records" in induced
-    assert "Never take a limit from a record's `effect.cost`" in induced
 
 
 def test_plan_review_retrieval_keeps_a_share_of_l1(tmp_path: Path):

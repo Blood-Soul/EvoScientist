@@ -25,6 +25,8 @@ raises, so the task fails and is retried rather than letting an ungraded record 
 
 from __future__ import annotations
 
+import os
+
 import asyncio
 import functools
 import json
@@ -49,7 +51,7 @@ SEVERITY = {"pass": 0, "na": 1, "fail": 2}
 L2_CHECKS = frozenset({"F1", "F4", "F5", "S3", "S5", "I1", "I2", "I3"})
 UNVERIFIED_MECHANISM = "UNVERIFIED_MECHANISM"
 # Judge calls in flight for one paper's records. A drain already extracts 16 papers at once.
-GATE_CONCURRENCY = 4
+GATE_CONCURRENCY = max(1, int(os.environ.get("EVOSCIENTIST_EXPERIENCE_GATE_CONCURRENCY", "4") or 4))
 
 LAYER_GUIDANCE = {
     "l1": (

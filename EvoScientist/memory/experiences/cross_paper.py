@@ -1,6 +1,6 @@
 """Cross-paper L1 -> L2 induction: group similar L1 records from different papers and induce findings across them.
 
-Within-paper induction (`l2_from_l1_v2.md`) sees one paper's own experiments only. This module looks across papers:
+This module is the only L2 induction pass: it looks across all papers' L1 records:
 records that answer the same kind of problem, or compare the same kind of design choice, are grouped, and an LLM
 writes findings that hold across the group -- the step from specific to abstract. Design notes:
 `docs/cross_paper_l2.zh-CN.md`.
