@@ -82,6 +82,7 @@ def build_async_subagent_graph(
     paper_queue_tool = create_paper_experience_queue_tool(
         memory_dir=str(_paths.MEMORIES_DIR),
         project_id=resolve_project_id(workspace.root),
+        workspace_dir=workspace.root,
     )
     tool_registry = {
         "think_tool": think_tool,

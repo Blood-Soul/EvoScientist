@@ -760,7 +760,7 @@ def test_enqueue_tool_batches_and_launches_once(
     launches: list[str] = []
     monkeypatch.setattr(
         "EvoScientist.tools.paper_experience_queue.launch_paper_experience_worker",
-        lambda project_id: launches.append(project_id) or object(),
+        lambda project_id, workspace_dir=None: launches.append(project_id) or object(),
     )
     tool = create_paper_experience_queue_tool(memory_dir=tmp_path, project_id="P-alpha")
 

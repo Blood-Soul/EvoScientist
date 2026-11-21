@@ -730,7 +730,9 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
             paper_tools.insert(
                 0,
                 create_paper_experience_queue_tool(
-                    memory_dir=memory_dir, project_id=project_id
+                    memory_dir=memory_dir,
+                    project_id=project_id,
+                    workspace_dir=workspace.root,
                 ),
             )
         for tool in paper_tools:

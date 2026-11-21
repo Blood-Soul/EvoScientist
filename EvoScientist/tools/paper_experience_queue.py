@@ -36,7 +36,7 @@ class EnqueuePaperExperiencesArgs(BaseModel):
 
 
 def create_paper_experience_queue_tool(
-    *, memory_dir: str | Path, project_id: str
+    *, memory_dir: str | Path, project_id: str, workspace_dir: str | Path | None = None
 ) -> BaseTool:
     """Build the batch enqueue tool without changing paper search behavior."""
 
@@ -63,7 +63,10 @@ def create_paper_experience_queue_tool(
                 existing += 1
         launched = False
         try:
-            launched = launch_paper_experience_worker(active_project) is not None
+            launched = (
+                launch_paper_experience_worker(active_project, workspace_dir)
+                is not None
+            )
         except Exception:
             logger.warning("Failed to launch paper experience worker", exc_info=True)
         parts = [f"Queued {enqueued} paper(s) for experience extraction"]
