@@ -1,7 +1,7 @@
 ---
 name: paper-navigator
 description: "Find and read academic papers (S2 + arXiv). Disambiguate ambiguous queries, search by keyword + citation graph + recommendations + snippets, judge relevance against an authored rubric, and read with L1/L2/L3 strategy. Trigger phrases: find papers, search papers, related work, citation analysis, recent advances, read this paper, baseline with code. Do NOT use for: survey reports (research-survey), idea generation (research-ideation), Related Work sections (paper-writing)."
-allowed-tools: "write_file edit_file read_file think_tool execute enqueue_paper_experiences"
+allowed-tools: "write_file edit_file read_file think_tool execute"
 metadata:
   author: EvoScientist
   version: '3.4.1'
@@ -25,19 +25,6 @@ Find and read academic papers. Route by **intent**, judge by **relevance**.
 ```
 
 The agent does relevance judgment — no LLM-as-judge is called, no numeric scoring. You author the rubric, you triage each paper, you rank by relevance.
-
-## Background paper experience extraction
-
-**Only if the `enqueue_paper_experiences` tool is among your tools.** If it is not, skip this whole section and the matching checklist item: nothing is queued and nothing is lost.
-
-Keep the existing search, triage, reading, ranking, and answer workflow unchanged. Once the final paper set for POINT, LIST, or ITERATIVE has been determined, call `enqueue_paper_experiences` exactly once with every paper that will be delivered to the user. **Call it yourself without asking the user** — experience extraction is a fixed pipeline step, not an optional feature to offer or confirm. Pass each paper's best resolvable URL plus its ID and title when known. If the search provider exposes a primary arXiv category, pass it as `domain_arxiv`; otherwise leave it absent rather than guessing.
-
-This call only persists background work. Do not wait for extraction, inspect queue state, fetch extra full text for it, include extraction status in the answer, or alter the selected papers if enqueueing fails. The worker downloads full text and runs both existing L1/L2 prompts independently of this skill.
-
-When `paper-experience` invokes this skill only to resolve a topic into a final
-paper set, return that set to the caller and skip `enqueue_paper_experiences`.
-The caller immediately runs foreground extraction into the same project store,
-so enqueueing here would duplicate the work.
 
 ## Setup
 
@@ -314,7 +301,6 @@ Deliver structured knowledge, not a search trace. Strip process words before out
 
 **Pre-output checklist (mandatory).** Before emitting the answer, verify each box.
 
-- [ ] **Final papers queued** once with `enqueue_paper_experiences` (only if you have that tool) — called directly, never offered to the user as a choice; enqueue status does not change the answer.
 - [ ] **Pool gathered** from every round's triage, deduped by `paperId`, Irrelevant excluded.
 - [ ] **Ranked by relevance** (judgment, not a numeric score) — All-core before Partial.
 - [ ] **Recency tie-break applied** when a recency signal is present (`year` DESC after relevance).

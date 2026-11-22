@@ -225,8 +225,9 @@ class TestMiddleware:
         assert len(_pending(tmp_path / "mem")) == 1
 
 
-def test_the_switch_is_on_by_default_and_mapped() -> None:
+def test_there_is_no_separate_switch() -> None:
+    """Autoqueue is part of paper extraction, not a setting of its own."""
     from EvoScientist.config.settings import _ENV_MAPPINGS, EvoScientistConfig
 
-    assert EvoScientistConfig().memory_paper_autoqueue_enabled is True
-    assert "memory_paper_autoqueue_enabled" in _ENV_MAPPINGS
+    assert not hasattr(EvoScientistConfig(), "memory_paper_autoqueue_enabled")
+    assert "memory_paper_autoqueue_enabled" not in _ENV_MAPPINGS

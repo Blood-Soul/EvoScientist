@@ -38,6 +38,22 @@ class PaperExperienceWorkerState(TypedDict, total=False):
     failed: int
 
 
+def _already_stored(memory_dir: str | Path, project_id: str, task: Any) -> bool:
+    from ..experiences import load_paper_experiences
+
+    try:
+        return bool(
+            load_paper_experiences(
+                memory_dir=memory_dir,
+                project_id=project_id,
+                paper_id=task.paper_id or task.url,
+                url=task.url,
+            )
+        )
+    except Exception:
+        return False
+
+
 async def drain_paper_experience_queue(
     *, memory_dir: str | Path, project_id: str, model: Any | None = None
 ) -> dict[str, int]:
@@ -65,6 +81,18 @@ async def drain_paper_experience_queue(
                 claim_next_task, memory_dir=memory_dir, project_id=project_id
             ):
                 try:
+                    # Already in the store (the foreground `paper-experience`
+                    # skill, or an earlier queue entry under another id):
+                    # extracting it again would only duplicate records.
+                    done = await asyncio.to_thread(
+                        _already_stored, memory_dir, project_id, task
+                    )
+                    if done:
+                        await asyncio.to_thread(
+                            complete_task, memory_dir=memory_dir, task=task
+                        )
+                        counts["processed"] += 1
+                        continue
                     paper_text = await download_paper_text(task.url)
                     # Persist before extracting: the full text keeps its value if
                     # extraction fails, and a retry then reuses it instead of

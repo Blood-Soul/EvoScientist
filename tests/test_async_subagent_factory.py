@@ -182,7 +182,6 @@ def test_inject_subagent_gates_experience_on_the_yaml_tool_names(
     cfg.memory_observations_enabled = True
     cfg.memory_observation_writer = MemoryObservationWriter.ALL
     cfg.memory_workers_enabled = False
-    cfg.memory_paper_autoqueue_enabled = False
     cfg.memory_experience_search_enabled = True
     cfg.auxiliary_model = ""
     cfg.auxiliary_provider = ""

@@ -1,9 +1,7 @@
 research-agent:
   description: "Web research for methods/baselines/datasets (one topic at a time, return actionable notes + sources)."
-  # paper-navigator is commonly entered from this agent. `enqueue_paper_experiences`
-  # is resolved only in runs without paper-autoqueue: with autoqueue on, the
-  # middleware queues every `scholar_search.py` result in code and the tool is
-  # not registered, so this block drops out and the skill skips its manual step.
+  # paper-navigator is commonly entered from this agent; every paper its
+  # searches return is queued for extraction in code (paper autoqueue).
   # search_paper_text/read_paper close the loop: papers queued earlier become
   # verifiable source text on later tasks. Stored experience is read here with
   # `search_experience` and `list_experience`.
@@ -11,22 +9,11 @@ research-agent:
     [
       tavily_search,
       think_tool,
-      enqueue_paper_experiences,
       search_experience,
       list_experience,
       search_paper_text,
       read_paper,
     ]
-  prompt_sections:
-    enqueue_paper_experiences:
-      requires: [enqueue_paper_experiences]
-      text: |
-        After the final paper set is selected, call `enqueue_paper_experiences`
-        yourself exactly once with every paper that will be returned. Never ask
-        the user whether to save experiences and never present it as an option —
-        it is a fixed pipeline step, not a decision. This enqueue is required
-        even when the caller only requested a concise report; it runs
-        asynchronously and must not delay the answer.
   skills: ["/skills/"]
   system_prompt: |
     You are a research assistant.
@@ -39,8 +26,6 @@ research-agent:
     papers, related work, citation analysis, or recent literature, first read
     `/skills/paper-navigator/SKILL.md` and follow that workflow exactly. Do not
     replace it with ad-hoc web searches.
-
-    {{enqueue_paper_experiences}}
 
     ## Available Tools
     - `think_tool` - Reflect on findings and plan next steps

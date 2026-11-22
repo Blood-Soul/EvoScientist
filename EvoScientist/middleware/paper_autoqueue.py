@@ -1,11 +1,6 @@
 """Queue every paper a literature search returns for experience extraction.
 
-Enqueueing used to depend on the agent: `paper-navigator` asks it to call
-`enqueue_paper_experiences` once the final paper set is settled, and in practice
-an agent that runs the search scripts one by one never gets to that step. The
-library then stays empty and the experience coach has nothing to say.
-
-This middleware takes the decision away from the agent. After an `execute` call
+The agent never decides what to extract: it only searches and reads. After an `execute` call
 that ran `scholar_search.py` it reads the papers the search found (the pool file
 named by `--output`, plus any `arxiv:<id>` in the printed result), queues each
 one and starts a drain of the queue in this process. The skill scripts run in

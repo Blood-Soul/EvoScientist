@@ -476,7 +476,6 @@ class TestArmWithoutExperience:
     """Tree flow with the whole experience system off: same YAML, fewer tools and prompt blocks."""
 
     EXPERIENCE_TOOLS = {
-        "enqueue_paper_experiences",
         "extract_paper_experiences",
         "search_experience",
         "list_experience",
@@ -523,10 +522,10 @@ class TestArmWithoutExperience:
 
     def test_the_switch_defaults_to_the_old_behaviour(self, tmp_path) -> None:
         registry, base = self._tools(tmp_path)
-        assert {"enqueue_paper_experiences", "extract_paper_experiences"} <= set(registry)
-        assert {"enqueue_paper_experiences", "extract_paper_experiences"} <= {
-            t.name for t in base
-        }
+        assert "extract_paper_experiences" in set(registry)
+        assert "extract_paper_experiences" in {t.name for t in base}
+        # papers are queued by the autoqueue middleware; the agent has no enqueue tool
+        assert "enqueue_paper_experiences" not in set(registry)
 
     @pytest.mark.parametrize("name", ["plan-writer", "node-analyst"])
     def test_the_subagents_keep_only_the_tree_reading_tools(
@@ -561,34 +560,14 @@ class TestArmWithoutExperience:
             # the placeholder is gone, not left as an empty bullet
             assert "- \n" not in off["system_prompt"]
 
-    def test_enqueue_is_agent_driven_only_without_paper_autoqueue(self, tmp_path) -> None:
+    def test_research_agent_has_no_enqueue_step(self, tmp_path) -> None:
         from EvoScientist.utils import resolve_subagent_tools
 
-        # autoqueue off: the search results are not queued in code, so the agent
-        # keeps the tool and the prompt tells it the fixed post-selection step
-        manual_registry, _ = self._tools(tmp_path)
-        manual = resolve_subagent_tools(
-            TestSubagents._load("research-agent"), manual_registry
-        )
-        assert "enqueue_paper_experiences" in {t.name for t in manual["tools"]}
-        assert (
-            "call `enqueue_paper_experiences` yourself exactly once"
-            in " ".join(manual["system_prompt"].split())
-        )
-
-        # autoqueue on: every scholar_search result is queued by the middleware,
-        # so the tool is not registered here and the prompt block drops out; the
-        # skill skips its manual step when the tool is absent
-        auto_registry, _ = self._tools(
-            tmp_path, memory_paper_autoqueue_enabled=True
-        )
-        assert "enqueue_paper_experiences" not in auto_registry
-        auto = resolve_subagent_tools(
-            TestSubagents._load("research-agent"), auto_registry
-        )
-        assert "enqueue_paper_experiences" not in {t.name for t in auto["tools"]}
-        assert "enqueue_paper_experiences" not in auto["system_prompt"]
-        assert "`paper-navigator` is a skill, not a sub-agent" in auto["system_prompt"]
+        registry, _ = self._tools(tmp_path)
+        sub = resolve_subagent_tools(TestSubagents._load("research-agent"), registry)
+        assert "enqueue_paper_experiences" not in {t.name for t in sub["tools"]}
+        assert "enqueue_paper_experiences" not in sub["system_prompt"]
+        assert "`paper-navigator` is a skill, not a sub-agent" in sub["system_prompt"]
 
 
 ANALYSIS = """# Analysis of n1

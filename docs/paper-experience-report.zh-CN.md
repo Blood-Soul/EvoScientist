@@ -7,7 +7,7 @@
 | 路径 | 触发方式 | 用户感知 | 适用场景 |
 | --- | --- | --- | --- |
 | 主动抽取（Foreground） | 用户明确要求“从论文中提取/学习/保存经验”，由 `paper-experience` skill 触发 | 当前请求中立即完成并返回经验 | 用户指定论文，或围绕主题精选少量论文后学习 |
-| 被动抽取（Background） | `paper-navigator` 完成检索并确定最终交付论文集后，调用 `enqueue_paper_experiences` | 不阻塞论文检索与回答，后台异步完成 | 日常检索过程中的经验自动积累 |
+| 被动抽取（Background） | 每次 `scholar_search.py` 返回的论文由 autoqueue 中间件自动入队 | agent 只做检索，不感知抽取；不阻塞检索与回答 | 日常检索过程中的经验自动积累 |
 
 两条路径使用相同的全文下载、L1/L2 提示词、JSON 校验和项目经验存储，因此最终经验格式一致，可以统一检索和利用。
 
@@ -45,14 +45,15 @@
 
 ## 4. 被动抽取流程
 
-`paper-navigator` 的搜索、筛选、阅读和回答流程保持不变。只有在 POINT、LIST 或 ITERATIVE 分支已经确定“最终要交付给用户的论文集”后，才调用一次 `enqueue_paper_experiences`，并传入每篇论文的可解析 URL、论文 ID、标题以及可获得的 arXiv 主分类。
+`paper-navigator` 只负责检索与阅读，不包含任何入队步骤。`middleware/paper_autoqueue.py` 在每次运行 `scholar_search.py` 的 `execute` 调用之后，读取本次搜索的结果（`--output` 指定的 pool 文件和输出里的 `arxiv:<id>`），逐篇入队并在同一进程内启动消费。入队的是“搜到的”论文，而不是“读过的”论文；无关论文由经验门禁（gate）过滤。只要 `memory_paper_extraction_enabled` 开着，这条路径就开着，没有单独的开关。
 
 ### 4.1 入队与去重
 
 - 队列按项目隔离，任务文件保存在 `paper_experience_queue/projects/<project_id>/` 下。
 - 任务 ID 由项目 ID 与规范化论文标识稳定生成（`PX-...`），同一论文在 `pending`、`running` 或 `completed` 状态下再次入队都会被识别为已有任务。
 - 已失败任务再次入队时会被恢复为 `pending`，清空旧错误并允许重试。
-- 入队调用只负责持久化和尝试启动 worker，不等待抽取、不改变论文回答，也不把抽取状态混入用户的检索结果。
+- 入队只负责持久化并启动消费，不等待抽取、不改变论文回答，也不把抽取状态混入检索结果。
+- 消费时若该论文已在经验库中（例如前台 `paper-experience` 已抽过），直接标记完成，不重复抽取。
 
 ### 4.2 Worker 消费
 

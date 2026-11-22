@@ -28,7 +28,6 @@ OPTIONAL_SUBAGENT_TOOLS = frozenset(
         "search_paper_text",
         "read_paper",
         "extract_paper_experiences",
-        "enqueue_paper_experiences",
         "review_plan",
     }
 )

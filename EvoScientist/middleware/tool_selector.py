@@ -52,9 +52,6 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         # Core
         "think_tool",
         "extract_paper_experiences",
-        # paper-navigator's finalization contract persists selected papers via
-        # this tool. Never hide it when adaptive selection is active.
-        "enqueue_paper_experiences",
         "task",
         # Background sub-agents (config research_tree_background_tasks): the prompt directs plans through them.
         "task_start",

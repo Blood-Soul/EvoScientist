@@ -38,9 +38,6 @@ from EvoScientist.memory.observations import (
 )
 from EvoScientist.paths import Workspace
 from EvoScientist.tools import paper_experience_active
-from EvoScientist.tools.paper_experience_queue import (
-    create_paper_experience_queue_tool,
-)
 
 
 @pytest.fixture(autouse=True)
@@ -752,30 +749,6 @@ def test_enqueue_is_idempotent_across_calls(tmp_path: Path) -> None:
         len(list_tasks(memory_dir=tmp_path, project_id="P-alpha", status="pending"))
         == 1
     )
-
-
-def test_enqueue_tool_batches_and_launches_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    launches: list[str] = []
-    monkeypatch.setattr(
-        "EvoScientist.tools.paper_experience_queue.launch_paper_experience_worker",
-        lambda project_id, workspace_dir=None: launches.append(project_id) or object(),
-    )
-    tool = create_paper_experience_queue_tool(memory_dir=tmp_path, project_id="P-alpha")
-
-    result = tool.run(
-        {
-            "papers": [
-                {"url": "https://example.test/one", "paper_id": "paper-1", "title": "One"},
-                {"url": "https://example.test/two", "paper_id": "paper-2", "title": "Two"},
-            ]
-        }
-    )
-
-    assert result.startswith("Queued 2 paper(s) for experience extraction")
-    assert "started the background worker" in result
-    assert launches == ["P-alpha"]
 
 
 @pytest.mark.asyncio

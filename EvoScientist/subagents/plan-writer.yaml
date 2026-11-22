@@ -12,7 +12,6 @@ plan-writer:
       search_paper_text,
       read_paper,
       extract_paper_experiences,
-      enqueue_paper_experiences,
       review_plan,
       tree_status,
       tree_history,

@@ -48,7 +48,7 @@ agent 运行时，三个库各有各的检索入口：
 | 路径 | 触发方式 | 特点 |
 | --- | --- | --- |
 | 主动（前台） | 用户明确要求提取经验，`paper-experience` skill 调 `extract_paper_experiences` | 当前请求内直接返回 |
-| 被动（后台） | `paper-navigator` 定稿论文集后调 `enqueue_paper_experiences` | 入队，不阻塞检索，后台 worker 异步消费 |
+| 被动（后台） | 每次 `scholar_search.py` 返回的论文由 autoqueue 中间件在代码里入队 | agent 不感知、不调用任何工具；同进程异步消费，已入库的论文跳过 |
 
 详见 [论文经验抽取与利用](paper-experience-report.zh-CN.md)、
 [论文原文 RAG 链路方案](rag-plan.zh-CN.md)。
@@ -439,7 +439,7 @@ EvoScientist/tools/
   experience_policy.py     apply_experience
   paper_rag.py               search_paper_text / read_paper
   paper_experience_active.py  extract_paper_experiences（前台）
-  paper_experience_queue.py    enqueue_paper_experiences（后台入队）
+EvoScientist/middleware/paper_autoqueue.py   搜索结果自动入队 + 同进程消费
 EvoScientist/middleware/coach.py   ExperienceCoachMiddleware：逐步判断 + per-call 注入
 EvoScientist/langgraph_dev/paper_inspector.py   /debug/papers WebUI 页面
 prompt/

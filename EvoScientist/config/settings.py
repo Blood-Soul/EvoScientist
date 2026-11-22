@@ -452,15 +452,11 @@ class EvoScientistConfig:
     # vocabulary the vocabulary of both, so subject-matter queries missed.
     # Disabling stops tool registration and prompt injection; records on disk
     # stay readable by ID through `read_memory`.
-    # The two tools that turn papers into experience records
-    # (`enqueue_paper_experiences`, `extract_paper_experiences`). Off removes them from
-    # the agent, for an arm that must not build any experience.
+    # Papers -> experience records: every paper a `scholar_search.py` call returns is
+    # queued in code and drained in-process (middleware/paper_autoqueue.py), and the
+    # foreground `extract_paper_experiences` tool is registered. Off removes both, for
+    # an arm that must not build any experience.
     memory_paper_extraction_enabled: bool = True
-    # Queue every paper a `scholar_search.py` call returns for experience extraction and
-    # drain the queue in-process, so the library no longer depends on the agent calling
-    # `enqueue_paper_experiences`. Needs `memory_paper_extraction_enabled`. On by
-    # default on this branch, so the manual enqueue tool is not registered.
-    memory_paper_autoqueue_enabled: bool = True
     # Cross-paper L1 -> L2 induction (memory/experiences/cross_paper.py); off unless an arm turns it on.
     memory_cross_paper_enabled: bool = False
     # Quality gate on extracted experience records (see memory/experiences/gate.py). `off` stores everything;
@@ -1419,7 +1415,6 @@ _ENV_MAPPINGS = {
     "memory_observation_cache_max_files": "EVOSCIENTIST_MAX_CACHED_FILES",
     "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
     "memory_paper_extraction_enabled": "EVOSCIENTIST_MEMORY_PAPER_EXTRACTION_ENABLED",
-    "memory_paper_autoqueue_enabled": "EVOSCIENTIST_MEMORY_PAPER_AUTOQUEUE_ENABLED",
     "memory_cross_paper_enabled": "EVOSCIENTIST_MEMORY_CROSS_PAPER_ENABLED",
     "memory_experience_gate": "EVOSCIENTIST_MEMORY_EXPERIENCE_GATE",
     "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",

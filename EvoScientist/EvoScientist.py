@@ -373,10 +373,7 @@ def _inject_subagent_middleware(
     memory_controls = MemoryControls.from_config(cfg)
     memory_dir = str(_paths_mod.MEMORIES_DIR)
     memory_scheduler = default_memory_scheduler()
-    autoqueue = bool(
-        getattr(cfg, "memory_paper_autoqueue_enabled", False)
-        and getattr(cfg, "memory_paper_extraction_enabled", True)
-    )
+    autoqueue = bool(getattr(cfg, "memory_paper_extraction_enabled", True))
     for sa in subs:
         name = str(sa.get("name") or "sub-agent")
         source_type = MemorySourceType.SUBAGENT
@@ -699,7 +696,6 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     from .tools import (
         create_extract_paper_experiences_tool,
         create_list_experience_tool,
-        create_paper_experience_queue_tool,
         create_read_paper_tool,
         create_review_plan_tool,
         create_search_experience_tool,
@@ -720,21 +716,8 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
                 memory_dir=memory_dir, project_id=project_id
             ),
         ]
-        # The queue tool is the agent-driven route: `paper-navigator` calls it
-        # when the final paper set is settled. With autoqueue on, the middleware
-        # queues every `scholar_search.py` result in code, so exposing the tool
-        # would only add a second route the agent has to remember — and a second
-        # thing to tell it in the prompt. The skill already skips its manual
-        # step when the tool is absent.
-        if not getattr(cfg, "memory_paper_autoqueue_enabled", False):
-            paper_tools.insert(
-                0,
-                create_paper_experience_queue_tool(
-                    memory_dir=memory_dir,
-                    project_id=project_id,
-                    workspace_dir=workspace.root,
-                ),
-            )
+        # Papers are queued by the autoqueue middleware, not by the agent:
+        # the agent only searches and reads, and never decides what to extract.
         for tool in paper_tools:
             tool_registry[tool.name] = tool
             base_tools.append(tool)
@@ -1232,9 +1215,7 @@ def _get_default_middleware(
     mw.append(create_runtime_context_middleware())
     if memory_controls.memory_enabled:
         mw.append(memory_middleware)
-    if getattr(cfg, "memory_paper_autoqueue_enabled", False) and getattr(
-        cfg, "memory_paper_extraction_enabled", True
-    ):
+    if getattr(cfg, "memory_paper_extraction_enabled", True):
         from .middleware import create_paper_autoqueue_middleware
 
         mw.append(
