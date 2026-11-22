@@ -45,7 +45,7 @@ def test_s2_not_configured_is_a_rate_limit_for_existing_fallbacks(pn) -> None:
     assert issubclass(utils.S2NotConfigured, utils.RateLimitExhausted)
 
 
-def test_search_falls_back_to_arxiv_without_key(pn, monkeypatch, capsys) -> None:
+def test_search_goes_straight_to_deepxiv_without_key(pn, monkeypatch, capsys) -> None:
     _, scholar_search = pn
     monkeypatch.delenv("S2_API_KEY", raising=False)
     monkeypatch.setattr(
@@ -53,8 +53,14 @@ def test_search_falls_back_to_arxiv_without_key(pn, monkeypatch, capsys) -> None
         "_fallback_arxiv_search",
         lambda *a, **k: [{"title": "from-arxiv"}],
     )
+
+    def no_s2(*_a, **_k):
+        raise AssertionError("Semantic Scholar must not be called without a key")
+
+    monkeypatch.setattr(scholar_search, "request_with_retry", no_s2)
     assert scholar_search.search("duorc") == [{"title": "from-arxiv"}]
-    assert "not configured" in capsys.readouterr().err
+    # a short-circuit, not a failed request plus a fallback notice
+    assert "not configured" not in capsys.readouterr().err
 
 
 def test_non_s2_urls_are_unaffected(pn, monkeypatch) -> None:

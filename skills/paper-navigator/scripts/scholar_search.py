@@ -19,6 +19,7 @@ from utils import (
     add_output_args,
     emit_results,
     request_with_retry,
+    s2_configured,
     s2_headers,
 )
 
@@ -94,7 +95,13 @@ def search(
     year_max: int | None = None,
     open_access_only: bool = False,
 ) -> list[dict]:
-    """Search S2 for papers matching query. Falls back to arXiv on rate limit."""
+    """Search S2 for papers matching query; DeepXiv (arXiv) when there is no S2 key.
+
+    Without ``S2_API_KEY`` Semantic Scholar is not tried at all: the search goes
+    straight to DeepXiv, so there is no failed request and no fallback notice.
+    """
+    if not s2_configured():
+        return _fallback_arxiv_search(query, limit, year_min, year_max)
     try:
         params: dict = {
             "query": query,

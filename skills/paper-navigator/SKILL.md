@@ -34,7 +34,7 @@ arXiv access (`arxiv_monitor`, `scholar_search` fallback) uses the DeepXiv SDK: 
 
 | Env var | Used by | Notes |
 |---|---|---|
-| `S2_API_KEY` | All S2 scripts | Without it (the normal case here): `scholar_search` falls back to arXiv (via DeepXiv) at once; `fetch_paper` / `download_paper` take an arXiv ID, a DOI or a URL and go straight to arXiv / Unpaywall; `citation_traverse`, `recommend`, `snippet_search`, `author_search`, `trending`, `match_paper_by_title` and `literature_report` need S2: they exit at once with code 3 and one line, do not retry them |
+| `S2_API_KEY` | All S2 scripts | Without it (the normal case here): `scholar_search` searches arXiv through DeepXiv directly, without trying S2; `fetch_paper` / `download_paper` take an arXiv ID, a DOI or a URL and go straight to arXiv / Unpaywall; `citation_traverse`, `recommend`, `snippet_search`, `author_search`, `trending`, `match_paper_by_title` and `literature_report` need S2: they exit at once with code 3 and one line, do not retry them |
 | `DEEPXIV_API_TOKEN` | `arxiv_monitor`, `scholar_search` fallback | Get a free token: `deepxiv token` (writes `~/.env`). Also read from `DEEPXIV_TOKEN` and `./.env`/`~/.env`. ~10,000 req/day |
 | `MINERU_API_KEY` | `fetch_paper` full text | Optional MinerU precise-API token; when set, full text is MinerU Markdown, else the arXiv PDF is parsed locally and Jina is the fallback |
 | `JINA_API_KEY` | `fetch_paper` fallback | Used only when MinerU and the local PDF parse both fail |
@@ -170,7 +170,7 @@ python /skills/paper-navigator/scripts/scholar_search.py --query "<Q-narrow>" --
 
 **Recency trigger (query layer).** When the user query contains a recency signal (最新 / 近年 / 近期 / 近两年 / 前沿 / SOTA / latest / recent / state-of-the-art), set `--year-min` to **last 2 years** from R2 onward — Jan 1 of the year before the current system year (e.g. system date 2026-08 → `--year-min 2025`). Do not extend to 3–4 years.
 
-**Without `S2_API_KEY`:** swap `scholar_search` for `arxiv_monitor --keywords "<variant>" --match-mode flexible --days 3650`.
+**Without `S2_API_KEY`:** keep using `scholar_search` with the same arguments: it searches arXiv through DeepXiv directly. Run more query variants instead of the citation expansion below, which needs S2.
 
 **Citation expansion** (ITERATIVE, or LIST after ≥3 All-core/Partial seeds):
 ```bash
@@ -317,7 +317,7 @@ If any box is unchecked, return to Step 6 — do not output.
 
 | Need | Script | Notes |
 |---|---|---|
-| Keyword search | `scholar_search.py` | S2 → arXiv fallback on missing key / 429 |
+| Keyword search | `scholar_search.py` | S2 with a key (arXiv/DeepXiv on 429); arXiv/DeepXiv directly without one |
 | Title → record | `match_paper_by_title.py` | S2 exact-match; `--fallback-search` for typos |
 | Citation graph | `citation_traverse.py` | `--direction forward/backward/co-citation`; `--min-citations`; `--year-min/max`; `--smart-sort`; `--enrich` |
 | Similar papers | `recommend.py` | seed-based; `--per-seed` for diverse seeds |
