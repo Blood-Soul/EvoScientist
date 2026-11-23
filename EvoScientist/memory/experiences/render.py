@@ -165,7 +165,7 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
     origin = _s(item.get("origin"))
     papers = [p for p in _items(item.get("source_papers")) if _s(p)]
     label = (
-        f"L2 finding · induced across {len(papers)} papers from their experimental records"
+        "L2 finding · induced from a cluster of experimental records"
         if origin == "cross_paper"
         else "L2 finding · induced from this paper's own experimental records"
         if origin == "induced"
@@ -174,8 +174,8 @@ def _render_current_l2(record_id: str, item: Mapping[str, Any], paper: Mapping[s
     lines = [f"{record_id} · {label}"]
     cited_l1 = [c for c in _items(item.get("source_l1_ids")) if _s(c)]
     if origin == "cross_paper":
-        n_papers = len([p for p in _items(item.get("source_papers")) if _s(p)])
-        strength = f"Evidence: {len(cited_l1)} experimental records from {n_papers} papers"
+        where = "one paper" if len(papers) == 1 else f"{len(papers)} papers"
+        strength = f"Evidence: {len(cited_l1)} experimental records from {where}"
     elif origin == "induced":
         strength = f"Evidence: {len(cited_l1)} experimental records of one paper"
     else:
@@ -310,7 +310,7 @@ def render_hit(index: int, document: Mapping[str, Any], *, score: Any = None, ma
     head = f"{index}. {record_id}"
     if is_l2_current(item):
         origin = _s(item.get("origin"))
-        label = "L2 cross-paper" if origin == "cross_paper" else "L2 induced" if origin == "induced" else "L2"
+        label = "L2 from L1 cluster" if origin == "cross_paper" else "L2 induced" if origin == "induced" else "L2"
         lines = [f"{head} [{label}] {_s(item.get('task'))}"]
         if _s(item.get("problem")):
             lines.append(f"   Problem: {_clip(item.get('problem'), 180)}")

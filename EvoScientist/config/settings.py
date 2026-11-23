@@ -457,8 +457,9 @@ class EvoScientistConfig:
     # foreground `extract_paper_experiences` tool is registered. Off removes both, for
     # an arm that must not build any experience.
     memory_paper_extraction_enabled: bool = True
-    # Cross-paper L1 -> L2 induction (memory/experiences/cross_paper.py); off unless an arm turns it on.
-    memory_cross_paper_enabled: bool = False
+    # L1 -> L2 induction over clusters of L1 records (memory/experiences/cross_paper.py). The only source of L2:
+    # papers yield L1 alone, so turning this off leaves the library without L2 records.
+    memory_cross_paper_enabled: bool = True
     # Quality gate on extracted experience records (see memory/experiences/gate.py). `off` stores everything;
     # `audit` grades every record and writes gate.json but still stores everything; `enforce` also drops the records
     # the rubric does not admit (ACCEPT and PROVISIONAL are admitted). Costs about one judge call per dimension per

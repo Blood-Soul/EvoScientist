@@ -87,6 +87,10 @@ async def test_a_paper_yields_l1_only():
     assert model.seen == ["# Experience Extraction (v2: one level, comparison-centred)"]
 
 
+def test_the_cluster_prompt_grounds_its_limits_and_needs_three_records():
+    text = (Path(__file__).resolve().parents[1] / "prompt" / "l2_from_l1_cluster.md").read_text(encoding="utf-8")
+    assert "at least three records" in text and "a price is not a limit" in text
+
 
 def test_an_l2_record_renders_its_options_mechanism_and_conditions():
     text = render_record({"id": "E-1", "experience_level": "l2", "experience": l2_record()})
@@ -106,6 +110,10 @@ def test_the_render_says_how_much_stands_behind_a_finding():
     old = l2_record()
     del old["evidence"]
     assert "no sentence of it was recorded" in render_record({"id": "E-2", "experience_level": "l2", "experience": old})
+    clustered = l2_record(origin="cross_paper", locator="", evidence=[], source_l1_ids=["E-a", "E-b", "E-c"],
+                          source_papers=["p1"])
+    text = render_record({"id": "E-3", "experience_level": "l2", "experience": clustered})
+    assert "induced from a cluster of experimental records" in text and "3 experimental records from one paper" in text
 
 
 def test_plan_review_retrieval_keeps_a_share_of_l1(tmp_path: Path):
