@@ -26,6 +26,16 @@ sub-agent would return through `task` (private channels) are dropped: its files 
 the coordinator uses.
 
 Main agent only, and only when `research_tree_background_tasks` is on.
+
+In a skeleton run (a coordination hub is given, see :mod:`EvoScientist.research_tree.coord`) three things change:
+
+- A `node-agent` job names its node on the first line of its description (`n3`, or `node: n3`). The job runs with
+  that node in its context, so the node agent's GPU lease, questions and shell environment are the node's. One
+  node has one agent at a time.
+- What finished is a note at the end of the context (:mod:`.coord_notes`), not text added to the system prompt,
+  so the prompt cache stays valid.
+- `task_collect` also returns when the hub has a note for the main agent (a question, a GPU request, a free GPU),
+  so a node that waits for an answer is never stuck behind a long wait.
 """
 
 from __future__ import annotations
@@ -34,6 +44,7 @@ import asyncio
 import contextvars
 import dataclasses
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -47,10 +58,20 @@ from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from ..research_tree.coord import CURRENT_NODE, MAIN
+
 START = "task_start"
 COLLECT = "task_collect"
 POLL_SECONDS = 0.2  # how soon a finished job is noticed while waiting
 MAX_WAIT_MINUTES = 15.0  # one wait never blocks longer; the agent (or the end-of-run guard) waits again
+NODE_AGENT = "node-agent"
+_NODE_LINE = re.compile(r"^\s*(?:node\s*[:=]?\s*)?(n\d+)\b", re.I)
+
+
+def node_of(description: str) -> str:
+    """The node a node-agent description names on its first line, or ''."""
+    m = _NODE_LINE.match((description or "").strip().splitlines()[0] if (description or "").strip() else "")
+    return m.group(1).lower() if m else ""
 
 
 class StartArgs(BaseModel):
@@ -89,10 +110,11 @@ class BackgroundTaskMiddleware(AgentMiddleware):
 
     name = "background_tasks"
 
-    def __init__(self, root: str | Path, *, now: Callable[[], float] = time.time) -> None:
+    def __init__(self, root: str | Path, *, now: Callable[[], float] = time.time, hub=None) -> None:
         super().__init__()
         self.dir = Path(root) / ".research" / "background"
         self.now = now
+        self.hub = hub
         self.jobs: dict[str, dict[str, Any]] = {}
         self._handles: dict[str, Any] = {}  # job id -> asyncio.Task or Thread (kept so a task is not collected)
         self._task_tool: Any = None
@@ -175,6 +197,12 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         with self._lock:
             rec.update(status=status, text=text, finished=self.now(), reported=False)
         self._write(rec)
+        if self.hub is not None:
+            if rec.get("node"):
+                self.hub.job_ended(rec["node"], rec["id"])
+            self.hub._emit(MAIN, f"Background job {rec['id']} ({rec['subagent']}"
+                           + (f", {rec['node']}" if rec.get("node") else "")
+                           + f") {status}. Read its reply with {COLLECT}.")
         self._announce(rec, writer)
 
     @staticmethod
@@ -228,7 +256,24 @@ class BackgroundTaskMiddleware(AgentMiddleware):
             return "Error: subagent_type and description are both required."
         if self._task_tool is None:
             return "Error: the `task` tool is not available to this agent, so nothing can run in the background."
+        if self.hub is not None and subagent_type == NODE_AGENT:
+            nid = node_of(description)
+            if not nid:
+                return ("Error: name the node on the first line of the description (for example `n3`), so the "
+                        "node agent's GPU lease and questions are the node's.")
+            if not self.hub.is_open(nid):
+                return f"Error: {nid} is not an open node; open it with tree_new first."
+            if (job := self.hub.job_of(nid)) and self.jobs.get(job, {}).get("status") == "running":
+                return f"Error: {job} is already running node-agent on {nid}; one node has one agent at a time."
         return None
+
+    def _bind(self, rec: dict[str, Any], subagent_type: str, description: str) -> None:
+        """Tie a node-agent job to its node, and run it with that node in its context."""
+        if self.hub is None or subagent_type != NODE_AGENT:
+            return
+        rec["node"] = node_of(description)
+        self.hub.attach_job(rec["node"], rec["id"])
+        self._write(rec)
 
     def _started_text(self, rec: dict[str, Any]) -> str:
         return (f"Started {rec['id']} ({rec['subagent']}). It runs in the background; {len(self._running())} job(s) "
@@ -245,11 +290,14 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         if (err := self._check_start(subagent_type, description)) is not None:
             return err
         rec = self._new_job(subagent_type, description, runtime.tool_call_id)
+        self._bind(rec, subagent_type, description)
         run = self._task_tool.coroutine
         rt = self._job_runtime(runtime, rec["id"])
         writer = getattr(runtime, "stream_writer", None)
 
         async def job() -> None:
+            if rec.get("node"):
+                CURRENT_NODE.set(rec["node"])  # this task's own context: the node agent acts for this node
             try:
                 self._finish(rec, _text_of(await run(description=description, subagent_type=subagent_type, runtime=rt)),
                              "done", writer)
@@ -259,18 +307,21 @@ class BackgroundTaskMiddleware(AgentMiddleware):
             except Exception as e:  # a failed sub-agent is a result the coordinator has to see
                 self._finish(rec, f"The sub-agent failed: {type(e).__name__}: {e}", "failed", writer)
 
-        self._handles[rec["id"]] = asyncio.get_running_loop().create_task(job())
+        self._handles[rec["id"]] = asyncio.get_running_loop().create_task(job(), context=contextvars.copy_context())
         return self._started_text(rec)
 
     def _start_sync(self, subagent_type: str, description: str, runtime: ToolRuntime) -> str:
         if (err := self._check_start(subagent_type, description)) is not None:
             return err
         rec = self._new_job(subagent_type, description, runtime.tool_call_id)
+        self._bind(rec, subagent_type, description)
         run = self._task_tool.func
         rt = self._job_runtime(runtime, rec["id"])
         writer = getattr(runtime, "stream_writer", None)
 
         def job() -> None:
+            if rec.get("node"):
+                CURRENT_NODE.set(rec["node"])
             try:
                 self._finish(rec, _text_of(run(description=description, subagent_type=subagent_type, runtime=rt)), "done", writer)
             except Exception as e:
@@ -281,11 +332,15 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         t.start()
         return self._started_text(rec)
 
+    def _hub_calls(self) -> bool:
+        """The hub has something for the main agent: a question, a GPU request, a free GPU."""
+        return self.hub is not None and self.hub.peek(MAIN)
+
     async def _wait_async(self, seconds: float) -> list[dict[str, Any]]:
         end = time.monotonic() + seconds
         while True:
             done = self._take_finished()
-            if done or time.monotonic() >= end or not self._running():
+            if done or self._hub_calls() or time.monotonic() >= end or not self._running():
                 return done
             await asyncio.sleep(POLL_SECONDS)
 
@@ -293,15 +348,23 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         end = time.monotonic() + seconds
         while True:
             done = self._take_finished()
-            if done or time.monotonic() >= end or not self._running():
+            if done or self._hub_calls() or time.monotonic() >= end or not self._running():
                 return done
             time.sleep(POLL_SECONDS)
 
+    def _collected(self, done: list[dict[str, Any]]) -> str:
+        text = self._report(done)
+        if self.hub is not None:
+            notes = self.hub.take_notes(MAIN)
+            if notes:
+                text += "\n\nNotes from the run:\n" + "\n".join(f"- {n}" for n in notes)
+        return text
+
     async def _collect_async(self, wait_minutes: float = 0.0, runtime: ToolRuntime | None = None) -> str:
-        return self._report(await self._wait_async(_wait_of(wait_minutes)))
+        return self._collected(await self._wait_async(_wait_of(wait_minutes)))
 
     def _collect_sync(self, wait_minutes: float = 0.0, runtime: ToolRuntime | None = None) -> str:
-        return self._report(self._wait_sync(_wait_of(wait_minutes)))
+        return self._collected(self._wait_sync(_wait_of(wait_minutes)))
 
     # ------------------------------------------------------------------ model call: find `task`, say what finished
 
@@ -310,7 +373,7 @@ class BackgroundTaskMiddleware(AgentMiddleware):
             if getattr(t, "name", None) == "task":
                 self._task_tool = t
         done, running = self._unreported(), self._running()
-        if not done:
+        if not done or self.hub is not None:  # with a hub, what finished arrives as a note (coord_notes)
             return request
         from deepagents.middleware._utils import append_to_system_message
 
@@ -340,7 +403,7 @@ class BackgroundTaskMiddleware(AgentMiddleware):
     def _back_to_model(self, done: list[dict[str, Any]]) -> dict[str, Any]:
         text = ("You were about to finish while background work was still open. "
                 + ("These jobs have finished:\n\n" if done else "No job finished in the last wait.\n\n")
-                + self._report(done)
+                + self._collected(done)
                 + "\n\nUse what came back (it may change the record), and finish only when nothing is left running.")
         return {"messages": [HumanMessage(content=text)], "jump_to": "model"}
 

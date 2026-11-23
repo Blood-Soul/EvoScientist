@@ -1801,6 +1801,14 @@ def prepare_sandbox_command(
     """
     original_command = command
 
+    # A skeleton run leases the GPU: a command that sets CUDA_VISIBLE_DEVICES itself is refused unless the
+    # agent holds it (research_tree.coord). Outside such a run this is a no-op.
+    from .research_tree.coord import refuse_command
+
+    gpu_error = refuse_command(command)
+    if gpu_error:
+        return command, gpu_error
+
     ssh_error = _validate_ssh_remote_command_format(command)
     if ssh_error:
         return command, ssh_error
@@ -2250,7 +2258,10 @@ class CustomSandboxBackend(LocalShellBackend):
         output_abandoned = False
         launch: agent_shell.ShellLaunch | None = None
         try:
-            launch = agent_shell.prepare(command, self._env)
+            from .research_tree.coord import shell_env
+
+            # Without the GPU lease the command sees no GPU (a no-op outside a skeleton run).
+            launch = agent_shell.prepare(command, shell_env(self._env))
             process_options: dict[str, object] = {}
             if os.name == "nt":
                 process_options["creationflags"] = (

@@ -272,7 +272,9 @@ def launch(
     launch: agent_shell.ShellLaunch | None = None
     popen: subprocess.Popen | None = None
     try:
-        launch = agent_shell.prepare(command, env)
+        from .research_tree.coord import shell_env
+
+        launch = agent_shell.prepare(command, shell_env(env))
         platform_options: dict[str, Any] = {}
         if launch.creationflags:
             platform_options["creationflags"] = launch.creationflags
