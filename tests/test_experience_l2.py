@@ -1,4 +1,5 @@
-"""The second level: mechanism-level findings read from a paper, and induction over the paper's own L1 records."""
+"""The second level after the switch to cluster induction: papers yield L1 only; L2 records (induced, or read from
+a paper by an older extractor) are still stored, retrieved and rendered."""
 
 from __future__ import annotations
 
@@ -8,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from EvoScientist.memory.experiences.extraction import (
-    ExperienceOutputError,
     load_experience_prompts,
     parse_experience_v2,
     run_experience_extraction,
@@ -21,8 +21,6 @@ from EvoScientist.memory.experiences.store import (
 
 PAPER = "The verifier without head features gained 1.2 and 0.7 F1; with head features and initialization it gained 2.9 and 3.1. " * 5
 QUOTE_L2 = "The verifier without head features gained 1.2 and 0.7 F1"
-MECH_QUOTE = "The margin is not comparable across questions because each question has its own scale."
-PAPER = PAPER + MECH_QUOTE + " "
 
 
 def l1_record(**over):
@@ -40,6 +38,7 @@ def l1_record(**over):
 
 
 def l2_record(**over):
+    """An L2 record as a library stores it (the shape both the old paper reader and cluster induction produce)."""
     base = {
         "domain": "qa", "task": "answer verification", "problem": "When is a second verifier better than a confidence score?",
         "method": ["answer verifier", "reflection net"],
@@ -52,7 +51,7 @@ def l2_record(**over):
         "requires": [{"text": "the reader exposes top-layer logits", "basis": "stated"}],
         "limits_stated": [{"text": "a text-only verifier gains little", "quote": QUOTE_L2}],
         "origin": "paper", "locator": "Section 4.2", "source_l1_ids": [],
-        "evidence": [{"supports": "claim", "quote": QUOTE_L2}, {"supports": "mechanism", "quote": MECH_QUOTE}],
+        "evidence": [{"supports": "claim", "quote": QUOTE_L2}], "layer": "l2",
     }
     base.update(over)
     return base
@@ -62,95 +61,31 @@ def reply(*records):
     return "```json\n" + json.dumps({"experiences": list(records)}) + "\n```"
 
 
-def test_a_paper_finding_is_parsed_and_marked_as_l2():
-    out = parse_experience_v2(reply(l2_record()), paper_id="p1", paper_text=PAPER, level="l2")
-    record = out["experiences"][0]
-    assert record["layer"] == "l2" and record["origin"] == "paper"
-    assert len(record["compared_options"]) == 2
+def l2_payload(*records):
+    return {"paper_id": "p1", "domain_arxiv": None, "experiences": list(records)}
 
 
-def test_a_paper_finding_without_a_locator_is_dropped():
-    with pytest.raises(ExperienceOutputError, match="locator"):
-        parse_experience_v2(reply(l2_record(locator="")), paper_id="p1", level="l2")
+class PromptModel:
+    """Answers every call with one reply and records which prompts it saw."""
 
-
-def test_an_induced_finding_can_only_cite_the_records_it_was_given():
-    induced = l2_record(origin="induced", locator="", source_l1_ids=["l1-2"])
-    out = parse_experience_v2(reply(induced), paper_id="p1", level="l2", source_ids={"l1-1", "l1-2"})
-    assert out["experiences"][0]["source_l1_ids"] == ["l1-2"]
-    with pytest.raises(ExperienceOutputError, match="not given"):
-        parse_experience_v2(reply(l2_record(origin="induced", locator="", source_l1_ids=["l1-9"])),
-                            paper_id="p1", level="l2", source_ids={"l1-1"})
-
-
-def test_an_induced_finding_must_cite_something():
-    with pytest.raises(ExperienceOutputError, match="source_l1_ids"):
-        parse_experience_v2(reply(l2_record(origin="induced", locator="", source_l1_ids=[])), paper_id="p1", level="l2")
-
-
-def test_an_induced_record_loses_a_locator_it_should_not_have():
-    out = parse_experience_v2(
-        reply(l2_record(origin="induced", source_l1_ids=["l1-1"])), paper_id="p1", level="l2", source_ids={"l1-1"}
-    )
-    assert out["experiences"][0]["locator"] == ""
-
-
-def test_a_finding_whose_numbers_the_paper_never_writes_is_dropped():
-    invented = l2_record(compared_options=[{"option": "x", "result": "91.11 vs 92.22 vs 93.33 vs 94.44"}])
-    out = parse_experience_v2(reply(l2_record(), invented), paper_id="p1", paper_text=PAPER, level="l2")
-    assert len(out["experiences"]) == 1
-
-
-
-
-
-
-class LevelModel:
-    """Answer each prompt with the reply meant for it."""
-
-    def __init__(self, *, l1=None, l2=None):
-        self.replies = {"Experience Extraction": l1, "L2 Extraction": l2}
-        self.seen: list[str] = []
+    def __init__(self, text):
+        self.text, self.seen = text, []
 
     async def ainvoke(self, messages):
         from langchain_core.messages import AIMessage
 
-        prompt = messages[0].content
-        key = next(k for k in self.replies if k in prompt)
-        self.seen.append(key)
-        return AIMessage(content=self.replies[key])
+        self.seen.append(messages[0].content.splitlines()[0])
+        return AIMessage(content=self.text)
 
 
 @pytest.mark.asyncio
-async def test_the_pipeline_reads_l1_and_l2():
-    model = LevelModel(l1=reply(l1_record()), l2=reply(l2_record()))
+async def test_a_paper_yields_l1_only():
+    assert set(load_experience_prompts()) == {"l1"}
+    model = PromptModel(reply(l1_record()))
     out = await run_experience_extraction(paper_id="p1", paper_text=PAPER, prompts=load_experience_prompts(), model=model)
-    assert set(out) == {"l1", "l2"}
-    assert [r["origin"] for r in out["l2"]["experiences"]] == ["paper"]
-    assert sorted(model.seen) == ["Experience Extraction", "L2 Extraction"]
+    assert set(out) == {"l1"} and len(out["l1"]["experiences"]) == 1
+    assert model.seen == ["# Experience Extraction (v2: one level, comparison-centred)"]
 
-
-@pytest.mark.asyncio
-async def test_a_failed_l2_does_not_fail_the_paper():
-    model = LevelModel(l1=reply(l1_record()), l2="nope")
-    out = await run_experience_extraction(paper_id="p1", paper_text=PAPER, prompts=load_experience_prompts(), model=model)
-    assert len(out["l1"]["experiences"]) == 1 and out["l2"]["experiences"] == []
-
-
-
-
-def test_storing_resolves_the_citation_to_the_stored_l1_id(tmp_path: Path):
-    l1 = parse_experience_v2(reply(l1_record(), l1_record(problem="Second.", action="Second action.")), paper_id="p1")
-    induced = l2_record(origin="induced", locator="", source_l1_ids=["l1-2"])
-    l2 = parse_experience_v2(reply(induced), paper_id="p1", level="l2", source_ids={"l1-1", "l1-2"})
-    store_paper_experiences(
-        memory_dir=tmp_path, project_id="P-x", paper_id="p1", url="https://arxiv.org/abs/p1", title="T",
-        paper_text=PAPER, prompts={"l1": "a", "l2": "b"}, payloads={"l1": l1, "l2": l2},
-    )
-    docs = list_experience_documents(memory_dir=tmp_path, project_id="P-x")
-    l1_ids = [d.observation_id for d in docs if d.experience_level == "l1"]
-    stored = json.loads((tmp_path / "experiences" / "projects" / "P-x" / docs[0].paper_key / "l2.json").read_text())
-    assert stored["experiences"][0]["source_l1_ids"] == [l1_ids[1]]
 
 
 def test_an_l2_record_renders_its_options_mechanism_and_conditions():
@@ -165,37 +100,12 @@ def test_an_l2_record_renders_its_options_mechanism_and_conditions():
     assert "[L2]" in hit and "Claim:" in hit
 
 
-def test_a_paper_l2_limit_needs_a_quote_found_in_the_paper():
-    rec = l2_record(limits_stated=[
-        {"text": "kept", "quote": QUOTE_L2},
-        {"text": "no quote"},
-        {"text": "invented", "quote": "The authors never wrote this sentence anywhere."},
-    ])
-    out = parse_experience_v2(reply(rec), paper_id="p1", paper_text=PAPER, level="l2")
-    assert [x["text"] for x in out["experiences"][0]["limits_stated"]] == ["kept"]
-
-
-def test_an_induced_limit_must_summarize_cited_l1_records_that_state_limits():
-    rec = l2_record(origin="induced", locator="", source_l1_ids=["l1-1", "l1-2"], limits_stated=[
-        {"text": "both stop helping once answers are long", "from": ["l1-1", "l1-2"]},
-        {"text": "only from a record with no limits", "from": ["l1-2"]},
-        {"text": "from an uncited record", "from": ["l1-3"]},
-        {"text": "no source at all"},
-    ])
-    out = parse_experience_v2(reply(rec), paper_id="p1", level="l2",
-                              source_ids={"l1-1", "l1-2", "l1-3"}, limited_ids={"l1-1", "l1-2", "l1-3"})
-    assert out["experiences"][0]["limits_stated"] == [
-        {"text": "both stop helping once answers are long", "from": ["l1-1", "l1-2"]}]
-    # one limited source is not a summary: it stays on that L1
-    out = parse_experience_v2(reply(rec), paper_id="p1", level="l2",
-                              source_ids={"l1-1", "l1-2", "l1-3"}, limited_ids={"l1-1", "l1-3"})
-    assert out["experiences"][0]["limits_stated"] == []
-
-
-def test_the_l2_prompt_grounds_its_limits():
-    root = Path(__file__).resolve().parents[1] / "prompt"
-    paper = (root / "l2_extract_v2.md").read_text(encoding="utf-8")
-    assert '"quote": "verbatim sentence from the paper"' in paper and "is a **cost**, not a limit" in paper
+def test_the_render_says_how_much_stands_behind_a_finding():
+    paper = render_record({"id": "E-1", "experience_level": "l2", "experience": l2_record()})
+    assert "Evidence: one paper's own sentences" in paper and QUOTE_L2 in paper
+    old = l2_record()
+    del old["evidence"]
+    assert "no sentence of it was recorded" in render_record({"id": "E-2", "experience_level": "l2", "experience": old})
 
 
 def test_plan_review_retrieval_keeps_a_share_of_l1(tmp_path: Path):
@@ -207,61 +117,26 @@ def test_plan_review_retrieval_keeps_a_share_of_l1(tmp_path: Path):
     store_paper_experiences(
         memory_dir=tmp_path, project_id="P-x", paper_id="p1", url="https://arxiv.org/abs/p1", title="T",
         paper_text=PAPER, prompts={"l1": "a", "l2": "b"},
-        payloads={"l1": parse_experience_v2(reply(*l1s), paper_id="p1"),
-                  "l2": parse_experience_v2(reply(*l2s), paper_id="p1", level="l2")},
+        payloads={"l1": parse_experience_v2(reply(*l1s), paper_id="p1"), "l2": l2_payload(*l2s)},
     )
     got = gather_candidates(memory_dir=tmp_path, project_id="P-x", query="answer verifier", limit=6)
     levels = [c["level"] for c in got]
     assert len(got) == 6 and levels.count("l1") == 2 and levels.count("l2") == 4
 
 
-def test_storing_resolves_an_induced_limit_source_to_the_stored_l1_id(tmp_path: Path):
+def test_storing_resolves_positional_citations_to_the_stored_l1_ids(tmp_path: Path):
+    """Libraries written by the in-paper induction cite `l1-N`; storing still resolves them to the stored ids."""
     lim = [{"text": "fails on long answers", "quote": "q"}]
     l1 = parse_experience_v2(reply(l1_record(limits_stated=lim), l1_record(limits_stated=lim, problem="Second.")),
                              paper_id="p1")
-    induced = l2_record(origin="induced", locator="", source_l1_ids=["l1-1", "l1-2"],
+    induced = l2_record(origin="induced", locator="", source_l1_ids=["l1-1", "l1-2"], evidence=[],
                         limits_stated=[{"text": "stops helping on long answers", "from": ["l1-1", "l1-2"]}])
-    l2 = parse_experience_v2(reply(induced), paper_id="p1", level="l2",
-                             source_ids={"l1-1", "l1-2"}, limited_ids={"l1-1", "l1-2"})
     store_paper_experiences(
         memory_dir=tmp_path, project_id="P-x", paper_id="p1", url="https://arxiv.org/abs/p1", title="T",
-        paper_text=PAPER, prompts={"l1": "a", "l2": "b"}, payloads={"l1": l1, "l2": l2},
+        paper_text=PAPER, prompts={"l1": "a", "l2": "b"}, payloads={"l1": l1, "l2": l2_payload(induced)},
     )
     docs = list_experience_documents(memory_dir=tmp_path, project_id="P-x")
     l1_ids = [d.observation_id for d in docs if d.experience_level == "l1"]
     stored = json.loads((tmp_path / "experiences" / "projects" / "P-x" / docs[0].paper_key / "l2.json").read_text())
+    assert stored["experiences"][0]["source_l1_ids"] == l1_ids[:2]
     assert stored["experiences"][0]["limits_stated"][0]["from"] == l1_ids[:2]
-
-
-
-def test_a_paper_l2_needs_a_claim_quote_found_in_the_paper():
-    ok = parse_experience_v2(reply(l2_record()), paper_id="p1", paper_text=PAPER, level="l2")["experiences"][0]
-    assert {e["supports"] for e in ok["evidence"]} == {"claim", "mechanism"} and ok["mechanism"]
-    invented = l2_record(evidence=[{"supports": "claim", "quote": "Verifiers always win on every benchmark we tried."}])
-    with pytest.raises(ExperienceOutputError, match="no claim quote found verbatim"):
-        parse_experience_v2(reply(invented), paper_id="p1", paper_text=PAPER, level="l2")
-
-
-def test_a_mechanism_the_paper_does_not_give_is_emptied():
-    rec = l2_record(evidence=[{"supports": "claim", "quote": QUOTE_L2},
-                              {"supports": "mechanism", "quote": "Because annotators were penalised for other spans."}])
-    out = parse_experience_v2(reply(rec), paper_id="p1", paper_text=PAPER, level="l2")["experiences"][0]
-    assert out["mechanism"] == "" and "no supporting sentence" in out["mechanism_dropped"]
-    assert [e["supports"] for e in out["evidence"]] == ["claim"]
-
-
-def test_an_induced_l2_needs_no_paper_quote():
-    rec = l2_record(origin="induced", locator="", source_l1_ids=["l1-1", "l1-2"], evidence=[])
-    out = parse_experience_v2(reply(rec), paper_id="p1", level="l2", source_ids={"l1-1", "l1-2"}, limited_ids=set())
-    assert out["experiences"] and out["experiences"][0]["evidence"] == []
-
-
-def test_the_render_says_how_much_stands_behind_a_finding():
-    paper = render_record({"id": "E-1", "experience_level": "l2", "experience": l2_record()})
-    assert "Evidence: one paper's own sentences" in paper and "Where the paper says it (verbatim):" in paper
-    assert QUOTE_L2 in paper
-    old = l2_record(); del old["evidence"]
-    assert "no sentence of it was recorded" in render_record({"id": "E-2", "experience_level": "l2", "experience": old})
-    induced = render_record({"id": "E-3", "experience_level": "l2",
-                             "experience": l2_record(origin="induced", source_l1_ids=["E-a", "E-b"], evidence=[])})
-    assert "Evidence: 2 experimental records of one paper" in induced

@@ -24,13 +24,14 @@ Return only a JSON object, no prose and no Markdown fences:
   "limits_stated": [{"text": "a limit or failure the authors themselves report", "quote": "verbatim sentence from the paper"}],
   "action": "what to do, as concrete steps in order, at most 60 words",
   "effect": {"compared": "what was compared with what", "benefit": "what improved, including analysis findings", "cost": "what got worse or what it costs"},
+  "mechanism": {"text": "why it works, in the paper's terms; empty string when the paper gives no reason", "basis": "stated"},
   "comparison": "controlled",
   "locator": "Table 3"
 }]}
 ```
 
 All of these keys must be present in every record. `requires`, `environment`, `params` and `limits_stated` may be empty
-arrays; `effect.cost` may be `null`.
+arrays; `effect.cost` may be `null`; `mechanism.text` may be `""`.
 
 ## How to fill each field
 
@@ -70,9 +71,11 @@ one `basis`:
 
 **`limits_stated`** -- only restrictions on where the practice works, or conditions in which the authors report it failing
 ("does not help on ...", "hurts when ..."). The price paid in the tested comparison (more parameters, a worse score at
-an extreme setting of the swept variable) is a `cost`, not a limit. Quote the sentence verbatim and exactly as the paper
-writes it; do not rephrase a quote. If the paper states no such limit, return an empty array. Do not invent limits and
-do not turn missing evidence into a limit.
+an extreme setting of the swept variable) is a `cost`, not a limit. Copy the sentence as the paper writes it; light
+editing is allowed (drop an unrelated clause, repair a PDF artefact, resolve a pronoun), but the wording, the
+direction and every number must stay the paper's. A quote rewritten in your own words is not evidence and the checker
+drops it. If the paper states no such limit, return an empty array. Do not invent limits and do not turn missing
+evidence into a limit.
 
 **`action`** -- an instruction for someone who wants to do this: the operation and its order, including any
 measurement that comes first ("measure the share of empty windows; then keep only a fraction of them"). Use the
@@ -85,6 +88,13 @@ paper's terms and the real values.
   paper makes: which capability, question type, subset or condition got better, and any mechanism evidence. A finding
   without a number is fine. Write only what the paper reports.
 - `cost`: what got worse, a side effect, a trade-off, or a price (time, memory, data). `null` if the paper reports none.
+
+**`mechanism`** -- the causal account of why the practice works: the step, signal or information flow that
+`effect.benefit` is attributed to. State it in the paper's terms, not a textbook's. `basis` says where the account
+comes from: `stated` when the paper argues it in words ("because the reader is trained for answer type, ...");
+`inferred` when it follows from how the practice is built or from the shape of the results but the paper never gives
+the reason. Never present an inferred account as the paper's own, and leave `text` empty rather than invent a
+plausible-sounding reason -- an empty mechanism is honest and still useful.
 
 **`comparison`** -- how the effect was obtained, exactly one of:
 - `controlled`: the same data, model and training, with one factor changed and the rest held fixed (an ablation, a

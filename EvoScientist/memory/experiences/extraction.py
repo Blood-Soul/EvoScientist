@@ -7,7 +7,7 @@ import json
 import os
 import re
 import sys
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +89,14 @@ _COMMON_LLM_KEYS = {
 #   Separates "observed once on a toy dataset" from "ablated across five
 #   benchmarks" -- the peer-reviewed experimental coverage that substitutes for
 #   the rerun this domain cannot perform.
-_LATE_ADDED_LLM_KEYS = {"trigger_context", "evidence_scope"}
+# `mechanism` (L1): why the practice works, as `{text, basis}`. Added after the
+#   comparison-only schema: an L1 that says "A beat B here" cannot answer why,
+#   which is what a later agent has to weigh when it considers transferring the
+#   practice. Optional on read so libraries extracted before the field stay
+#   valid; the current prompt asks for it in every record.
+_LATE_ADDED_LLM_KEYS = {"trigger_context", "evidence_scope", "mechanism"}
+
+_L1_MECHANISM_BASES = {"stated", "inferred"}
 
 _VERIFICATION_STRENGTHS = {
     "single-setting",
@@ -272,39 +279,23 @@ def _prompt_dir_candidates() -> list[Path]:
 
 
 V2_PROMPT_FILENAME = "experience_extract_v2.md"
-V2_L2_PROMPT_FILENAME = "l2_extract_v2.md"
-
-# The loaded prompts are a plain `Mapping[str, str]` because the store hashes one entry per level.
-# This extra entry tags the schema so `run_experience_extraction` can tell the v2 trio from the legacy
-# L1/L2 pair without inspecting prompt text; it is never hashed because it is not a level.
-V2_SCHEMA_KEY = "schema"
-V2_SCHEMA_MARKER = "v2"
 
 _V2_MAX_PAPER_CHARS = 200_000
 
 
 def load_experience_prompts() -> dict[str, str]:
-    """Load the v2 prompts: L1 (facts from tested practices) and L2 (mechanism-level findings).
+    """Load the v2 extraction prompt. A paper yields L1 records only.
 
-    L1 reads a paper's controlled comparisons; L2 reads the whole paper for the interpretive claims around them.
-    Cross-paper L2 is a separate pass over all stored L1 records (`cross_paper.py`).
-
-    A prompts mapping without an ``l2`` entry still selects the single-level path in
-    `run_experience_extraction`; the older v1 L1/L2 pair is `load_legacy_experience_prompts`.
+    L1 records the practices a paper tested. L2 is never read from a paper: it is induced from clusters of stored L1
+    records (`cross_paper.py`), so every L2 finding names the L1 records it rests on. The older v1 L1/L2 pair is
+    `load_legacy_experience_prompts`.
     """
     for directory in _prompt_dir_candidates():
-        l1, l2 = directory / V2_PROMPT_FILENAME, directory / V2_L2_PROMPT_FILENAME
-        if l1.is_file() and l2.is_file():
-            loaded = {
-                V2_SCHEMA_KEY: V2_SCHEMA_MARKER,
-                "l1": l1.read_text(encoding="utf-8"),
-                "l2": l2.read_text(encoding="utf-8"),
-            }
-            return loaded
+        l1 = directory / V2_PROMPT_FILENAME
+        if l1.is_file():
+            return {"l1": l1.read_text(encoding="utf-8")}
     searched = ", ".join(str(path) for path in _prompt_dir_candidates())
-    raise FileNotFoundError(
-        f"Experience prompts {V2_PROMPT_FILENAME} + {V2_L2_PROMPT_FILENAME} not found; searched: {searched}"
-    )
+    raise FileNotFoundError(f"Experience prompt {V2_PROMPT_FILENAME} not found; searched: {searched}")
 
 
 def load_legacy_experience_prompts() -> dict[str, str]:
@@ -489,24 +480,9 @@ _V2_L1_KEYS = (
     "domain", "task", "problem", "method", "requires", "source_setting", "limits_stated",
     "action", "effect", "comparison", "locator",
 )
-# L2 keeps the L1 fields whose job is the same (domain/task/method/requires/action) and replaces the measured outcome
-# with the claim's three supports: the options that were compared, the mechanism, and the provenance (a locator in the
-# paper, or the L1 ids the induction drew on). There is no source_setting: an L2 finding is stated as a condition
-# (`requires`), not as a value from the source experiment.
-#
-# `limits_stated` on L2 holds only author-stated limits (an r35 audit found 41 of 76 induced limits had no source in
-# their L1 records, and 14 were a cost relabelled as a limit). A paper-read L2 entry carries a verbatim `quote`, checked
-# against the paper here and by the gate (F1). An induced entry is a summary of the contributing L1 records' own
-# stated limits and names them in `from`; an entry that names no such record is removed. A bad entry is removed from
-# its record, not the record from the payload.
-_V2_L2_KEYS = (
-    "domain", "task", "problem", "method", "action", "compared_options", "mechanism",
-    "requires", "limits_stated", "origin", "locator", "source_l1_ids", "evidence",
-)
 _V2_COMPARISONS = {"controlled", "vs_baseline", "absolute_only"}
 _V2_PARAM_BASES = {"swept", "derived", "prior_work", "default", "unstated"}
 _V2_REQUIRES_BASES = {"stated", "inferred"}
-_V2_ORIGINS = {"paper", "induced"}
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
@@ -535,11 +511,6 @@ def _ungrounded_share(record: Mapping[str, Any], paper_text: str) -> tuple[int, 
     )
 
 
-def _ungrounded_share_l2(record: Mapping[str, Any], source_text: str) -> tuple[int, int]:
-    """L2 grounding: numbers in the compared options and the claim must come from the paper or the cited L1 records."""
-    return _ungrounded_numbers([record.get("compared_options"), record.get("action")], source_text)
-
-
 def _validate_conditions(value: Any, field: str) -> None:
     for item in value if isinstance(value, list) else [None]:
         if (
@@ -550,70 +521,24 @@ def _validate_conditions(value: Any, field: str) -> None:
             raise ExperienceOutputError(f"{field} entries need text and a basis of stated or inferred")
 
 
-def _grounded_l2_evidence(item: dict[str, Any], *, paper_text: str) -> None:
-    """A paper-read L2 rests on the paper's own sentences.
-
-    Keeps the `evidence` quotes found in the paper. Without a `claim` quote the record is not the paper's finding
-    and is rejected; without a `mechanism` quote the mechanism is emptied (the paper does not give that reason).
-    Only for `origin: paper` when the paper text is at hand; induced records rest on their L1 ids instead.
-    """
-    from .gate import _quote_ok  # same normalisation the gate uses for quotes
-
-    if item.get("origin") != "paper" or not paper_text:
-        item.setdefault("evidence", [])
-        return
-    raw = item.get("evidence")
-    if not isinstance(raw, list):
-        raise ExperienceOutputError("evidence must be a list of {supports, quote}")
-    kept: list[dict[str, str]] = []
-    for entry in raw:
-        if not isinstance(entry, Mapping):
-            continue
-        supports = str(entry.get("supports") or "").strip().lower()
-        quote = " ".join(str(entry.get("quote") or "").split())
-        if supports in ("claim", "mechanism") and quote and _quote_ok(quote, paper_text):
-            kept.append({"supports": supports, "quote": quote})
-    if not any(e["supports"] == "claim" for e in kept):
+def _normalize_l1_mechanism(value: Any) -> dict[str, str]:
+    """Normalize `mechanism` to `{text, basis}`; an absent or empty account stays empty and honest."""
+    if value is None:
+        return {"text": "", "basis": "stated"}
+    if isinstance(value, str):  # a bare string says nothing about provenance: the honest label is `inferred`
+        text = " ".join(value.split())
+        return {"text": text, "basis": "inferred" if text else "stated"}
+    if not isinstance(value, Mapping):
+        raise ExperienceOutputError("L1 mechanism must be an object with text and basis")
+    text = " ".join(str(value.get("text") or "").split())
+    basis = str(value.get("basis") or "").strip().lower()
+    if not text:
+        return {"text": "", "basis": "stated"}
+    if basis not in _L1_MECHANISM_BASES:
         raise ExperienceOutputError(
-            "no claim quote found verbatim in the paper: an L2 read from the paper needs a sentence that states it"
+            f"L1 mechanism basis {basis!r} is not one of {', '.join(sorted(_L1_MECHANISM_BASES))}"
         )
-    if item.get("mechanism") and not any(e["supports"] == "mechanism" for e in kept):
-        item["mechanism"] = ""
-        item["mechanism_dropped"] = "no supporting sentence found in the paper"
-    item["evidence"] = kept
-
-
-def _grounded_l2_limits(
-    item: Mapping[str, Any], *, paper_text: str, limited_ids: Collection[str] | None
-) -> list[dict[str, Any]]:
-    """Keep only the L2 limits that rest on the authors' own words.
-
-    Paper-read (`origin: paper`): each entry needs a `quote` found in the paper text (when the text is available here;
-    the gate checks it again). Induced: each entry needs `from`, naming contributing records (`source_l1_ids`) that
-    have a non-empty `limits_stated`, at least two of them. Entries that fail are removed; the record stays.
-    """
-    from .gate import _quote_ok  # same normalisation the gate uses
-
-    raw = item.get("limits_stated")
-    if not isinstance(raw, list):
-        raise ExperienceOutputError("limits_stated must be a list")
-    kept: list[dict[str, Any]] = []
-    induced = item.get("origin") == "induced"
-    cited = {str(c) for c in item.get("source_l1_ids") or []}
-    for entry in raw:
-        if not isinstance(entry, Mapping) or not str(entry.get("text") or "").strip():
-            continue
-        text = " ".join(str(entry["text"]).split())
-        if induced:
-            sources = [str(s) for s in (entry.get("from") or []) if isinstance(s, str)] if isinstance(entry.get("from"), list) else []
-            sources = [s for s in dict.fromkeys(sources) if s in cited and (limited_ids is None or s in limited_ids)]
-            if len(sources) >= 2:  # a summary across records; one record's limit stays on that L1
-                kept.append({"text": text, "from": sources})
-        else:
-            quote = " ".join(str(entry.get("quote") or "").split())
-            if quote and (not paper_text or _quote_ok(quote, paper_text)):
-                kept.append({"text": text, "quote": quote})
-    return kept
+    return {"text": text, "basis": basis}
 
 
 def _validate_v2_l1_record(item: Mapping[str, Any]) -> None:
@@ -640,53 +565,13 @@ def _validate_v2_l1_record(item: Mapping[str, Any]) -> None:
             raise ExperienceOutputError("params entries need a name and a basis from the allowed set")
     if not isinstance(item["limits_stated"], list):
         raise ExperienceOutputError("limits_stated must be a list")
-
-
-def _validate_v2_l2_record(
-    item: Mapping[str, Any], *, source_ids: Collection[str] | None = None
-) -> None:
-    """Validate one L2 record; `source_ids` is the set of `l1-*` labels the induction was given."""
-    missing = [k for k in _V2_L2_KEYS if k not in item]
-    if missing:
-        raise ExperienceOutputError(f"record keys missing: {missing}")
-    for key in ("domain", "task", "problem", "action"):
-        if not isinstance(item[key], str) or not item[key].strip():
-            raise ExperienceOutputError(f"{key} must be a non-empty string")
-    method = item["method"]
-    if not isinstance(method, list) or not method or not all(isinstance(m, str) and m.strip() for m in method):
-        raise ExperienceOutputError("method must be a non-empty list of strings")
-    if not isinstance(item["mechanism"], str):
-        raise ExperienceOutputError("mechanism must be a string (empty when the paper gives no reason)")
-    options = item["compared_options"]
-    if not isinstance(options, list):
-        raise ExperienceOutputError("compared_options must be a list")
-    for option in options:
-        if (
-            not isinstance(option, Mapping)
-            or not str(option.get("option") or "").strip()
-            or not str(option.get("result") or "").strip()
-        ):
-            raise ExperienceOutputError("compared_options entries need a non-empty option and result")
-    _validate_conditions(item["requires"], "requires")
-    if not isinstance(item["limits_stated"], list):
-        raise ExperienceOutputError("limits_stated must be a list")
-    origin = item["origin"]
-    if origin not in _V2_ORIGINS:
-        raise ExperienceOutputError(f"origin {origin!r} is not one of {sorted(_V2_ORIGINS)}")
-    if origin == "paper":
-        if not isinstance(item["locator"], str) or not item["locator"].strip():
-            raise ExperienceOutputError("origin=paper needs a locator")
-    else:
-        cited = item["source_l1_ids"]
-        if not isinstance(cited, list) or not cited or not all(isinstance(c, str) and c.strip() for c in cited):
-            raise ExperienceOutputError("origin=induced needs non-empty source_l1_ids")
-        if source_ids is not None:
-            unknown = [c for c in cited if c not in source_ids]
-            if unknown:
-                raise ExperienceOutputError(f"source_l1_ids name records that were not given: {unknown}")
-        if isinstance(item.get("locator"), str) and item["locator"].strip():
-            # An induced record has no page of its own; a locator here would point at the paper it never read.
-            item["locator"] = ""
+    mechanism = item.get("mechanism")
+    if mechanism is not None and (
+        not isinstance(mechanism, Mapping)
+        or not isinstance(mechanism.get("text"), str)
+        or mechanism.get("basis") not in _L1_MECHANISM_BASES
+    ):
+        raise ExperienceOutputError("L1 mechanism must be {text, basis} with basis stated or inferred")
 
 
 def parse_experience_v2(
@@ -695,20 +580,12 @@ def parse_experience_v2(
     paper_id: str,
     paper_text: str = "",
     domain_arxiv: str | None = None,
-    level: str = "l1",
-    source_ids: Collection[str] | None = None,
-    limited_ids: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Parse a v2 extraction reply into the payload that is stored.
+    """Parse an L1 extraction reply into the payload that is stored.
 
-    `level` selects the record shape: ``l1`` (a tested practice and its measured outcome) or ``l2`` (a mechanism-level
-    finding). `source_ids` is the set of ``l1-*`` labels an induction reply may cite; it is ``None`` for the two
-    paper-reading prompts, which have no L1 records to point at. `limited_ids` is the subset of those labels whose
-    record has a non-empty `limits_stated`; an induced limit must draw on at least one of them.
-
-    Records that break the shape, or whose numbers mostly never occur in the source text, are dropped one by one so a
-    single bad record does not cost the paper; if the reply held records and none survived, that is an error and the
-    caller retries.
+    Records that break the shape, or whose numbers mostly never occur in the paper, are dropped one by one so a single
+    bad record does not cost the paper; if the reply held records and none survived, that is an error and the caller
+    retries.
     """
     candidate = raw_output.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", candidate, flags=re.IGNORECASE | re.DOTALL)
@@ -730,34 +607,17 @@ def parse_experience_v2(
         try:
             if not isinstance(row, dict):
                 raise ExperienceOutputError("record is not an object")
-            if level == "l2":
-                row.setdefault("compared_options", [])
-                row.setdefault("mechanism", "")
-                row.setdefault("requires", [])
-                row.setdefault("limits_stated", [])
-                row.setdefault("locator", "")
-                row.setdefault("source_l1_ids", [])
-                row.setdefault("evidence", [])
-                _validate_v2_l2_record(row, source_ids=source_ids)
-                _grounded_l2_evidence(row, paper_text=paper_text if source_ids is None else "")
-                row["limits_stated"] = _grounded_l2_limits(
-                    row, paper_text=paper_text, limited_ids=limited_ids
-                )
-                if paper_text:
-                    bad, total = _ungrounded_share_l2(row, paper_text)
-                    if total >= 3 and bad / total > 0.5:
-                        raise ExperienceOutputError(f"{bad} of {total} numbers never occur in the source")
-            else:
-                row.setdefault("limits_stated", [])
-                _validate_v2_l1_record(row)
-                if paper_text:
-                    bad, total = _ungrounded_share(row, paper_text)
-                    if total >= 3 and bad / total > 0.5:
-                        raise ExperienceOutputError(f"{bad} of {total} numbers never occur in the paper")
+            row.setdefault("limits_stated", [])
+            row["mechanism"] = _normalize_l1_mechanism(row.get("mechanism"))
+            _validate_v2_l1_record(row)
+            if paper_text:
+                bad, total = _ungrounded_share(row, paper_text)
+                if total >= 3 and bad / total > 0.5:
+                    raise ExperienceOutputError(f"{bad} of {total} numbers never occur in the paper")
         except ExperienceOutputError as exc:
             first_error = first_error or exc
             continue
-        row["layer"] = level
+        row["layer"] = "l1"
         kept.append(row)
     if rows and not kept:
         raise ExperienceOutputError(f"no record survived validation: {first_error}")
@@ -786,86 +646,6 @@ async def _run_single_level_extraction(
     raise ExperienceOutputError(f"Experience extraction failed: {last}")
 
 
-async def _invoke_v2(
-    *,
-    prompt: str,
-    human: str,
-    level: str,
-    paper_id: str,
-    paper_text: str,
-    model: Any,
-    domain_arxiv: str | None,
-    source_ids: Collection[str] | None = None,
-    limited_ids: Collection[str] | None = None,
-) -> dict[str, Any]:
-    """Run one v2 prompt, retrying a rejected reply up to three times with the reason fed back."""
-    note = ""
-    last: Exception | None = None
-    for _attempt in range(3):
-        response = await model.ainvoke([SystemMessage(content=prompt), HumanMessage(content=human + note)])
-        try:
-            return parse_experience_v2(
-                format_message_content(response).strip(),
-                paper_id=paper_id,
-                paper_text=paper_text,
-                domain_arxiv=domain_arxiv,
-                level=level,
-                source_ids=source_ids,
-                limited_ids=limited_ids,
-            )
-        except ExperienceOutputError as exc:
-            last = exc
-            note = _TRUNCATED_RETRY_HINT if _json_was_cut_off(exc) else (
-                f"\n\n[Correction] Your previous reply was rejected: {exc}. Return the extraction again in the exact shape given."
-            )
-    raise ExperienceOutputError(f"{level.upper()} extraction failed: {last}")
-
-
-async def _run_v2_pipeline(
-    *,
-    paper_id: str,
-    paper_text: str,
-    prompts: Mapping[str, str],
-    model: Any,
-    domain_arxiv: str | None,
-) -> dict[str, dict[str, Any]]:
-    """L1 and L2 read the paper in parallel.
-
-    L1 is the backbone: if it fails, the paper fails and the worker retries. L2 is allowed to degrade to an empty list
-    and is logged loudly when it does — a mechanism-level finding is additional value, not the reason the paper was
-    queued.
-    """
-    text = _without_lone_surrogates(paper_text)[:_V2_MAX_PAPER_CHARS]
-    human = f"[paper_id] {paper_id}\n\n{text}"
-
-    async def read(level: ExperienceLevel) -> dict[str, Any]:
-        return await _invoke_v2(
-            prompt=prompts[level],
-            human=human,
-            level=level,
-            paper_id=paper_id,
-            paper_text=text,
-            model=model,
-            domain_arxiv=domain_arxiv,
-        )
-
-    l1_result, l2_result = await asyncio.gather(
-        read("l1"), read("l2"), return_exceptions=True
-    )
-    if isinstance(l1_result, Exception):
-        raise ExperienceOutputError(f"L1 extraction failed: {l1_result}")
-    if isinstance(l2_result, Exception):
-        print(
-            f"[extraction] L2 (paper) skipped for {paper_id!r}: {l2_result}",
-            file=sys.stderr,
-        )
-        l2_result = {"paper_id": paper_id, "domain_arxiv": domain_arxiv, "experiences": []}
-
-    l1_payload: dict[str, Any] = l1_result
-    l2_payload: dict[str, Any] = l2_result
-    return {"l1": l1_payload, "l2": l2_payload}
-
-
 async def run_experience_extraction(
     *,
     paper_id: str,
@@ -876,12 +656,11 @@ async def run_experience_extraction(
 ) -> dict[ExperienceLevel, dict[str, Any]]:
     """Run the configured extraction.
 
-    Three shapes are supported, selected by the prompts that were loaded:
+    Two shapes are supported, selected by the prompts that were loaded:
 
-    * v2 pair (current): ``l1`` + ``l2``. L1 records tested practices; L2 records mechanism-level findings read
-      from the whole paper. Cross-paper L2 is a separate pass over all stored L1 records.
-    * single level (r30 fallback): only ``l1``; the old comparison-centred schema, no L2.
-    * v1 pair (legacy): the original L1/L2/induction prompts, kept so old libraries can be re-checked.
+    * current: only ``l1``. A paper yields the practices it tested; L2 findings are induced afterwards from clusters
+      of stored L1 records (`cross_paper.py`), never read from the paper.
+    * v1 pair (legacy): the original L1/L2 prompts, kept so old libraries can be re-checked.
     """
     if model is None:
         from ...EvoScientist import _ensure_auxiliary_chat_model
@@ -891,10 +670,6 @@ async def run_experience_extraction(
     if "l2" not in loaded:
         return await _run_single_level_extraction(
             paper_id=paper_id, paper_text=paper_text, prompt=loaded["l1"], model=model, domain_arxiv=domain_arxiv
-        )
-    if loaded.get(V2_SCHEMA_KEY) == V2_SCHEMA_MARKER:
-        return await _run_v2_pipeline(
-            paper_id=paper_id, paper_text=paper_text, prompts=loaded, model=model, domain_arxiv=domain_arxiv
         )
     paper_text = _without_lone_surrogates(paper_text)
 

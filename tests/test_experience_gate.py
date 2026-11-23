@@ -343,3 +343,18 @@ async def test_the_active_tool_gates_before_storing_and_says_what_it_kept_out(
     assert "dropped" not in documents[0].text
     assert (_paper_dir(tmp_path, project_id="P-alpha", paper_id="paper-1",
                        url="https://example.invalid/p1") / "gate.json").is_file()
+
+
+def test_a_quote_may_be_lightly_edited_but_not_rewritten():
+    from EvoScientist.memory.experiences.gate import _quote_ok
+
+    paper = ("We observe that the verifier does not help when answers span multiple paragraphs, "
+             "since its features are computed per window. On short answers it gained 2.9 F1 on NQ.")
+    assert _quote_ok("the verifier does not help when answers span multiple paragraphs", paper)      # verbatim
+    assert _quote_ok("We observe that the verifier does not help when answers span multiple paragraphs since its "
+                     "features are computed per window", paper)                                          # PDF punctuation
+    assert _quote_ok("On short answers the verifier gained 2.9 F1 on NQ", paper)                         # pronoun resolved
+    assert not _quote_ok("We observe that the verifier does help when answers span multiple paragraphs", paper)  # negation
+    assert not _quote_ok("On short answers it gained 3.9 F1 on NQ", paper)                               # number changed
+    assert not _quote_ok("The verifier is unhelpful once an answer covers several paragraphs of text", paper)  # paraphrase
+    assert not _quote_ok("verifier helps", paper)                                                        # short, inexact

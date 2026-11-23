@@ -123,6 +123,11 @@ def _render_current(record_id: str, item: Mapping[str, Any], paper: Mapping[str,
     if _s(effect.get("cost")) and _s(effect.get("cost")).lower() not in {"none", "null"}:
         lines.append(f"  - Cost: {_s(effect.get('cost'))}")
 
+    mechanism = item.get("mechanism") if isinstance(item.get("mechanism"), Mapping) else {}
+    if _s(mechanism.get("text")):
+        tag = " (inferred: the paper does not give this reason)" if _s(mechanism.get("basis")) == "inferred" else ""
+        lines.append(f"Why it works: {_s(mechanism.get('text'))}{tag}")
+
     requires = [r for r in _items(item.get("requires")) if isinstance(r, Mapping) and _s(r.get("text"))]
     if requires:
         lines.append("Needs (what the method requires; '(inferred)' = not stated by the paper):")

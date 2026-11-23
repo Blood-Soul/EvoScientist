@@ -7,8 +7,9 @@ there, so a record is graded the same way here as in the benchmark. Keep the two
 What it does
 ------------
 Every record is graded on up to 18 binary checks in four dimensions (faithfulness, validity, scope, inference).
-Three of them are program checks against the paper text (quotes verbatim, numbers present, locator exists); the rest
-are judge checks, one model call per dimension, each `pass` backed by a span copied from the paper. A span the program
+Three of them are program checks against the paper text (quotes are the paper's sentences, numbers present, locator
+exists); the rest are judge checks, one model call per dimension, each `pass` backed by a span copied from the paper
+(verbatim, or with at most a light edit). A span the program
 cannot find in the paper downgrades the verdict to `fail` after one repair turn. Dimension scores and the final status
 are computed in code from the binary checks; the model never produces the number.
 
@@ -30,6 +31,7 @@ import os
 import asyncio
 import functools
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -77,8 +79,9 @@ REPAIR = """Some evidence spans were not found in their named source:
 {bad}
 
 Re-grade only these checks. Keep `pass` only when the evidence span is copied
-verbatim from PAPER TEXT or, where the check allows it, from the RECORD. If no
-verbatim span supports the claim, return `fail`. Return the same JSON shape."""
+from PAPER TEXT (an unrelated clause may be trimmed) or, where the check allows
+it, from the RECORD. If no copied span supports the claim, return `fail`.
+Return the same JSON shape."""
 
 
 class GateError(RuntimeError):
@@ -180,12 +183,65 @@ def _number_grounded(token: str, paper: str) -> bool:
     return False
 
 
+QUOTE_MIN_WORDS = 8        # below this a near-copy test says too little: a short quote must be exact
+QUOTE_EDIT_SHARE = 0.15    # words of the quote that may be edited: max(2, this share), the rest found in order
+_NEGATORS = frozenset({"not", "no", "never", "nor", "without", "cannot", "neither", "fails", "fail", "failed",
+                       "worse", "hurts", "hurt", "degrades", "unlike"})
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[0-9a-z一-鿿]+(?:\.[0-9]+)?", (text or "").lower().replace("n't", " not"))
+
+
+@functools.lru_cache(maxsize=8)
+def _paper_words(paper: str) -> tuple[str, ...]:
+    return tuple(_words(paper))
+
+
+def _near_copy(quote: str, paper: str) -> bool:
+    """True when the quote is the paper's sentence, lightly edited.
+
+    Light editing is what the prompt allows: a dropped clause, a resolved pronoun, a repaired PDF artefact. The test:
+    all but max(2, `QUOTE_EDIT_SHARE`) of the quote's words occur in the same order inside one stretch of the paper no
+    longer than twice the quote; every number in the quote is in that stretch; and the stretch negates exactly when the quote
+    does, so "helps" can never match "does not help". A paraphrase in new words fails.
+    """
+    words = _words(quote)
+    if len(words) < QUOTE_MIN_WORDS:
+        return False
+    hay = _paper_words(paper)
+    need = len(words) - max(2, math.floor(QUOTE_EDIT_SHARE * len(words)))
+    span = 2 * len(words)
+    numbers = {w for w in words if w[0].isdigit()}
+    negates = bool(_NEGATORS & set(words))
+    first = set(words[: len(words) - need + 1])  # a match that keeps `need` words starts on one of these
+    for start, word in enumerate(hay):
+        if word not in first:
+            continue
+        window = hay[start:start + span]
+        matched, pos = 0, 0
+        for w in words:           # greedy in-order match of the quote's words inside the window
+            try:
+                pos = window.index(w, pos) + 1
+                matched += 1
+            except ValueError:
+                continue
+        if matched < need:
+            continue
+        stretch = window[:pos]
+        if numbers <= set(stretch) and bool(_NEGATORS & set(stretch)) == negates:
+            return True
+    return False
+
+
 def _quote_ok(quote: str, paper: str) -> bool:
-    """Verbatim after undoing PDF conversion artefacts: same words in the same order, a changed word still fails."""
+    """The quote is the paper's sentence: verbatim after undoing PDF artefacts, or a light edit of it (`_near_copy`)."""
     if _norm(quote) in _norm(paper):
         return True
     loose = _alnum(quote)
-    return len(loose) >= 12 and loose in _alnum(paper)
+    if len(loose) >= 12 and loose in _alnum(paper):
+        return True
+    return _near_copy(quote, paper)
 
 
 def collect(record: Mapping[str, Any], path: str) -> list[str]:
@@ -237,7 +293,7 @@ def _check_f1(check: Mapping[str, Any], record: Mapping[str, Any], paper: str) -
         return _result(check, "na", note="no limits_stated quotes")
     bad = [q for q in quotes if not _quote_ok(q, paper)]
     if bad:
-        return _result(check, "fail", span=bad[0], note="quote not found verbatim in paper")
+        return _result(check, "fail", span=bad[0], note="quote not found in paper (verbatim or lightly edited)")
     return _result(check, "pass", span=quotes[0], note=f"{len(quotes)} quotes found")
 
 
@@ -327,10 +383,11 @@ def _json_object(text: str) -> dict[str, Any] | None:
 
 
 def _span_ok(span: str, paper: str, record: Mapping[str, Any], *, evidence: str = "paper") -> bool:
-    """A span is usable when it is copied verbatim from the named source.
+    """A span is usable when it is the named source's own text: verbatim, or a light edit of a paper sentence.
 
     For a paper-evidence check it must be in the PAPER, not merely in the record: accepting the record's own wording
-    would let a paraphrase of the record vouch for itself, which is the failure this gate exists to stop.
+    would let a paraphrase of the record vouch for itself, which is the failure this gate exists to stop. The light-edit
+    allowance (`_near_copy`) applies to the paper only, for the same reason.
     """
     cleaned = " ".join((span or "").split())
     if len(cleaned) < 2:
@@ -349,6 +406,8 @@ def _span_ok(span: str, paper: str, record: Mapping[str, Any], *, evidence: str 
         loose = _alnum(cleaned)
         if len(loose) >= 10 and any(loose in _alnum(hay) for hay in haystacks):
             return True
+    if evidence in ("paper", "either") and _near_copy(cleaned, paper):
+        return True
     # "Table 4" may be a caption the text extraction lost; F3 checks separately that the locator exists.
     return bool(re.fullmatch(
         r"(?i)(table|figure|fig\.?|section|sec\.?|appendix|eq\.?)\s*\d+(?:[.\-]\d+)*", cleaned))

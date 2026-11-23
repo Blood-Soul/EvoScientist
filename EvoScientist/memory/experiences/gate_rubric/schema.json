@@ -31,7 +31,7 @@
           "hard": true,
           "evidence": "paper",
           "fields": ["limits_stated[].quote"],
-          "question": "Every limits_stated[].quote is copied verbatim from the paper."
+          "question": "Every limits_stated[].quote is the paper's own sentence: verbatim, or lightly edited with the paper's wording, direction and numbers kept."
         },
         {
           "id": "F2",

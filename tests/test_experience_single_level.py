@@ -133,3 +133,27 @@ def test_an_unstated_param_basis_is_stored_as_absent(tmp_path: Path):
     params = load_paper_experiences(**kwargs)["l1"]["experiences"][0]["source_setting"]["params"]
     assert params[0] == {"name": "batch size", "value": "32"}
     assert params[1]["basis"] == "swept" and params[1]["from"] == "20, 33, 66"
+
+
+def test_the_mechanism_is_normalized_to_text_and_basis():
+    stated = {"text": "The  verifier  sees head features.", "basis": "stated"}
+    out = parse_experience_v2(reply(record(mechanism=stated)), paper_id="p1")["experiences"][0]
+    assert out["mechanism"] == {"text": "The verifier sees head features.", "basis": "stated"}
+    # absent (a record from before the field) or empty: an empty, honest mechanism
+    old = record()
+    assert parse_experience_v2(reply(old), paper_id="p1")["experiences"][0]["mechanism"] == {"text": "", "basis": "stated"}
+    # a bare string says nothing about where the reason came from, so it is marked inferred
+    bare = parse_experience_v2(reply(record(mechanism="because of X")), paper_id="p1")["experiences"][0]
+    assert bare["mechanism"] == {"text": "because of X", "basis": "inferred"}
+    # an unknown basis costs the record
+    with pytest.raises(ExperienceOutputError):
+        parse_experience_v2(reply(record(mechanism={"text": "x", "basis": "guessed"})), paper_id="p1")
+
+
+def test_the_mechanism_is_rendered_with_its_basis():
+    from EvoScientist.memory.experiences.render import render_record
+
+    item = parse_experience_v2(reply(record(mechanism={"text": "Empty windows teach abstention.", "basis": "inferred"})),
+                               paper_id="p1")["experiences"][0]
+    text = render_record({"id": "E-1", "experience_level": "l1", "experience": item})
+    assert "Why it works: Empty windows teach abstention. (inferred: the paper does not give this reason)" in text
