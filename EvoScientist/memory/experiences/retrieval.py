@@ -115,12 +115,7 @@ def search_experience_records(
 
     search_mode = ObservationSearchMode(mode)
     hits_by_facet = [
-        search_documents(
-            documents=documents,
-            query=facet,
-            limit=max(limit * 2, limit),
-            mode=search_mode,
-        )
+        _ranked_facet(documents, facet, limit=max(limit * 2, limit), mode=search_mode, memory_dir=memory_dir)
         for facet in facets
     ]
     if len(hits_by_facet) == 1:
@@ -144,6 +139,27 @@ def search_experience_records(
         merged["score"] = round(scores[hit["observation_id"]], 5)
         fused.append(merged)  # type: ignore[arg-type]
     return fused
+
+
+def _ranked_facet(
+    documents: list[ObservationSearchDocument],
+    facet: str,
+    *,
+    limit: int,
+    mode: ObservationSearchMode,
+    memory_dir: str | Path,
+) -> list[ObservationSearchHit]:
+    """One facet's ranking: lexical, fused with the embedding ranking when the embedding service is configured.
+
+    A regex search stays a regex search: it asks for a pattern, not for meaning.
+    """
+    lexical = search_documents(documents=documents, query=facet, limit=limit, mode=mode)
+    if mode == ObservationSearchMode.REGEX:
+        return lexical
+    from ..dense import hybrid
+    from ..embedding import RETRIEVE_EXPERIENCE
+
+    return hybrid(documents, facet, lexical, task=RETRIEVE_EXPERIENCE, memory_dir=memory_dir, limit=limit)
 
 
 def degenerate_facets(*facets: str) -> list[dict[str, Any]]:

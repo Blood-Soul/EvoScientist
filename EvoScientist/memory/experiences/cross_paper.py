@@ -1,7 +1,10 @@
 """L1 -> L2 induction over clusters of L1 records. The only source of L2: a paper yields L1 records alone.
 
-Every L1 record of the project belongs to one cluster. A cluster is kept as a centroid over a lexical view of its
-members (problem, method aliases, task, requires, action, mechanism); where the records came from does not matter.
+Every L1 record of the project belongs to one cluster. A cluster is kept as a centroid over a view of its members
+(problem, method aliases, task, requires, action, mechanism); where the records came from does not matter. The view is
+embedded with the embedding service when one is configured (Qwen3-Embedding, see :mod:`..embedding`), and is a TF-IDF
+vector otherwise. The two give cosines on different scales, so each has its own join and cohesion thresholds; a run
+records which one built its clusters, and a change of backend re-clusters the library from scratch.
 
 * **assign** -- a record not yet seen joins the cluster whose centroid is nearest, when the cosine reaches the join
   threshold; otherwise it starts a cluster of its own. A centre is kept even for one record, so later related records
@@ -38,6 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from ...utils import format_message_content
@@ -73,10 +77,19 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# Measured on the judgelab library (2,697 L1 records, 587 papers, the TF-IDF view below): join 0.30 with min size 3
-# gives 168 clusters that get findings, covering 24% of the records; the rest wait for more members.
+# TF-IDF, measured on the judgelab library (2,697 L1 records, 587 papers): join 0.30 with min size 3 gives 168
+# clusters that get findings, covering 24% of the records; the rest wait for more members.
+# Qwen3-Embedding-0.6B on the same library: see EMBED_JOIN / EMBED_COHESION below.
+LEXICAL_JOIN, LEXICAL_COHESION = 0.30, 0.40
+EMBED_JOIN, EMBED_COHESION = 0.75, 0.78
+
+_backend = "lexical"  # which vectors the current trigger uses; set by vectors()
+
+
 def join_min() -> float:
-    return _env_float("EVOSCIENTIST_L2_CLUSTER_JOIN", 0.30)
+    default = EMBED_JOIN if _backend == "embedding" else LEXICAL_JOIN
+    env = "EVOSCIENTIST_L2_CLUSTER_JOIN_EMBED" if _backend == "embedding" else "EVOSCIENTIST_L2_CLUSTER_JOIN"
+    return _env_float(env, default)
 
 
 def min_size() -> int:
@@ -88,7 +101,9 @@ def max_size() -> int:
 
 
 def min_cohesion() -> float:
-    return _env_float("EVOSCIENTIST_L2_CLUSTER_COHESION", 0.40)
+    default = EMBED_COHESION if _backend == "embedding" else LEXICAL_COHESION
+    env = "EVOSCIENTIST_L2_CLUSTER_COHESION_EMBED" if _backend == "embedding" else "EVOSCIENTIST_L2_CLUSTER_COHESION"
+    return _env_float(env, default)
 
 
 def update_share() -> float:
@@ -160,14 +175,25 @@ def _view(item: Mapping[str, Any]) -> str:
                      str(item.get("action") or ""), _mechanism_text(item)])
 
 
+def _view_text(item: Mapping[str, Any]) -> str:
+    """The view as an embedding model reads it: labelled fields, each once (repetition only weights TF-IDF)."""
+    methods = "; ".join(str(m) for m in item.get("method") or [])
+    requires = "; ".join(str(r.get("text") or "") for r in item.get("requires") or [] if isinstance(r, Mapping))
+    parts = [("Problem", item.get("problem")), ("Method", methods), ("Task", item.get("task")),
+             ("Requires", requires), ("Action", item.get("action")), ("Mechanism", _mechanism_text(item))]
+    return "\n".join(f"{k}: {' '.join(str(v).split())}" for k, v in parts if v and str(v).strip())
+
+
 def _tokens(text: str) -> list[str]:
     return [w for w in re.findall(r"[a-z][a-z0-9\-]+", text.lower()) if len(w) > 2 and w not in _STOP]
 
 
-Vec = dict[str, float]
+Vec = dict[str, float] | np.ndarray  # sparse TF-IDF weights, or a dense unit embedding
 
 
-def _unit(v: Mapping[str, float]) -> Vec:
+def _unit(v: Vec) -> Vec:
+    if isinstance(v, np.ndarray):
+        return v / (float(np.linalg.norm(v)) or 1.0)
     norm = math.sqrt(sum(x * x for x in v.values())) or 1.0
     return {w: x / norm for w, x in v.items()}
 
@@ -180,13 +206,34 @@ def tfidf_vectors(records: Sequence[Mapping[str, Any]]) -> list[Vec]:
             for t in toks]
 
 
-def _cos(a: Mapping[str, float], b: Mapping[str, float]) -> float:
+def embedding_vectors(records: Sequence[Mapping[str, Any]], memory_dir: str | Path) -> list[Vec] | None:
+    """The records' views embedded by the embedding service, or None when it is not configured or failed."""
+    from ..embedding import embed_documents
+
+    matrix = embed_documents([_view_text(r["item"]) for r in records], memory_dir=memory_dir)
+    return None if matrix is None else list(matrix)
+
+
+def vectors(records: Sequence[Mapping[str, Any]], memory_dir: str | Path) -> tuple[list[Vec], str]:
+    """Embeddings when the service answers, TF-IDF otherwise; sets the backend the thresholds follow."""
+    global _backend
+    dense = embedding_vectors(records, memory_dir) if records else None
+    _backend = "embedding" if dense is not None else "lexical"
+    return (dense if dense is not None else tfidf_vectors(records)), _backend
+
+
+def _cos(a: Vec, b: Vec) -> float:
+    if isinstance(a, np.ndarray):
+        return float(a @ b)
     if len(a) > len(b):
         a, b = b, a
     return sum(x * b.get(w, 0.0) for w, x in a.items())
 
 
 def _centroid(members: Sequence[str], vecs: Mapping[str, Vec]) -> Vec:
+    first = vecs[members[0]]
+    if isinstance(first, np.ndarray):
+        return _unit(np.sum([vecs[m] for m in members], axis=0))
     total: Counter[str] = Counter()
     for m in members:
         total.update(vecs[m])
@@ -540,6 +587,33 @@ def _replace_findings(state: dict[str, Any], project_id: str, cid: str, records:
     return {"made": len(records), "carried": len(taken), "retired": retired}
 
 
+def _hand_over(state: dict[str, Any], old_clusters: Mapping[str, Mapping[str, Any]]) -> None:
+    """After re-clustering, give each finding to the new cluster that holds most of its support, as a split does.
+
+    A cluster that receives findings is marked `split`, so it revises them on this trigger against its new members.
+    A finding whose support no new cluster holds a majority of is left without a cluster and retired as an orphan.
+    """
+    where = {m: cid for cid, c in state["clusters"].items() for m in c["members"]}
+    for old in old_clusters.values():
+        for fid in old.get("findings") or []:
+            finding = state["findings"].get(fid)
+            if finding is None:
+                continue
+            support = finding["record"].get("source_l1_ids") or []
+            votes = Counter(where[m] for m in support if m in where)
+            if not votes:
+                continue
+            cid, n = votes.most_common(1)[0]
+            if n * 2 < len(support):
+                continue
+            cluster = state["clusters"][cid]
+            if len(cluster.setdefault("findings", [])) >= MAX_FINDINGS:
+                continue
+            cluster["findings"].append(fid)
+            cluster["split"] = True
+            finding["cluster"] = cid
+
+
 def _retire_orphans(state: dict[str, Any]) -> int:
     """Findings whose cluster no longer holds them (a split part that did not inherit them) are retired."""
     live = {fid for c in state["clusters"].values() for fid in c.get("findings") or []}
@@ -570,8 +644,21 @@ async def run_cross_paper_induction(
         pending = [cid for cid in state.get("pending") or [] if cid in state["clusters"]]
         if not force and len(new_ids) < every() and not pending:
             return {"status": "waiting", "new": len(new_ids), "every": every()}
-        vecs = dict(zip([r["id"] for r in records], tfidf_vectors(records), strict=True))
+        vec_list, backend = await asyncio.to_thread(vectors, records, memory_dir)
+        vecs = dict(zip([r["id"] for r in records], vec_list, strict=True))
+        old_clusters = None
+        if state.get("backend", "lexical") != backend:
+            # Clusters built from one kind of vector do not carry over to the other: every record is clustered
+            # afresh, and each old finding goes to the new cluster holding most of its support (see _hand_over).
+            if state["clusters"]:
+                logger.info("L2 induction: clustering switched from %s to %s vectors; re-clustering %d records",
+                            state.get("backend", "lexical"), backend, len(records))
+            old_clusters, state["clusters"] = state["clusters"], {}
+            new_ids, pending = [r["id"] for r in records], []
+            state["backend"] = backend
         changed = (assign(state, new_ids, vecs) | set(pending)) & set(state["clusters"])
+        if old_clusters is not None:
+            _hand_over(state, old_clusters)
         orphans = _retire_orphans(state)
         def findings_of(cid: str) -> list[dict[str, Any]]:
             return [state["findings"][f]["record"] for f in state["clusters"][cid].get("findings") or []
@@ -601,7 +688,7 @@ async def run_cross_paper_induction(
         summary: dict[str, Any] = {
             "l1": len(records), "new": len(new_ids), "clusters": len(sizes),
             "clusters_eligible": sum(1 for s in sizes if s >= min_size()),
-            "induced": len(due) - len(failed), "failed": len(failed), "waiting_for_more": waiting,
+            "induced": len(due) - len(failed), "failed": len(failed), "waiting_for_more": waiting, "vectors": backend,
             "findings_made": totals["made"], "carried_over": totals["carried"], "retired": totals["retired"] + orphans,
         }
         state["history"].append({"ts": time.time(), "trigger": state["triggers"], **summary})
@@ -666,5 +753,17 @@ def schedule_cross_paper(*, memory_dir: str | Path, project_id: str, model: Any 
     task.add_done_callback(_background.discard)
 
 
-__all__ = ["assign", "induce", "load_l1_records", "load_state", "maybe_run_cross_paper", "run_cross_paper_induction",
-           "schedule_cross_paper", "split", "tfidf_vectors", "validate_finding"]
+__all__ = [
+    "assign",
+    "embedding_vectors",
+    "induce",
+    "load_l1_records",
+    "load_state",
+    "maybe_run_cross_paper",
+    "run_cross_paper_induction",
+    "schedule_cross_paper",
+    "split",
+    "tfidf_vectors",
+    "validate_finding",
+    "vectors",
+]
