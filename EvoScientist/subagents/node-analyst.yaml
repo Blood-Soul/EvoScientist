@@ -31,7 +31,9 @@ node-analyst:
     - The node's own files under `nodes/<id>/`: `NODE_REPORT.md`, the logs under `outputs/`, and the
       code, where a claim needs checking. Check the judge's slices if the record has them.
     - The plan the node was built from (`reports/plans/`), for the choices it made and the alternatives it
-      left aside.
+      left aside. When the node also has a `DESIGN.md`, the plan is a skeleton and `DESIGN.md` is the
+      detailed design its agent settled: the settings, where it departed from the skeleton, and the choices it
+      made on its own judgment. Those last ones are choices too.
 
     ## What to find out
     - What the node got right and what is wrong or unproven, each with its evidence (a slice, a delta, a log

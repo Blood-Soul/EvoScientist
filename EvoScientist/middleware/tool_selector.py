@@ -116,6 +116,11 @@ DEFAULT_ALWAYS_INCLUDE_TOOLS: frozenset[str] = frozenset(
         "tree_analysis",
         "tree_choice",
         "tree_finalize",
+        # Skeleton run (config research_tree_skeleton): the main agent reviews its own skeleton and leases the GPU.
+        "review_plan",
+        "gpu_grant",
+        "gpu_revoke",
+        "answer_node",
     }
 )
 

@@ -487,7 +487,7 @@ For an end-to-end research task, one that comes with a statement of your working
 - **Start.** Read the conditions and the task in full and write the hard limits down. Put the task data in place, then call `tree_init`. Then survey the field before you open any node. When paper-navigator is installed, hand the literature work to `research-agent` with the `task` tool: say what the task is and which difficulties to look into, tell it to follow `/skills/paper-navigator/SKILL.md`, and ask for notes on what the closest papers offer. Without paper-navigator, survey from the data and what you know. Group what you find into mechanism families so that candidate directions differ in kind and not in hyperparameters, and record them with `tree_survey`. Take the time the survey needs; there is no prize for the fastest first node. **You do not build anything in the project root.** Every line of code of this run, the first baseline included, is written inside a node directory `nodes/<id>/` by a sub-agent, after a node was opened with `tree_new`. The only file you create yourself is a placeholder deliverable (one `execute` command, for example an all-abstain `submission.csv`), so that something valid exists; the champion's replaces it.
 - **Stored experience.** `search_experience`, `list_experience` and `read_paper` show what the papers searched in this project teach. Look something up when a decision calls for it.
 - **Every step starts from the record.** Call `tree_status`, then `tree_history` for the nodes that bear on the decision. Read them in order, not only the best one: what a node tried depends on what the earlier nodes showed, and a failed node says what not to repeat. Do not repeat a direction the record shows failed under the same conditions; if you retry one, say what is different. Prefer a surveyed family that has not been tried yet (`tree_status` lists which were). Cite what you built on in `based_on`.
-- **One hypothesis per node.** Open each node with `tree_new`, stating what you expect and what would refute it, which family it belongs to (`cluster`), which component it changes, what to build (`plan`; in a run with written plans, the accepted plan is what to build), what to reuse, which dead ends to avoid and when to stop early. The budget of a node is yours to set from what the task needs. To refine a finished node, diagnose from its own errors first (the slices in its record), then change one major thing. When `tree_status` shows two nodes that are right on different rows, consider a merge. A difference inside the reported interval is not resolved: treat it as neither a win nor a loss.
+- **One hypothesis per node.** Open each node with `tree_new`, stating what you expect and what would refute it, which family it belongs to (`cluster`), which component it changes, what to build (`plan`; in a run with written plans, the accepted plan is what to build), what to reuse, which dead ends to avoid and when to stop early. To refine a finished node, diagnose from its own errors first (the slices in its record), then change one major thing. When `tree_status` shows two nodes that are right on different rows, consider a merge. A difference inside the reported interval is not resolved: treat it as neither a win nor a loss.
 - **Use the literature where a step is stuck.** When a refinement has a specific weakness that papers might fix (for example how others decide that a question has no answer), search for it before `tree_new` with the paper-navigator skill, read the closest papers, propose directions that differ in mechanism, and pick one.
 - **Build through sub-agents.** You do not write training code. `tree_new` produces a brief for the sub-agent: the step, the parents' records, the most related earlier nodes, the insights that bear on it, the budget and the files the node must contain. If the reply ends with the brief, give it to the sub-agent verbatim; if the reply names a `BRIEF.md` in the node directory, tell the sub-agent to read that file in full. Either way the node directory is its working directory; add anything the record does not hold. Close the node with `tree_finish` and take the judge's number, not the sub-agent's claim; processes the node left running in its directory are stopped then.
 - **Learn from the trajectory.** Every three closed nodes the tools remind you to record what the sequence shows with `tree_insight`: when the situation looks like X, the step that worked or failed was Y, with the nodes that show it. Keep the set current instead of rewriting it: mark an insight supported when a later node confirms it, contradicted when one refutes it, and cite insights in `based_on` of later steps.
@@ -521,6 +521,72 @@ RESEARCH_TREE_BACKGROUND = """## Work that runs while you decide
 - **Do not poll.** Call `task_collect` with a `wait_minutes` when there is nothing else to do, and between nodes. A job still running when you call again is not lost.
 - **Read what comes back as you read any reply:** the files it names are the work; open them.
 """
+
+RESEARCH_TREE_SKELETON = """## Plans (skeletons)
+
+This run asks for a written plan before an explore or refine node, and you write it: a skeleton, about one page. The details are worked out inside the node by `node-agent`, which also writes the code and runs the experiment.
+
+- **The skeleton.** Write `reports/drafts/plan-<direction>.md` with `write_file`, in this layout:
+  `# Plan: <short title>`; `## Direction and hypothesis` (the family, what it changes, and a falsifiable claim: "X should raise the metric because Y; it fails if Z"); `## What to build` (the method's main parts, a few sentences each, and the key design choices, each with the records it rests on, `[E-...]`, and one line on why the record applies to this task, or "my own judgment"); `## Risks and refutation`; `## Open choices` (what the evidence does not settle, with the default). No settings such as learning rates or batch sizes: those are measured and set inside the node.
+- **Ground it.** Look up stored experience (`search_experience`, `read_memory`) for the choices the skeleton stands on, before you write them. Cite only what you read.
+- **Review it once.** Call `review_plan(path, task)`: it reads the skeleton next to the experience library and returns numbered suggestions, each citing records; the records the skeleton cites are among those it checks. Take or refuse each one and revise the file; a design change you cannot settle without training goes under Open choices instead of into the design. Do not call it again after you revise.
+- **Record, decide, open.** `tree_plan(path=..., cluster=..., parents=[...])`, then `tree_plan(plan_id=..., decision='accepted', reason=...)` or `rejected`. Then `tree_new(plan_id=...)` and start the node's agent at once: `task_start(subagent_type='node-agent', description=...)` with the node id on the first line, then the path of its `BRIEF.md`, and anything the record does not hold. You do not see the detailed design before the node runs; you read its `DESIGN.md` afterwards if a result needs explaining.
+- **After a node is closed: its analysis.** Every scored node gets one analysis, by `node-analyst`: delegate with the node id, what you want checked and the file to write (`reports/drafts/analysis-<node>.md`), then record it with `tree_analysis(node=..., path=...)`. A skeleton that builds on the node starts from that analysis and the choices it leaves open.
+- **Choices.** A choice is a part of the design the evidence does not settle. node-analyst records them with `tree_choice`; `tree_status` lists the open ones. One that needs training stays at its default until a node tries the other option: a refine that changes only this one thing. Do not fold an untested design change into a skeleton.
+"""
+
+RESEARCH_TREE_SKELETON_BACKGROUND = """## Work that runs while you decide
+
+Several nodes are open at once; there is one GPU, and it is leased. `task_start(subagent_type, description)` starts a sub-agent and returns a job id at once; `task_collect(wait_minutes)` returns the replies of finished jobs, and returns early when a node needs you.
+
+- **Keep a node in preparation.** When a node opens, write the next skeleton: a new direction, or a step on an analysed node. Opening it while another node trains is the point: its agent designs and tests on the CPU, and the GPU passes to it when the first is done.
+- **The GPU.** A node agent asks for it with a reason. If it is free and nobody waits, the node gets it at once and you are told; take it back with `gpu_revoke(node, reason)` if another node needs it more. Otherwise the request waits for you: when the GPU is free, give it with `gpu_grant(node)`, from the reasons (a short check before a long training, a node close to the deadline first). Without your decision for a while it goes to the earliest request. `tree_status` shows who holds it, for how long, and who is waiting.
+- **Questions.** A node agent may ask you with a question id; answer with `answer_node(question_id, answer)`. It waits for you, and after a while continues with the skeleton's choice.
+- **Notes.** Messages headed "Notes from the run" say what changed: a job finished, the GPU changed hands, a node asked. Act on them; collect finished jobs with `task_collect`.
+- **The survey comes first.** Collect the literature survey before you write the first skeleton: the skeletons stand on what it found and on the experience it stored.
+- **What waits for what.** A skeleton that builds on a node waits for that node's analysis; nothing else waits. When a node closes, start node-analyst on it with `task_start`.
+- **Do not poll.** Call `task_collect` with a `wait_minutes` when there is nothing else to do.
+"""
+
+_SKELETON_ROUTES = (
+    (
+        "  - Planning for a research direction → plan-writer\n",
+        "  - Building a tree node from its skeleton → node-agent\n",
+    ),
+    (
+        "- Planning is done by `plan-writer` in this run (see Plans); planner-agent is not used.\n",
+        "- You write each plan yourself, as a skeleton (see Plans (skeletons)); planner-agent is not used.\n",
+    ),
+    (
+        '- "Write the plan for one research direction, or for a step that builds on an analysed node" → plan-writer\n',
+        '- "Build one tree node from its accepted skeleton" → node-agent\n',
+    ),
+    ("  - Implementation → code-agent\n", "  - Implementation (inside a tree node) → node-agent\n"),
+    ('- "Implement baseline or training loop" → code-agent\n', '- "Implement baseline or training loop" → node-agent, in a tree node\n'),
+)
+_TREE_STEP2_SKELETON = """## Step 2: Plan (tree flow)
+- The tree is the plan. You write each direction as a skeleton under `reports/drafts/`, review it with `review_plan`, record it with `tree_plan`, and open it as a node with `tree_new(plan_id=...)` after you accept it.
+- Do not keep a second staged plan: `todos.md`, `plan.md` and `success_criteria.md` are not part of this run, and `write_todos` does not replace `tree_status`.
+- If a direction matches an installed skill, name the skill in the skeleton and in the node agent's description.
+
+"""
+_TREE_CODE_MODE_SKELETON = """Node implementation is delegated to `node-agent` with `task_start`, naming the node on the first line: it works out the design from the skeleton, writes the code and runs it in the node directory. This run does not stop to ask which code-generation mode to use.
+
+"""
+_STAGE_REFLECTION_SKELETON = (
+    "### Stage Reflection\n"
+    "In this run every finished node is analysed by `node-analyst`, and you write the skeleton that builds on it "
+    "from that analysis (see Plans (skeletons)). Do not use planner-agent for it.\n\n"
+)
+
+
+def _for_tree_skeleton(text: str) -> str:
+    """The plan / node flow of a skeleton run, applied after the reports rewrite."""
+    for old, new in _SKELETON_ROUTES:
+        text = text.replace(old, new)
+    text = text.replace(_TREE_STEP2, _TREE_STEP2_SKELETON)
+    text = text.replace(_TREE_CODE_MODE, _TREE_CODE_MODE_SKELETON)
+    return text.replace(_STAGE_REFLECTION_TREE, _STAGE_REFLECTION_SKELETON)
 
 
 # =============================================================================
@@ -692,6 +758,7 @@ def get_system_prompt(
     research_tree: bool = False,
     research_tree_reports: bool = False,
     research_tree_background: bool = False,
+    research_tree_skeleton: bool = False,
     available_tools: Iterable[str] = (),
 ) -> str:
     """Generate the complete static system prompt.
@@ -726,6 +793,8 @@ def get_system_prompt(
         research_tree_reports: With ``research_tree``, also append
             :data:`RESEARCH_TREE_REPORTS`: plans by plan-writer, analyses by node-analyst, open choices
             (config ``research_tree_require_plans``).
+        research_tree_skeleton: With reports and background on, replace the plan-writer flow with skeletons the
+            main agent writes and node agents that build them, leasing the GPU (config ``research_tree_skeleton``).
         available_tools: Names (or tool objects) the main agent was built with.
             Tree bullets that name switch-gated tools are included only when
             the matching tool is present; an empty iterable advertises none.
@@ -753,13 +822,19 @@ def get_system_prompt(
         # In a tree run TRAJECTORY.md is the report: drop the single-agent template and
         # rewrite the close for both profiles, then the plan/node flow when plans are on.
         sections = [_for_tree(x) for x in sections if x is not REPORT_TEMPLATE]
+        skeleton = research_tree_skeleton and research_tree_reports and research_tree_background
         if research_tree_reports:
             sections = [_for_tree_reports(x) for x in sections]
+        if skeleton:
+            sections = [_for_tree_skeleton(x) for x in sections]
         sections.append(_tree_section(reports=research_tree_reports))
-        if research_tree_reports:
-            sections.append(RESEARCH_TREE_REPORTS)
-        if research_tree_background:
-            sections.append(RESEARCH_TREE_BACKGROUND)
+        if skeleton:
+            sections += [RESEARCH_TREE_SKELETON, RESEARCH_TREE_SKELETON_BACKGROUND]
+        else:
+            if research_tree_reports:
+                sections.append(RESEARCH_TREE_REPORTS)
+            if research_tree_background:
+                sections.append(RESEARCH_TREE_BACKGROUND)
         names = {
             tool if isinstance(tool, str) else getattr(tool, "name", "")
             for tool in available_tools

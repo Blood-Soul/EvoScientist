@@ -307,6 +307,38 @@ def _load_mcp_tools_cached(
 # =============================================================================
 
 
+def _skeleton_hub(cfg, workspace: Workspace):
+    """The coordination hub of a skeleton run, or None.
+
+    A skeleton run needs the tree, written plans and background jobs; with any of them off the switch is ignored.
+    """
+    on = all(
+        getattr(cfg, key, False) is True
+        for key in (
+            "research_tree_enabled",
+            "research_tree_require_plans",
+            "research_tree_background_tasks",
+            "research_tree_skeleton",
+        )
+    )
+    if not on:
+        return None
+    from .research_tree.coord import hub_for
+
+    return hub_for(workspace.root)
+
+
+# Sub-agents a skeleton run replaces: the main agent writes the skeleton, node-agent builds the node.
+_SKELETON_REPLACES = frozenset({"plan-writer", "code-agent"})
+
+
+def _select_subagents(subs: list[dict], cfg, workspace: Workspace) -> list[dict]:
+    """The sub-agents of this run: node-agent only in a skeleton run, which drops plan-writer and code-agent."""
+    if _skeleton_hub(cfg, workspace) is not None:
+        return [s for s in subs if s.get("name") not in _SKELETON_REPLACES]
+    return [s for s in subs if s.get("name") != "node-agent"]
+
+
 def _configured_system_prompt(cfg, work_dir: str | Path, tools=()) -> str:
     # In dangerous mode the agent works on the real filesystem; give it the real
     # cwd so it can use absolute paths instead of the virtual `/` workspace root.
@@ -318,6 +350,9 @@ def _configured_system_prompt(cfg, work_dir: str | Path, tools=()) -> str:
         research_tree=getattr(cfg, "research_tree_enabled", False),
         research_tree_reports=getattr(cfg, "research_tree_require_plans", False),
         research_tree_background=getattr(cfg, "research_tree_background_tasks", False),
+        research_tree_skeleton=getattr(cfg, "research_tree_skeleton", False) is True
+        and getattr(cfg, "research_tree_require_plans", False) is True
+        and getattr(cfg, "research_tree_background_tasks", False) is True,
         available_tools=tools,
     )
 
@@ -436,6 +471,11 @@ def _inject_subagent_middleware(
         ]
         if memory_controls.memory_enabled:
             middleware.append(memory_middleware)
+        if name == "node-agent" and (hub := _skeleton_hub(cfg, workspace)) is not None:
+            from .middleware.coord_notes import CoordNotesMiddleware
+
+            # Notes addressed to this node (the GPU changed hands, a late answer) after its last message.
+            middleware.append(CoordNotesMiddleware(hub, main=False))
         if autoqueue:
             middleware.append(
                 create_paper_autoqueue_middleware(
@@ -737,12 +777,16 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
             tool_registry[tool.name] = tool
             base_tools.append(tool)
 
-    # `review_plan` is only ever granted by a sub-agent's YAML (the plan-writer / node-analyst), never to the main agent.
+    hub = _skeleton_hub(cfg, workspace)
+    # `review_plan` is granted by a sub-agent's YAML (plan-writer / node-analyst); in a skeleton run the main agent
+    # writes the skeleton and reviews it itself, so it gets the tool too.
     if getattr(cfg, "memory_plan_review_enabled", False):
         review_tool = create_review_plan_tool(
             memory_dir=memory_dir, project_id=project_id, workspace_root=workspace.root
         )
         tool_registry[review_tool.name] = review_tool
+        if hub is not None:
+            base_tools.append(review_tool)
 
     if getattr(cfg, "research_tree_enabled", False):
         from .research_tree.tools import create_research_tree_tools
@@ -750,9 +794,16 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
         for tool in create_research_tree_tools(
             workspace.root,
             require_plans=getattr(cfg, "research_tree_require_plans", False),
+            hub=hub,
         ):
             tool_registry[tool.name] = tool
             base_tools.append(tool)
+        if hub is not None:
+            # The node agent's side (request_gpu, release_gpu, ask_main): granted by node-agent.yaml only.
+            from .research_tree.coord_tools import create_node_tools
+
+            for tool in create_node_tools(hub):
+                tool_registry[tool.name] = tool
 
     if os.environ.get("TAVILY_API_KEY"):
         tool_registry["tavily_search"] = tavily_search
@@ -777,9 +828,7 @@ def _build_base_kwargs(
         cfg=cfg, workspace=workspace, work_dir=work_dir
     )
 
-    subs = load_subagents(
-        SUBAGENTS_CONFIG,
-    )
+    subs = _select_subagents(load_subagents(SUBAGENTS_CONFIG), cfg, workspace)
     _fold_expert_subagents(subs, tool_registry, workspace)
     _ensure_general_purpose_subagent(subs)
     _inject_subagent_middleware(
@@ -866,9 +915,7 @@ def load_mcp_and_build_kwargs(
 
     mcp_main = mcp_by_agent.pop("main", [])
 
-    subs = load_subagents(
-        SUBAGENTS_CONFIG,
-    )
+    subs = _select_subagents(load_subagents(SUBAGENTS_CONFIG), cfg, workspace)
     _fold_expert_subagents(subs, registry, workspace)
 
     _ensure_general_purpose_subagent(subs)
@@ -1247,7 +1294,12 @@ def _get_default_middleware(
     if getattr(cfg, "research_tree_background_tasks", False) is True and not for_async_subagent:
         from .middleware.background_tasks import BackgroundTaskMiddleware
 
-        mw.append(BackgroundTaskMiddleware(workspace.root))
+        hub = _skeleton_hub(cfg, workspace)
+        mw.append(BackgroundTaskMiddleware(workspace.root, hub=hub))
+        if hub is not None:
+            from .middleware.coord_notes import CoordNotesMiddleware
+
+            mw.append(CoordNotesMiddleware(hub, main=True))
 
     if cfg.enable_ask_user and not cfg.auto_mode and not for_async_subagent:
         from .middleware.ask_user import AskUserMiddleware

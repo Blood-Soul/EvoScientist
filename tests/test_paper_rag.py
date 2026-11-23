@@ -1091,8 +1091,9 @@ def test_only_the_named_subagents_receive_the_paper_tools() -> None:
         if "search_paper_text" in (agent.get("_tool_names") or [])
     }
     # plan-writer and node-analyst (research tree) check guidance against the
-    # source papers, so they hold the same read-only paper tools.
-    assert granted == {"research-agent", "planner-agent", "plan-writer", "node-analyst"}
+    # source papers, so they hold the same read-only paper tools; node-agent
+    # (skeleton runs) follows a skeleton's citations back to the papers.
+    assert granted == {"research-agent", "planner-agent", "plan-writer", "node-analyst", "node-agent"}
     for agent in subagents:
         if agent["name"] in granted:
             assert "read_paper" in agent["_tool_names"]

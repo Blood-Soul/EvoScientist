@@ -484,6 +484,11 @@ class EvoScientistConfig:
     research_tree_require_plans: bool = True
     # The main agent may run sub-agents in the background (task_start / task_collect) instead of waiting on `task`.
     research_tree_background_tasks: bool = False
+    # Skeleton run (needs the tree, plans and background tasks on): the main agent writes each plan as a short
+    # skeleton and reviews it itself; a `node-agent` works out the details, writes the code and runs it; several
+    # nodes work at once and the GPU is leased to one at a time (research_tree/coord.py). Off keeps plan-writer
+    # and code-agent.
+    research_tree_skeleton: bool = False
 
     # Workspace Settings
     default_mode: Literal["daemon", "run"] = "daemon"
@@ -1425,6 +1430,7 @@ _ENV_MAPPINGS = {
     "research_tree_enabled": "EVOSCIENTIST_RESEARCH_TREE_ENABLED",
     "research_tree_require_plans": "EVOSCIENTIST_RESEARCH_TREE_REQUIRE_PLANS",
     "research_tree_background_tasks": "EVOSCIENTIST_RESEARCH_TREE_BACKGROUND_TASKS",
+    "research_tree_skeleton": "EVOSCIENTIST_RESEARCH_TREE_SKELETON",
     "memory_plan_review_enabled": "EVOSCIENTIST_MEMORY_PLAN_REVIEW_ENABLED",
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
