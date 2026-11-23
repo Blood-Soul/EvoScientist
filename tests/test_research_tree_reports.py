@@ -774,7 +774,7 @@ def test_the_guard_is_on_the_main_agent_only_and_only_in_reports_mode() -> None:
 
 
 class TestCodeOnlyNodes:
-    """gpu=false opens a node that only gets code written: no GPU, no running clock, until tree_start."""
+    """gpu=false opens a node that only gets code written: no GPU until tree_start."""
 
     def _two_plans(self, tree):
         tree.survey([{"name": "a", "mechanism": "m"}])
@@ -787,15 +787,14 @@ class TestCodeOnlyNodes:
         assert "Created n1" in busy and "It is code only" not in busy
         # the GPU is taken, yet a second node can be opened code-only
         out = tree.new_node(kind="explore", title="u", hypothesis="h", plan_id=p2, gpu=False)
-        assert "Created n2" in out and "counts from tree_start" in out
+        assert "Created n2" in out and "does not hold the GPU until tree_start" in out
         clock.advance(200)  # a long time of code writing
         status = tree.status()
-        assert "Prepared (code only, no GPU, no clock): n2" in status
+        assert "Prepared (code only, no GPU): n2" in status
         assert "Running: n1" in status and "Running: n2" not in status
         assert "n2 explore" in status and "prepared" in status
         brief = (root / "nodes" / "n2" / "BRIEF.md").read_text()
         assert "this step is code only for now" in brief and "START.md" in brief
-        assert "budget of 60 minutes from now" not in brief
         # the deliverables do not contradict "do not train yet"
         leave = brief[brief.index("### What you must leave"):]
         assert "Before the node ends it must contain" not in leave
@@ -824,14 +823,14 @@ class TestCodeOnlyNodes:
         clock.advance(30)
         tree.finish("n1", change="c", observation="o")
         assert "the GPU is free: start one of the prepared nodes (n2) with tree_start(node)" in tree.status().splitlines()[-1]
-        out = tree.start("n2", minutes=45)
-        assert "n2 started with a budget of 45 min" in out and "START.md" in out
-        assert "Running: n2 (explore) 0.0/45 min" in tree.status()
+        out = tree.start("n2")
+        assert "n2 started on the GPU" in out and "START.md" in out
+        assert "Running: n2 (explore) for 0.0 min" in tree.status()
         with pytest.raises(TreeError, match="not a prepared code-only node"):
             tree.start("n2")  # already started
         assert "## Started" in (root / "nodes" / "n2" / "BRIEF.md").read_text()
 
-    def test_the_budget_counts_from_tree_start(self, strict) -> None:
+    def test_the_run_time_counts_from_tree_start(self, strict) -> None:
         tree, root, clock = strict
         p1, p2 = self._two_plans(tree)
         tree.new_node(kind="explore", title="t", hypothesis="h", plan_id=p1)
@@ -841,15 +840,15 @@ class TestCodeOnlyNodes:
         clock.advance(40)
         tree.finish("n1", change="c", observation="o")
         clock.advance(25)  # the GPU sat idle: n2 had no clock
-        tree.start("n2", minutes=60)
+        tree.start("n2")
         clock.advance(10)
-        assert "Running: n2 (explore) 10.0/60 min" in tree.status()
+        assert "Running: n2 (explore) for 10.0 min" in tree.status()
         node = root / "nodes" / "n2"
         (node / "holdout_predictions.csv").write_text("1\n" * 200 + "0\n" * 200)
         (node / "submission.csv").write_text("d")
         clock.advance(5)
         done = tree.finish("n2", change="c", observation="o")
-        assert "after 15.0 min (budget 60)" in done  # measured from tree_start, not from tree_new
+        assert "after 15.0 min." in done  # measured from tree_start, not from tree_new
 
     def test_the_hint_names_the_prepared_nodes(self, strict) -> None:
         tree, root, clock = strict

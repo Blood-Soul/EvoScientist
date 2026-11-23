@@ -100,7 +100,6 @@ def test_full_run_records_facts_from_the_judge(env):
         kind="explore",
         title="baseline",
         hypothesis="a plain model sets a floor",
-        minutes=60,
         deliverable="v1",
     )
     msg = tree.finish(
@@ -132,7 +131,6 @@ def test_full_run_records_facts_from_the_judge(env):
         hypothesis="a task head lifts accuracy",
         parents=[n1],
         based_on=[n1],
-        minutes=60,
         deliverable="v2",
     )
     msg = tree.finish(n2, change="new head", observation="improved", next_step="")
@@ -162,7 +160,6 @@ def test_full_run_records_facts_from_the_judge(env):
         hypothesis="small tweak",
         parents=[n2],
         based_on=[n2, n1],
-        minutes=60,
         deliverable="v3",
     )
     msg = tree.finish(n3, change="tweak", observation="same", next_step="")
@@ -190,13 +187,13 @@ def test_finalize_puts_the_champion_files_at_the_root_together(env):
     tree.init(budget_minutes=360)
     n1 = do_node(
         tree, root, clock, minutes_used=30, n_right=200,
-        kind="explore", title="baseline", hypothesis="a floor", minutes=60, deliverable="v1",
+        kind="explore", title="baseline", hypothesis="a floor", deliverable="v1",
     )
     tree.finish(n1, change="baseline", observation="ok", next_step="")
     n2 = do_node(
         tree, root, clock, minutes_used=40, n_right=320,
         kind="refine", title="better", hypothesis="lifts", parents=[n1], based_on=[n1],
-        minutes=60, deliverable="v2",
+        deliverable="v2",
     )
     tree.finish(n2, change="better", observation="ok", next_step="")
     # The agent copied a later, non-champion node's predictions over the root file.
@@ -221,7 +218,6 @@ def test_history_is_required_to_be_cited(env):
         kind="explore",
         title="a",
         hypothesis="h",
-        minutes=30,
     )
     tree.finish(n1, change="c", observation="o")
     with pytest.raises(TreeError, match="based_on is required"):
@@ -646,17 +642,15 @@ def test_every_tree_action_is_written_to_the_event_log(env):
     )
 
 
-def test_a_node_past_its_budget_is_not_stopped(env):
-    """The budget is the agent's own estimate: running past it is noted in the status line and nothing is killed."""
+def test_a_node_has_no_budget_and_is_never_stopped(env):
+    """A node has no time budget: the status line says how long it has been open, and nothing is killed."""
     tree, root, clock, _ = env
     tree.init(budget_minutes=360)
-    nid = tree.new_node(kind="explore", title="a", hypothesis="h", minutes=30).split()[1]
-    assert "past its budget" not in tree.status()
+    nid = tree.new_node(kind="explore", title="a", hypothesis="h").split()[1]
     clock.advance(31)
-    assert "Running: %s (explore) 31.0/30 min (past its budget)" % nid in tree.status()
-    assert not hasattr(tree, "enforce_budgets")
-    clock.advance(60)  # far beyond any grace period: still open, nothing stopped
-    assert "past its budget" in tree.status()
+    assert "Running: %s (explore) for 31.0 min" % nid in tree.status()
+    assert "budget" not in tree.status().split("Running:")[1].splitlines()[0]
+    clock.advance(200)  # long past anything a budget would have been: still open, nothing stopped
     (root / "nodes" / nid / "holdout_predictions.csv").write_text(accuracy_rows(200))
     (root / "nodes" / nid / "submission.csv").write_text("d")
     assert "closed as done" in tree.finish(nid, change="c", observation="o")

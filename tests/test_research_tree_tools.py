@@ -51,7 +51,6 @@ def test_tool_set_and_schemas():
         "hypothesis",
         "based_on",
         "parents",
-        "minutes",
         "plan",
         "cluster",
         "component",
@@ -59,6 +58,7 @@ def test_tool_set_and_schemas():
         "avoid",
         "stop_condition",
     } <= set(new.args)
+    assert "minutes" not in new.args  # a node has no time budget
 
 
 def test_refusals_are_text_not_exceptions(tools):

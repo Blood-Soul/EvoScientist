@@ -110,15 +110,11 @@ class NewArgs(BaseModel):
         description="Finished node ids and insight ids (I1, ...) whose evidence led to this step. Required once "
         "there is history. A plan (P1, ...) goes in plan_id, not here.",
     )
-    minutes: float = Field(
-        default=60.0,
-        description="Time budget for the node. Clipped to the time left and to the kind's limits.",
-    )
     gpu: bool = Field(
         default=True,
-        description="Only one node holds the GPU at a time. False opens a code-only node: it holds no GPU "
-        "and has no running clock, so its code can be written while another node trains; hand it the GPU "
-        "later with tree_start, which also starts its budget.",
+        description="Only one node holds the GPU at a time. False opens a code-only node: it holds no GPU, "
+        "so its code can be written while another node trains; hand it the GPU later with tree_start. "
+        "Ignored in a run where the GPU is leased (gpu_grant).",
     )
     plan: str = Field(
         default="",
@@ -264,10 +260,6 @@ class ChoiceArgs(BaseModel):
 
 class StartArgs(BaseModel):
     node: str = Field(description="A prepared code-only node (opened with gpu=false) to give the GPU.")
-    minutes: float | None = Field(
-        default=None,
-        description="Budget for the run from now. Defaults to the budget given at tree_new; clipped to the time left.",
-    )
 
 
 class NoArgs(BaseModel):
@@ -280,12 +272,15 @@ def create_research_tree_tools(
     judge: Judge | None = None,
     now: Callable[[], float] | None = None,
     require_plans: bool = False,
+    hub=None,
 ) -> list[BaseTool]:
     """Build the research-tree tools for the project at `root`.
 
-    With `require_plans`, explore and refine nodes need an accepted plan.
+    With `require_plans`, explore and refine nodes need an accepted plan. With `hub` (a coord.Hub) the run is a
+    skeleton run: the main agent writes the plans as skeletons, node agents build them and lease the GPU; the
+    main agent's GPU and answer tools come with it.
     """
-    kwargs = {"judge": judge, "require_plans": require_plans}
+    kwargs = {"judge": judge, "require_plans": require_plans, "hub": hub}
     if now is not None:
         kwargs["now"] = now
     tree = ResearchTree(root, **kwargs)
@@ -326,6 +321,12 @@ def create_research_tree_tools(
             a["text"] = text
             a["title"] = a.get("title") or plan_title(text)
         return tree.plan(**a)
+
+    extra: list[BaseTool] = []
+    if hub is not None:
+        from .coord_tools import create_main_tools
+
+        extra = create_main_tools(hub)
 
     return [
         tool(
@@ -375,7 +376,7 @@ def create_research_tree_tools(
         tool(
             lambda **a: tree.start(a.pop("node"), **a),
             "tree_start",
-            "Give the GPU to a prepared code-only node (opened with tree_new gpu=false) and start its budget. "
+            "Give the GPU to a prepared code-only node (opened with tree_new gpu=false). "
             "Refused while another node holds the GPU. The reply says what to hand the sub-agent that runs it.",
             StartArgs,
         ),
@@ -397,8 +398,9 @@ def create_research_tree_tools(
         tool(
             plan_tool,
             "tree_plan",
-            "Record a plan file the plan-writer sub-agent wrote (`path`), or decide on a plan (`plan_id` and "
-            "`decision`: accepted, revise, rejected). A plan backs one explore or refine node: pass its id to "
+            ("Record a skeleton you wrote and reviewed (`path`), or decide on it (`plan_id` and " if hub is not None
+             else "Record a plan file the plan-writer sub-agent wrote (`path`), or decide on a plan (`plan_id` and ")
+            + "`decision`: accepted, revise, rejected). A plan backs one explore or refine node: pass its id to "
             "tree_new. A plan can be rewritten twice; an accepted plan no node uses yet can be rewritten or "
             "rejected as the record changes.",
             PlanArgs,
@@ -427,4 +429,5 @@ def create_research_tree_tools(
             "predictions and deliverable are at the project root, and write TRAJECTORY.md. Do not call it while a node is running.",
             NoArgs,
         ),
+        *extra,
     ]

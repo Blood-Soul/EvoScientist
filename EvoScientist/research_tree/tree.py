@@ -13,8 +13,13 @@ Who writes what:
   deltas against the parent, the champion, the hash of the judge. Scores come
   from the frozen judge (:mod:`.judge`), never from the agent's own report.
 
-A node's time budget is the agent's to set. The tree does not stop a node that
-runs past it; it only says so in the status line.
+A node has no time budget of its own: the run's deadline is the only clock, and the
+status line says how long each running node has been open.
+
+In a skeleton run (`skeleton=True`) the main agent writes each plan as a skeleton and a
+node agent works out the details, writes the code and runs it. Nodes then do not hold
+the GPU for their whole life: several are open at once, and the GPU is leased to one
+of them at a time through the coordination hub (:mod:`.coord`).
 """
 
 from __future__ import annotations
@@ -67,7 +72,6 @@ BUDGET_ENV = "EVOSCIENTIST_TREE_BUDGET_MINUTES"
 KINDS = ("explore", "refine", "merge")
 CATEGORIES = ("method", "experiment", "ablation")
 INSIGHT_STATUS = ("open", "supported", "contradicted")
-NODE_MAX_MINUTES = 180.0
 INSIGHT_EVERY = 3  # closed nodes after which the tools ask for an insight
 CHOICE_STATUS = ("open", "settled", "dropped")
 CHOICE_NEEDS = ("inference", "short_training", "full_node")  # what it takes to settle a choice
@@ -86,15 +90,25 @@ class ResearchTree:
         judge: Judge | None = None,
         now: Callable[[], float] = time.time,
         require_plans: bool = False,
+        hub=None,
     ):
         self.root = Path(root).resolve()
         # When on, an explore or refine node needs an accepted plan (see _check_plan).
         self.require_plans = require_plans
+        # A skeleton run: plans are skeletons the main agent writes, nodes are built by node agents, and the GPU
+        # is leased through `hub` (a coord.Hub) instead of belonging to one running node.
+        self.hub = hub
+        self.skeleton = hub is not None
         self.repo = Repo(self.root)
         self._judge = judge
         self.now = now
         self.dir = self.root / STATE_DIR
         self.state_path = self.dir / "state.json"
+
+    @property
+    def _writer(self) -> str:
+        """Who writes the plans, as the tools' replies name it."""
+        return "you (a skeleton)" if self.skeleton else "the plan-writer"
 
     @property
     def judge(self) -> Judge | None:
@@ -160,17 +174,23 @@ class ResearchTree:
 
     @staticmethod
     def _waiting(node: dict) -> bool:
-        """A code-only node that has not been given the GPU yet."""
-        return node["status"] == "running" and not node.get("gpu") and not node.get("clock_from")
+        """A code-only node that has not been given the GPU yet (not used in a skeleton run: there the GPU is leased)."""
+        return (
+            node["status"] == "running"
+            and not node.get("skeleton")
+            and not node.get("gpu")
+            and not node.get("clock_from")
+        )
 
     @staticmethod
     def _clock_from(node: dict) -> float:
-        """When the node's budget started counting: creation, or tree_start for a code-only node."""
+        """When the node's run started: creation, or tree_start for a code-only node."""
         return node.get("clock_from") or node["started"]
 
-    @staticmethod
-    def _next_step(st: dict) -> str:
+    def _next_step(self, st: dict) -> str:
         """The one thing the record says is due next (reports mode), so the agent need not remember the flow."""
+        if self.skeleton:
+            return self._next_step_skeleton(st)
         nodes = st["nodes"]
         plans = st.get("plans", {})
         waiting = [k for k, n in nodes.items() if ResearchTree._waiting(n)]
@@ -225,6 +245,42 @@ class ResearchTree:
             "Next: ask plan-writer for the next plan: a step that builds on an analysed node (from its analysis and "
             "open choices) or a new direction; or finalize if the time is nearly up." + due_note
         )
+
+    def _next_step_skeleton(self, st: dict) -> str:
+        """The next step in a skeleton run: the GPU and the node agents' questions first, then plans and nodes."""
+        nodes, plans = st["nodes"], st.get("plans", {})
+        running = [k for k, n in nodes.items() if n["status"] == "running"]
+        drafts = [k for k, p in plans.items() if p["status"] == "draft"]
+        ready = [k for k, p in plans.items() if p["status"] == "accepted" and not p.get("node")]
+        due = [
+            k for k, n in nodes.items()
+            if n["status"] != "running" and n.get("score") is not None and k not in st.get("analyses", {})
+        ]
+        if not st.get("survey"):
+            return "Next: record the survey with tree_survey. Nothing is built before it."
+        hub = self.hub
+        parts = []
+        if any(q["status"] == "open" for q in hub.questions.values()):
+            parts.append("a node agent is waiting for an answer: answer_node")
+        if not hub.holder and hub.queue:
+            parts.append(f"the GPU is free and {', '.join(q['node'] for q in hub.queue)} asked for it: gpu_grant")
+        if drafts:
+            parts.append(f"review and decide on the skeleton(s) {', '.join(drafts)}")
+        if ready:
+            parts.append(f"open a node on {', '.join(ready)} with tree_new(plan_id=...) and start node-agent on it")
+        if not drafts and not ready:
+            parts.append(
+                "write the next skeleton (a new direction, or a step on an analysed node) so that a node is being "
+                "prepared while " + (", ".join(running) + " work" if running else "nothing else runs")
+            )
+        if due:
+            parts.append(f"analysis due for {', '.join(due)}: start node-analyst with task_start")
+        orphans = [k for k in running if not hub.job_of(k)]
+        if orphans:
+            parts.append(
+                f"{', '.join(orphans)} has no agent running: start node-agent on it again, or close it with tree_finish"
+            )
+        return "Next: " + "; ".join(parts) + "."
 
     @staticmethod
     def _closed(st: dict) -> int:
@@ -297,6 +353,16 @@ class ResearchTree:
             self._start_monitors()
             how = (
                 "\n\nHow this run goes (the tools refuse the shortcuts):\n"
+                "1. tree_survey: record the mechanism families you found.\n"
+                "2. Write a skeleton for a direction yourself (reports/drafts/plan-<direction>.md), review it once "
+                "with review_plan, take or refuse each suggestion, then record it with tree_plan(path=...) and "
+                "accept it.\n"
+                "3. tree_new(plan_id=...) opens a node and writes its brief; start node-agent on it with task_start. "
+                "It works out the details, writes the code and runs it inside nodes/<id>/, asking you for the GPU "
+                "when it needs it. Write the next skeleton meanwhile.\n"
+                "4. tree_finish scores the node; start node-analyst on it in the background (task_start)."
+                if self.require_plans and self.skeleton
+                else "\n\nHow this run goes (the tools refuse the shortcuts):\n"
                 "1. tree_survey: record the mechanism families you found.\n"
                 "2. Ask plan-writer (task) for a plan for each direction worth trying; record each with "
                 "tree_plan(path=...), read it, compare, decide.\n"
@@ -395,15 +461,14 @@ class ResearchTree:
                 continue
             if self._waiting(n):
                 lines.append(
-                    f"Prepared (code only, no GPU, no clock): {n['id']} ({n['kind']}) | budget "
-                    f"{n['budget_minutes']:.0f} min once started with tree_start"
+                    f"Prepared (code only, no GPU): {n['id']} ({n['kind']}); give it the GPU with tree_start"
                 )
                 continue
             used = _minutes(self.now() - self._clock_from(n))
-            lines.append(
-                f"Running: {n['id']} ({n['kind']}) {used}/{n['budget_minutes']:.0f} min"
-                + (" (past its budget)" if used > n["budget_minutes"] else "")
-            )
+            state = f", {self.hub.node_line(n['id'])}" if self.skeleton else ""
+            lines.append(f"Running: {n['id']} ({n['kind']}) for {used} min{state}")
+        if self.skeleton:
+            lines += self.hub.status_lines()
         lines.append("Nodes:" if nodes else "Nodes: none yet")
         for n in sorted(nodes.values(), key=lambda x: node_number(x["id"])):
             e = events.get(n["id"])
@@ -507,7 +572,6 @@ class ResearchTree:
         category: str = "method",
         parents: list[str] | tuple[str, ...] = (),
         based_on: list[str] | tuple[str, ...] = (),
-        minutes: float = 60.0,
         gpu: bool = True,
         cluster: str = "",
         component: str = "",
@@ -580,7 +644,9 @@ class ResearchTree:
                     "(it takes finished nodes and insights, ids from tree_status)"
                 )
             backing = self._check_plan(st, kind, parents, plan_id)
-            if gpu and any(
+            if self.skeleton:
+                gpu = False  # the GPU is leased through the hub, not held by a node from its start
+            elif gpu and any(
                 n.get("gpu") for n in nodes.values() if n["status"] == "running"
             ):
                 busy = [
@@ -593,13 +659,12 @@ class ResearchTree:
                     "first (or pass gpu=false for work that needs no GPU)"
                 )
             usable = self._remaining(st) - st["reserve_minutes"]
-            lo, hi = st["min_node_minutes"], NODE_MAX_MINUTES
+            lo = st["min_node_minutes"]
             if usable < lo:
                 raise TreeError(
                     f"only {max(usable, 0):.0f} min of usable time left, a {kind} node needs at least "
                     f"{lo:.0f}. Close the tree: tree_finalize."
                 )
-            budget = min(max(float(minutes), lo), hi, usable)
             nid = f"n{st['next']}"
             st["next"] += 1
             path, conflicts = self.repo.new_node(nid, parents, st["shared"])
@@ -611,12 +676,13 @@ class ResearchTree:
                 "category": category,
                 "hypothesis": hypothesis.strip(),
                 "based_on": sorted(set(based_on) | set(parents)),
-                "budget_minutes": budget,
                 "gpu": bool(gpu),
+                "skeleton": self.skeleton,
                 "status": "running",
                 "started": self.now(),
-                # a node that holds the GPU is on the clock from the start; a code-only one from tree_start
-                "clock_from": self.now() if gpu else None,
+                # a node that holds the GPU runs from the start; a code-only one from tree_start; a skeleton node
+                # from its creation (it leases the GPU when it needs it)
+                "clock_from": self.now() if gpu or self.skeleton else None,
                 "score": None,
                 "conflicts": conflicts,
                 "cluster": cluster or None,
@@ -636,7 +702,6 @@ class ResearchTree:
                 node=nid,
                 kind=kind,
                 parents=parents,
-                minutes=budget,
                 plan=plan_id or None,
             )
             files = (
@@ -644,12 +709,20 @@ class ResearchTree:
                 "(the deliverable) and `NODE_REPORT.md` (what was done, what the errors look like, what you "
                 "would try next)"
             )
-            deliver = (
-                f"Before the node ends it must contain {files}."
-                if gpu
-                else "For now, leave the code, a note of what you checked on the tiny slice, and `START.md`. "
-                f"The full run that produces {files} happens later, after the main agent starts this node."
-            )
+            if self.skeleton:
+                deliver = (
+                    f"Before the node ends it must contain `DESIGN.md` (the detailed design you settled: the "
+                    "settings that matter and why, where and why you departed from the skeleton, and which choices "
+                    f"rest on your own judgment with no evidence behind them), {files}."
+                )
+                self.hub.open_node(nid)
+            elif gpu:
+                deliver = f"Before the node ends it must contain {files}."
+            else:
+                deliver = (
+                    "For now, leave the code, a note of what you checked on the tiny slice, and `START.md`. "
+                    f"The full run that produces {files} happens later, after the main agent starts this node."
+                )
             brief = self._save_brief(nid, self._brief(st, nid, path, deliver))
             if self.require_plans:
                 # Reports mode: the brief is a file the sub-agent reads, not text the
@@ -662,11 +735,22 @@ class ResearchTree:
                 ]
             else:
                 tail = ["", brief]
+            if self.skeleton:
+                head = (
+                    f"Created {nid} ({kind}) at {path.relative_to(self.root)}/. Start node-agent on it now with "
+                    f"task_start(subagent_type='node-agent', description=...): name the node ({nid}) on the first "
+                    "line, then the brief's path. It asks for the GPU when it needs it; write the next skeleton "
+                    "meanwhile."
+                )
+            else:
+                head = (
+                    f"Created {nid} ({kind}) at {path.relative_to(self.root)}/"
+                    + ("." if gpu else ". It is code only: it does not hold the GPU until tree_start.")
+                )
             return "\n".join(
                 [
-                    f"Created {nid} ({kind}) at {path.relative_to(self.root)}/ with a budget of {budget:.0f} min"
-                    + ("." if gpu else ", which counts from tree_start. It is code only: it does not hold the GPU."),
-                    f"Work only inside that directory. Give the sub-agent that path, the hypothesis and the budget. {deliver}",
+                    head,
+                    f"Work only inside that directory. Give the sub-agent that path and the hypothesis. {deliver}",
                     *(
                         [
                             "Merge conflicts to resolve in the node: "
@@ -685,8 +769,10 @@ class ResearchTree:
                 ]
             )
 
-    def start(self, node: str, minutes: float | None = None) -> str:
-        """Give the GPU to a code-only node and start its budget."""
+    def start(self, node: str) -> str:
+        """Give the GPU to a code-only node."""
+        if self.skeleton:
+            raise TreeError("in this run the GPU is leased: give it to a node with gpu_grant(node)")
         with self._edit() as st:
             nodes = st["nodes"]
             n = nodes.get(node)
@@ -694,7 +780,7 @@ class ResearchTree:
                 prepared = [k for k, x in nodes.items() if self._waiting(x)]
                 raise TreeError(
                     f"{node} is not a prepared code-only node; prepared: {', '.join(prepared) or 'none'}. "
-                    "A node opened with gpu=true is on the clock from tree_new."
+                    "A node opened with gpu=true holds the GPU from tree_new."
                 )
             busy = [k for k, x in nodes.items() if x["status"] == "running" and x.get("gpu")]
             if busy:
@@ -702,27 +788,24 @@ class ResearchTree:
                     f"{', '.join(busy)} holds the GPU; close it with tree_finish first"
                 )
             usable = self._remaining(st) - st["reserve_minutes"]
-            lo, hi = st["min_node_minutes"], NODE_MAX_MINUTES
+            lo = st["min_node_minutes"]
             if usable < lo:
                 raise TreeError(
                     f"only {max(usable, 0):.0f} min of usable time left, a node needs at least {lo:.0f}. "
                     "Close the tree: tree_finalize."
                 )
-            n["budget_minutes"] = min(max(float(minutes or n["budget_minutes"]), lo), hi, usable)
             n["gpu"] = True
             n["clock_from"] = self.now()
-            self._log(st, "node-train-start", node=node, minutes=n["budget_minutes"])
-            until = time.strftime("%H:%M", time.localtime(self.now() + n["budget_minutes"] * 60))
+            self._log(st, "node-train-start", node=node)
             note = (
-                f"\n\n## Started\n\nThe GPU is now this node's. Its budget is {n['budget_minutes']:.0f} minutes "
-                f"from now (until about {until}). Follow START.md: run the full training, then the inference "
-                "and the files, and leave NODE_REPORT.md.\n"
+                "\n\n## Started\n\nThe GPU is now this node's. Follow START.md: run the full training, then the "
+                "inference and the files, and leave NODE_REPORT.md.\n"
             )
             brief = self.repo.node_path(node) / "BRIEF.md"
             if brief.exists():
                 brief.write_text(brief.read_text() + note)
             return (
-                f"{node} started with a budget of {n['budget_minutes']:.0f} min. Tell a sub-agent to read "
+                f"{node} started on the GPU. Tell a sub-agent to read "
                 f"{self.repo.node_path(node).relative_to(self.root)}/BRIEF.md (see 'Started') and START.md and to carry out "
                 f"the training and inference; close the node with tree_finish {node}."
             )
@@ -788,8 +871,8 @@ class ResearchTree:
             if parents and (self.repo.node_path(parents[0]) / "outputs").is_dir()
             else ""
         )
-        left = node["budget_minutes"]
-        until = time.strftime("%H:%M", time.localtime(self.now() + left * 60))
+        end = st["deadline"] - st["reserve_minutes"] * 60
+        until = time.strftime("%H:%M", time.localtime(end))
         blueprint = [
             f"- {k}: {node[key]}"
             for k, key in (
@@ -806,11 +889,12 @@ class ResearchTree:
             if node.get(key)
         ]
         backing = st.get("plans", {}).get(node.get("plan_id") or "")
-        plan_section = (
-            [f"### The accepted plan ({backing['id']}): build this", backing["text"], ""]
-            if backing
-            else []
+        heading = (
+            f"### The accepted skeleton ({backing['id']}): work out its details and build it"
+            if backing and self.skeleton
+            else f"### The accepted plan ({backing['id']}): build this" if backing else ""
         )
+        plan_section = [heading, backing["text"], ""] if backing else []
         found = (
             "\n\n".join(render_event(e, compact=True) for e in shown)
             or "(nothing yet: this is the first step)"
@@ -836,19 +920,30 @@ class ResearchTree:
                 + ", ".join(node["conflicts"])
                 + ". Resolve them first (keep what served each parent's result)."
             )
-        clock_rule = (
-            f"This step has a budget of {left:.0f} minutes from now (until about {until}). Test on a "
-            "small slice first, start long training with `nohup <command> > outputs/train.log 2>&1 &` and check "
-            "its log with separate short commands. Write predictions as soon as you have a model, then "
-            "overwrite them if you improve."
-            if node.get("gpu")
-            else "Another node is using the GPU, so this step is code only for now. Write the code and check it "
-            "on a tiny slice (a few steps, a few hundred rows), without starting the full training. Leave "
-            "`START.md` in this directory with the exact commands, in order, for the full training, the "
-            "inference on `data/holdout` and `data/test`, and the files to write. Its "
-            f"budget of {left:.0f} minutes counts from when the main agent starts it with `tree_start`; "
-            "the full run is done by a later session that follows START.md."
-        )
+        if self.skeleton:
+            clock_rule = (
+                f"The run ends at about {until}; leave the node's files well before that. The GPU is shared: "
+                "until you hold it your commands see none. Work out the design and test the code on a small slice "
+                "on the CPU first, then call `request_gpu(reason)` for the GPU work, and `release_gpu` as soon as "
+                "it is done. Start long training with `nohup <command> > outputs/train.log 2>&1 &` once you hold "
+                "the GPU, and check its log with separate short commands. Write predictions as soon as you have a "
+                "model, then overwrite them if you improve."
+            )
+        elif node.get("gpu"):
+            clock_rule = (
+                f"The run ends at about {until}; leave the node's files well before that. Test on a "
+                "small slice first, start long training with `nohup <command> > outputs/train.log 2>&1 &` and check "
+                "its log with separate short commands. Write predictions as soon as you have a model, then "
+                "overwrite them if you improve."
+            )
+        else:
+            clock_rule = (
+                "Another node is using the GPU, so this step is code only for now. Write the code and check it "
+                "on a tiny slice (a few steps, a few hundred rows), without starting the full training. Leave "
+                "`START.md` in this directory with the exact commands, in order, for the full training, the "
+                "inference on `data/holdout` and `data/test`, and the files to write. The full run is done by a "
+                "later session that follows START.md, after the main agent starts it with `tree_start`."
+            )
         rules = [
             clock_rule,
             "Work only inside this directory. Do not modify `data/`. Put checkpoints and logs under "
@@ -972,7 +1067,11 @@ class ResearchTree:
         direction = st["direction"]
         path = self.repo.node_path(nid)
         # A job the sub-agent detached would keep the GPU after the node is closed.
-        killed = kill_processes_under(path) if path.is_dir() else []
+        killed = self.hub.close_node(nid) if self.skeleton else []
+        killed += kill_processes_under(path) if path.is_dir() else []
+        if self.skeleton and node.get("skeleton") and (path / "DESIGN.md").is_file():
+            (self.dir / "artifacts" / nid).mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path / "DESIGN.md", self.dir / "artifacts" / nid / "DESIGN.md")
         art = self.dir / "artifacts" / nid
         art.mkdir(parents=True, exist_ok=True)
         for name in (st["prediction_file"], st["deliverable"], "NODE_REPORT.md"):
@@ -1056,7 +1155,7 @@ class ResearchTree:
             "Source": source,
             "Cluster": node.get("cluster") or "",
             "Based-On": ",".join(node["based_on"]),
-            "Minutes": f"{minutes}/{node['budget_minutes']:.0f}",
+            "Minutes": f"{minutes}",
             "Diffstat": diffstat,
             "Error": res.get("error") or "",
             "Unresolved-Conflicts": ",".join(unresolved),
@@ -1092,7 +1191,7 @@ class ResearchTree:
         out = [
             f"{nid} closed as {status}"
             + (f", score {res['score']:.4f}" if scored else "")
-            + f" after {minutes} min (budget {node['budget_minutes']:.0f})."
+            + f" after {minutes} min."
         ]
         if deltas:
             out.append(
@@ -1130,6 +1229,8 @@ class ResearchTree:
             champion=st["champion"],
             killed=len(killed),
         )
+        if self.skeleton and node.get("skeleton") and not abandon_reason and not (path / "DESIGN.md").is_file():
+            out.append(f"Note: {nid} left no DESIGN.md, so its detailed design is not on record.")
         if self.require_plans and scored:
             out.append(
                 f"Start node-analyst on {nid} now with task_start: its analysis (tree_analysis) and the choices it "
@@ -1177,8 +1278,8 @@ class ResearchTree:
         if self.require_plans:
             if kind in ("explore", "refine") and plan is None:
                 raise TreeError(
-                    f"{kind} nodes need an accepted plan: have the plan-writer write one for this "
-                    "direction, record it with tree_plan, accept it, then pass plan_id here"
+                    f"{kind} nodes need an accepted plan: one written by {self._writer} for this "
+                    "direction, recorded with tree_plan and accepted; then pass plan_id here"
                 )
         return plan
 
@@ -1191,7 +1292,9 @@ class ResearchTree:
             raise TreeError(
                 f"{', '.join(missing)} has no analysis yet, and a plan that builds on a node is written from it. "
                 f"Start node-analyst on {missing[0]} (task_start); when its reply is back, record the analysis with "
-                f"tree_analysis(node='{missing[0]}', path=...), then ask plan-writer for this plan. Meanwhile a "
+                f"tree_analysis(node='{missing[0]}', path=...), then "
+                + ("write this skeleton" if self.skeleton else "ask plan-writer for this plan")
+                + ". Meanwhile a "
                 "plan for a new direction (no parents) or an accepted plan can go ahead."
             )
 
@@ -1313,8 +1416,9 @@ class ResearchTree:
                 )
             found["feedback"] = reason.strip()
             return (
-                f"{plan_id} sent back. Give the plan-writer this feedback, then record the new text with "
-                f"tree_plan(plan_id='{plan_id}', text=...):\n{reason.strip()}"
+                f"{plan_id} sent back. "
+                + ("Rewrite the skeleton" if self.skeleton else "Give the plan-writer this feedback")
+                + f", then record the new file with tree_plan(plan_id='{plan_id}', path=...):\n{reason.strip()}"
             )
         found["status"] = "accepted" if decision == "accepted" else "rejected"
         found["decision_reason"] = reason.strip()
@@ -1342,9 +1446,15 @@ class ResearchTree:
             return (
                 f"Analysis of {node} recorded (reports/analysis/{node}.md)"
                 + (f", with {len(open_here)} open choice(s) attached to {node}" if open_here else "")
-                + f". A plan that builds on {node} can now be asked for; plan-writer reads the analysis"
-                + (" and those choices" if open_here else "")
-                + " from the record."
+                + (
+                    f". A skeleton that builds on {node} can now be written from the analysis"
+                    + (" and those choices" if open_here else "")
+                    + "."
+                    if self.skeleton
+                    else f". A plan that builds on {node} can now be asked for; plan-writer reads the analysis"
+                    + (" and those choices" if open_here else "")
+                    + " from the record."
+                )
             )
 
     # ------------------------------------------------------------- choices
