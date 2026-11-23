@@ -65,7 +65,7 @@ COLLECT = "task_collect"
 POLL_SECONDS = 0.2  # how soon a finished job is noticed while waiting
 MAX_WAIT_MINUTES = 15.0  # one wait never blocks longer; the agent (or the end-of-run guard) waits again
 NODE_AGENT = "node-agent"
-_NODE_LINE = re.compile(r"^\s*(?:node\s*[:=]?\s*)?(n\d+)\b", re.I)
+_NODE_LINE = re.compile(r"^\s*(?:node\s*[:=]?\s*)?(n\d+)\b", re.IGNORECASE)
 
 
 def node_of(description: str) -> str:

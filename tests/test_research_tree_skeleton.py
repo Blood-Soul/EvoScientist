@@ -416,7 +416,7 @@ def _accepted(tree, root) -> str:
 
 class TestTree:
     def test_several_nodes_open_at_once_and_none_holds_the_gpu(self, skel):
-        tree, hub, root, clock = skel
+        tree, hub, root, _clock = skel
         out1 = tree.new_node(kind="explore", title="a", hypothesis="h", plan_id=_accepted(tree, root))
         out2 = tree.new_node(kind="explore", title="b", hypothesis="h", plan_id=_accepted(tree, root))
         assert "node-agent" in out1 and "first line" in out1 and "Created n2" in out2
@@ -512,8 +512,8 @@ class TestWiring:
         assert "DESIGN.md" in text and "not its values" in text and "drawn from E-" in text
 
     def test_the_run_picks_its_sub_agents_and_hub_from_the_switch(self, tmp_path):
-        from EvoScientist.EvoScientist import _select_subagents, _skeleton_hub
         from EvoScientist.config.settings import EvoScientistConfig
+        from EvoScientist.EvoScientist import _select_subagents, _skeleton_hub
 
         class WS:
             root = tmp_path
