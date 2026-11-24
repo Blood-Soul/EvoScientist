@@ -473,6 +473,9 @@ class EvoScientistConfig:
     # Register `review_plan` for the sub-agents whose YAML lists it: a finished plan is read against the experience
     # library and comes back with suggestions that cite their records.
     memory_plan_review_enabled: bool = True
+    # Start node-analyst on a scored node without the coordinator asking: the analysis is CPU work, and the
+    # coordinator's only remaining part is recording the file with tree_analysis. Needs background tasks.
+    research_tree_auto_analysis: bool = True
 
     # Research tree. Registers the `tree_*` tools and appends the research-tree
     # section to the system prompt: the agent runs an end-to-end research task as
@@ -1439,6 +1442,7 @@ _ENV_MAPPINGS = {
     "research_tree_background_tasks": "EVOSCIENTIST_RESEARCH_TREE_BACKGROUND_TASKS",
     "research_tree_skeleton": "EVOSCIENTIST_RESEARCH_TREE_SKELETON",
     "memory_plan_review_enabled": "EVOSCIENTIST_MEMORY_PLAN_REVIEW_ENABLED",
+    "research_tree_auto_analysis": "EVOSCIENTIST_RESEARCH_TREE_AUTO_ANALYSIS",
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
 

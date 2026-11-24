@@ -1306,7 +1306,13 @@ def _get_default_middleware(
         from .middleware.background_tasks import BackgroundTaskMiddleware
 
         hub = _skeleton_hub(cfg, workspace)
-        mw.append(BackgroundTaskMiddleware(workspace.root, hub=hub))
+        mw.append(
+            BackgroundTaskMiddleware(
+                workspace.root,
+                hub=hub,
+                auto_analysis=getattr(cfg, "research_tree_auto_analysis", True) is True,
+            )
+        )
         if hub is not None:
             from .middleware.coord_notes import CoordNotesMiddleware
 

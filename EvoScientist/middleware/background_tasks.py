@@ -36,6 +36,12 @@ In a skeleton run (a coordination hub is given, see :mod:`EvoScientist.research_
   so the prompt cache stays valid.
 - `task_collect` also returns when the hub has a note for the main agent (a question, a GPU request, a free GPU),
   so a node that waits for an answer is never stuck behind a long wait.
+
+With `auto_analysis` on (the default when the tree requires plans), the analysis of a scored node needs no call:
+when `tree_finish` closes a node, a `node-analyst` job starts for it, and when it finishes the hub note carries the
+path it wrote. The coordinator's only remaining part is `tree_analysis` -- reading the file and recording it is a
+judgement, so it stays with the coordinator. A node that is already analysed, already has an analysis running, or
+has no score (abandoned, failed) is not started, and nothing starts in the last few minutes of the run.
 """
 
 from __future__ import annotations
@@ -60,6 +66,8 @@ from pydantic import BaseModel, Field
 
 from ..research_tree.coord import CURRENT_NODE, MAIN
 
+ANALYST = "node-analyst"
+AUTO_ANALYSIS_MIN_REMAINING = 300.0  # s: an analysis started with less time than this cannot finish
 START = "task_start"
 COLLECT = "task_collect"
 POLL_SECONDS = 0.2  # how soon a finished job is noticed while waiting
@@ -110,11 +118,18 @@ class BackgroundTaskMiddleware(AgentMiddleware):
 
     name = "background_tasks"
 
-    def __init__(self, root: str | Path, *, now: Callable[[], float] = time.time, hub=None) -> None:
+    def __init__(self, root: str | Path, *, now: Callable[[], float] = time.time, hub=None,
+                 auto_analysis: bool = False, analysis_min_remaining: float = AUTO_ANALYSIS_MIN_REMAINING) -> None:
         super().__init__()
-        self.dir = Path(root) / ".research" / "background"
+        self.root = Path(root)
+        self.dir = self.root / ".research" / "background"
         self.now = now
         self.hub = hub
+        # Start node-analyst on every scored node that has no analysis yet (see the module docstring).
+        self.auto_analysis = auto_analysis and hub is not None
+        self.analysis_min_remaining = analysis_min_remaining
+        self._state_mtime: tuple[float, int] | None = None
+        self._state_cache: dict[str, Any] | None = None
         self.jobs: dict[str, dict[str, Any]] = {}
         self._handles: dict[str, Any] = {}  # job id -> asyncio.Task or Thread (kept so a task is not collected)
         self._task_tool: Any = None
@@ -200,9 +215,15 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         if self.hub is not None:
             if rec.get("node"):
                 self.hub.job_ended(rec["node"], rec["id"])
-            self.hub._emit(MAIN, f"Background job {rec['id']} ({rec['subagent']}"
-                           + (f", {rec['node']}" if rec.get("node") else "")
-                           + f") {status}. Read its reply with {COLLECT}.")
+            if rec["subagent"] == ANALYST and (nid := node_of(rec.get("description") or "")):
+                reply = " ".join((text or "").split())[:240]
+                self.hub._emit(MAIN, f"Analysis of {nid} {status} ({rec['id']}). {reply} "
+                                     f"Record it with tree_analysis(node='{nid}', "
+                                     f"path='reports/drafts/analysis-{nid}.md').")
+            else:
+                self.hub._emit(MAIN, f"Background job {rec['id']} ({rec['subagent']}"
+                               + (f", {rec['node']}" if rec.get("node") else "")
+                               + f") {status}. Read its reply with {COLLECT}.")
         self._announce(rec, writer)
 
     @staticmethod
@@ -274,6 +295,112 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         rec["node"] = node_of(description)
         self.hub.attach_job(rec["node"], rec["id"])
         self._write(rec)
+
+    # ------------------------------------------------------------------ automatic analysis
+
+    def _tree_state(self) -> dict[str, Any] | None:
+        """The tree's state, re-read only when the file changed (one stat per tool call, not one parse)."""
+        path = self.root / ".research" / "state.json"
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        stamp = (stat.st_mtime, stat.st_size)
+        if stamp != self._state_mtime:
+            try:
+                self._state_cache = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                self._state_cache = None
+            self._state_mtime = stamp
+        return self._state_cache
+
+    def _analysis_due(self) -> list[str]:
+        """Scored nodes with no recorded analysis and no analysis job running, soonest-first by id."""
+        state = self._tree_state()
+        if not isinstance(state, dict):
+            return []
+        deadline = state.get("deadline")
+        if isinstance(deadline, (int, float)) and deadline - self.now() < self.analysis_min_remaining:
+            return []
+        analysed = state.get("analyses") or {}
+        # A finished analysis that the coordinator has not recorded yet is not started again: the note told it
+        # where the file is. A failed or lost one may be retried.
+        attempted = {
+            node_of(job.get("description") or "")
+            for job in self.jobs.values()
+            if job.get("subagent") == ANALYST and job.get("status") in ("running", "done")
+        }
+        return sorted(
+            nid for nid, node in (state.get("nodes") or {}).items()
+            if node.get("score") is not None
+            and node.get("status") != "running"
+            and nid not in analysed
+            and nid not in attempted
+        )
+
+    def _analysis_job_running(self, nid: str) -> bool:
+        return any(job.get("status") == "running" and job.get("subagent") == ANALYST
+                   and node_of(job.get("description") or "") == nid for job in self.jobs.values())
+
+    @staticmethod
+    def _analysis_description(nid: str) -> str:
+        return (
+            f"{nid}\n\nAnalyse node {nid}: what it got right, what is wrong and why, measured on what it saved, "
+            f"and the choices it leaves open. Write the analysis to reports/drafts/analysis-{nid}.md. Other nodes "
+            "may be training: work on this node's saved outputs on the CPU, and record a check that needs the GPU "
+            "as an open choice instead of running it."
+        )
+
+    def _start_due_analyses(self, runtime: Any) -> list[str]:
+        """Start an analysis for every due node; returns the node ids started. Never raises."""
+        if not self.auto_analysis or self._task_tool is None or runtime is None:
+            return []
+        started: list[str] = []
+        for nid in self._analysis_due():
+            try:
+                text = self._start_sync(ANALYST, self._analysis_description(nid), runtime)
+            except Exception:  # noqa: BLE001 - an analysis that cannot start must not fail the tool call that closed a node
+                continue
+            if text.startswith("Started "):
+                started.append(nid)
+                if self.hub is not None:
+                    self.hub._emit(MAIN, f"Analysis of {nid} started on its own ({text.split('(')[0].strip()}). "
+                                         f"Its file will be reports/drafts/analysis-{nid}.md; record it with "
+                                         f"tree_analysis when the note says it is ready.")
+        return started
+
+    async def _start_due_analyses_async(self, runtime: Any) -> list[str]:
+        if not self.auto_analysis or self._task_tool is None or runtime is None:
+            return []
+        started: list[str] = []
+        for nid in self._analysis_due():
+            try:
+                text = await self._start_async(ANALYST, self._analysis_description(nid), runtime)
+            except Exception:  # noqa: BLE001
+                continue
+            if text.startswith("Started "):
+                started.append(nid)
+                if self.hub is not None:
+                    self.hub._emit(MAIN, f"Analysis of {nid} started on its own ({text.split('(')[0].strip()}). "
+                                         f"Its file will be reports/drafts/analysis-{nid}.md; record it with "
+                                         f"tree_analysis when the note says it is ready.")
+        return started
+
+    def _closes_a_node(self, call: dict[str, Any]) -> bool:
+        return (call.get("name") == "tree_finish"
+                and not (call.get("args") or {}).get("abandon_reason"))
+
+    def wrap_tool_call(self, request, handler):
+        result = handler(request)
+        if self._closes_a_node(request.tool_call):
+            self._start_due_analyses(getattr(request, "runtime", None))
+        return result
+
+    async def awrap_tool_call(self, request, handler):
+        result = await handler(request)
+        if self._closes_a_node(request.tool_call):
+            await self._start_due_analyses_async(getattr(request, "runtime", None))
+        return result
 
     def _started_text(self, rec: dict[str, Any]) -> str:
         return (f"Started {rec['id']} ({rec['subagent']}). It runs in the background; {len(self._running())} job(s) "

@@ -274,7 +274,10 @@ class ResearchTree:
                 "prepared while " + (", ".join(running) + " work" if running else "nothing else runs")
             )
         if due:
-            parts.append(f"analysis due for {', '.join(due)}: start node-analyst with task_start")
+            parts.append(
+                f"analysis due for {', '.join(due)}: it starts on its own; start node-analyst with task_start "
+                "if it did not"
+            )
         orphans = [k for k in running if not hub.job_of(k)]
         if orphans:
             parts.append(
@@ -360,7 +363,8 @@ class ResearchTree:
                 "3. tree_new(plan_id=...) opens a node and writes its brief; start node-agent on it with task_start. "
                 "It works out the details, writes the code and runs it inside nodes/<id>/, asking you for the GPU "
                 "when it needs it. Write the next skeleton meanwhile.\n"
-                "4. tree_finish scores the node; start node-analyst on it in the background (task_start)."
+                "4. tree_finish scores the node; its analysis starts on its own. Read the note, then record the "
+                "file with tree_analysis."
                 if self.require_plans and self.skeleton
                 else "\n\nHow this run goes (the tools refuse the shortcuts):\n"
                 "1. tree_survey: record the mechanism families you found.\n"
@@ -1232,11 +1236,18 @@ class ResearchTree:
         if self.skeleton and node.get("skeleton") and not abandon_reason and not (path / "DESIGN.md").is_file():
             out.append(f"Note: {nid} left no DESIGN.md, so its detailed design is not on record.")
         if self.require_plans and scored:
-            out.append(
-                f"Start node-analyst on {nid} now with task_start: its analysis (tree_analysis) and the choices it "
-                f"leaves open (tree_choice) are what a plan that builds on {nid} is written from. It runs in the "
-                "background; open a node on an accepted plan meanwhile if one is ready."
-            )
+            if self.skeleton:
+                out.append(
+                    f"The analysis of {nid} starts on its own in the background; when the note says it is ready, "
+                    f"record it with tree_analysis. Its choices (tree_choice) are what the skeleton that builds on "
+                    f"{nid} is written from. A new direction can be prepared meanwhile."
+                )
+            else:
+                out.append(
+                    f"Start node-analyst on {nid} now with task_start: its analysis (tree_analysis) and the choices "
+                    f"it leaves open (tree_choice) are what a plan that builds on {nid} is written from. It runs in "
+                    "the background; open a node on an accepted plan meanwhile if one is ready."
+                )
         nudge = self._insight_nudge(st)
         if nudge:
             out.append(nudge)

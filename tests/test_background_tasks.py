@@ -151,3 +151,92 @@ def test_the_run_cannot_end_while_a_job_is_open(tmp_path):
     text = jump["messages"][0].text
     assert "bg-1" in text and "reply of slow" in text
     assert mw.after_agent({"messages": [AIMessage("done")]}, None) is None   # collected now: it ends
+
+
+# --------------------------------------------------------------- automatic analysis
+
+
+class _Hub:
+    """Just the hub surface the auto-analysis path touches: notes out, and the node bookkeeping it may call."""
+
+    def __init__(self) -> None:
+        self.notes: list[str] = []
+
+    def _emit(self, channel, text):
+        self.notes.append(text)
+
+    def job_ended(self, node, job):
+        pass
+
+    def job_of(self, node):
+        return None
+
+
+def _tree(tmp_path, nodes: dict, analyses: dict | None = None, seconds_left: float = 3600) -> None:
+    (tmp_path / ".research").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".research" / "state.json").write_text(json.dumps({
+        "deadline": time.time() + seconds_left, "nodes": nodes, "analyses": analyses or {},
+    }))
+
+
+def _scored(status: str = "done") -> dict:
+    return {"status": status, "score": 0.5}
+
+
+def test_analysis_is_due_only_for_scored_unanalysed_nodes(tmp_path):
+    _tree(tmp_path, {"n1": _scored(), "n2": _scored(), "n3": {"status": "failed", "score": None},
+                     "n4": {"status": "running", "score": None}}, analyses={"n2": {}})
+    mw = BackgroundTaskMiddleware(tmp_path, hub=_Hub(), auto_analysis=True)
+    assert mw._analysis_due() == ["n1"]
+
+
+def test_nothing_starts_in_the_last_minutes(tmp_path):
+    _tree(tmp_path, {"n1": _scored()}, seconds_left=60)
+    mw = BackgroundTaskMiddleware(tmp_path, hub=_Hub(), auto_analysis=True)
+    assert mw._analysis_due() == []
+
+
+def test_closing_a_node_starts_its_analysis_and_notes_the_main_agent(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    _tree(tmp_path, {"n1": _scored()})
+    hub, task = _Hub(), _Task()
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_analysis=True)
+    mw._task_tool = task
+
+    async def handler(request):
+        return "node closed"
+
+    request = SimpleNamespace(tool_call={"name": "tree_finish", "args": {"node": "n1"}, "id": "c1"},
+                              runtime=_runtime("c1"))
+    asyncio.run(mw.awrap_tool_call(request, handler))
+    assert task.calls
+    assert task.calls[0][0] == "node-analyst"
+    assert task.calls[0][1].startswith("n1")
+    assert any("Analysis of n1 started" in note for note in hub.notes)
+
+
+def test_an_abandoned_node_starts_no_analysis_and_a_done_job_is_not_restarted(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    _tree(tmp_path, {"n1": _scored(), "n2": {"status": "abandoned", "score": None}})
+    hub, task = _Hub(), _Task()
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_analysis=True)
+    mw._task_tool = task
+
+    async def handler(request):
+        return "closed"
+
+    runtime = _runtime("c1")
+    abandoned = SimpleNamespace(tool_call={"name": "tree_finish", "args": {"node": "n2", "abandon_reason": "x"},
+                                           "id": "c2"}, runtime=runtime)
+    asyncio.run(mw.awrap_tool_call(abandoned, handler))
+    assert task.calls == []
+
+    first = SimpleNamespace(tool_call={"name": "tree_finish", "args": {"node": "n1"}, "id": "c1"}, runtime=runtime)
+    asyncio.run(mw.awrap_tool_call(first, handler))
+    mw.jobs[next(iter(mw.jobs))]["status"] = "done"   # the job finished; the file is not recorded yet
+    asyncio.run(mw.awrap_tool_call(first, handler))
+    assert [c[0] for c in task.calls] == ["node-analyst"]

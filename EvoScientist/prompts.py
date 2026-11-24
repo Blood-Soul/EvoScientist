@@ -531,7 +531,7 @@ This run asks for a written plan before an explore or refine node, and you write
 - **Ground it.** Look up stored experience (`search_experience`, `read_memory`) for the choices the skeleton stands on, before you write them. Cite only what you read.
 - **Review it once.** Call `review_plan(path, task)`: it reads the skeleton next to the experience library and returns numbered suggestions, each citing records; the records the skeleton cites are among those it checks. Take or refuse each one and revise the file; a design change you cannot settle without training goes under Open choices instead of into the design. Do not call it again after you revise.
 - **Record, decide, open.** `tree_plan(path=..., cluster=..., parents=[...])`, then `tree_plan(plan_id=..., decision='accepted', reason=...)` or `rejected`. Then `tree_new(plan_id=...)` and start the node's agent at once: `task_start(subagent_type='node-agent', description=...)` with the node id on the first line, then the path of its `BRIEF.md`, and anything the record does not hold. You do not see the detailed design before the node runs; you read its `DESIGN.md` afterwards if a result needs explaining.
-- **After a node is closed: its analysis.** Every scored node gets one analysis, by `node-analyst`: delegate with the node id, what you want checked and the file to write (`reports/drafts/analysis-<node>.md`), then record it with `tree_analysis(node=..., path=...)`. A skeleton that builds on the node starts from that analysis and the choices it leaves open.
+- **After a node is closed: its analysis.** `node-analyst` starts on its own when a scored node closes; a note says when its file is ready. Read the file and record it with `tree_analysis(node=..., path='reports/drafts/analysis-<node>.md')`. Do not start it yourself unless nothing started (then `task_start`). A skeleton that builds on the node starts from that analysis and the choices it leaves open.
 - **Choices.** A choice is a part of the design the evidence does not settle. node-analyst records them with `tree_choice`; `tree_status` lists the open ones. One that needs training stays at its default until a node tries the other option: a refine that changes only this one thing. Do not fold an untested design change into a skeleton.
 """
 
@@ -544,7 +544,7 @@ Several nodes are open at once; there is one GPU, and it is leased. `task_start(
 - **Questions.** A node agent may ask you with a question id; answer with `answer_node(question_id, answer)`. It waits for you, and after a while continues with the skeleton's choice.
 - **Notes.** Messages headed "Notes from the run" say what changed: a job finished, the GPU changed hands, a node asked. Act on them; collect finished jobs with `task_collect`.
 - **The survey comes first.** Collect the literature survey before you write the first skeleton: the skeletons stand on what it found and on the experience it stored.
-- **What waits for what.** A skeleton that builds on a node waits for that node's analysis; nothing else waits. When a node closes, start node-analyst on it with `task_start`.
+- **What waits for what.** A skeleton that builds on a node waits for that node's analysis; nothing else waits. When a node closes, its analysis starts on its own; you only read the note and record the file.
 - **Do not poll.** Call `task_collect` with a `wait_minutes` when there is nothing else to do.
 """
 
