@@ -1225,5 +1225,6 @@ async def test_skeleton_guard_refusal_names_the_node_agent_and_the_skeleton() ->
 
     out = await guard.awrap_tool_call(blocked, handler)
     assert out.status == "error"
-    assert "node-agent" in out.content and "Write the skeleton yourself" in out.content
+    assert "node-agent" in out.content
+    assert "Write the skeleton yourself" in out.content
     assert "plan-writer" not in out.content
