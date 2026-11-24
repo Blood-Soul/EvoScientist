@@ -1331,8 +1331,14 @@ class ResearchTree:
         decision: str = "",
         reason: str = "",
         title: str = "",
+        source_path: str = "",
     ) -> str:
-        """Record a plan (or rewrite a draft), or decide on one."""
+        """Record a plan (or rewrite a draft), or decide on one.
+
+        `source_path` identifies the draft file the text came from. Re-recording the same file updates the plan it
+        already produced instead of adding a second one -- the coordinator revises a skeleton and records it again,
+        and the review happens between those two writes.
+        """
         if bool(text.strip()) == bool(decision):
             raise TreeError(
                 "give either a plan file (`path`: record or rewrite a plan) or a `decision` (accepted, "
@@ -1343,6 +1349,16 @@ class ResearchTree:
             plans = st.setdefault("plans", {})
             if decision:
                 return self._decide_plan(plans, plan_id, decision, reason)
+            if not plan_id and source_path:
+                same = next((pid for pid, p in plans.items() if p.get("source_path") == source_path), None)
+                if same:
+                    found = plans[same]
+                    reusable = found["status"] == "draft" or (found["status"] == "accepted" and not found.get("node"))
+                    if reusable and text.strip() == (found.get("text") or ""):
+                        return (f"{same} already holds this file; decide with "
+                                f"tree_plan(plan_id='{same}', decision=...).")
+                    if reusable:
+                        plan_id = same
             if plan_id:
                 found = plans.get(plan_id)
                 if found is None:
@@ -1372,6 +1388,8 @@ class ResearchTree:
                 found["rounds"] += 1
                 found["status"] = "draft"  # a rewritten plan is reviewed again
                 found["text"] = text.strip()
+                if source_path:
+                    found["source_path"] = source_path
                 found["feedback"] = ""
                 write_report(self.root, "plans", plan_id, text, found["rounds"] + 1)
                 self._log(st, "plan-rewrite", plan=plan_id, round=found["rounds"])
@@ -1401,6 +1419,7 @@ class ResearchTree:
                 "text": text.strip(),
                 "feedback": "",
                 "node": None,
+                "source_path": source_path or None,
             }
             write_report(self.root, "plans", pid, text, 1)
             self._log(st, "plan", plan=pid, cluster=cluster or None, parents=parents)

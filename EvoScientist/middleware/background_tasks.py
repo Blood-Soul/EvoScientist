@@ -37,11 +37,15 @@ In a skeleton run (a coordination hub is given, see :mod:`EvoScientist.research_
 - `task_collect` also returns when the hub has a note for the main agent (a question, a GPU request, a free GPU),
   so a node that waits for an answer is never stuck behind a long wait.
 
-With `auto_analysis` on (the default when the tree requires plans), the analysis of a scored node needs no call:
-when `tree_finish` closes a node, a `node-analyst` job starts for it, and when it finishes the hub note carries the
-path it wrote. The coordinator's only remaining part is `tree_analysis` -- reading the file and recording it is a
-judgement, so it stays with the coordinator. A node that is already analysed, already has an analysis running, or
-has no score (abandoned, failed) is not started, and nothing starts in the last few minutes of the run.
+Two more steps need no call when their switches are on:
+
+- `auto_analysis`: when `tree_finish` closes a scored node, a `node-analyst` job starts for it; when the job finishes,
+  its file is recorded with `tree_analysis` and the hub note carries the reply and the recorded id. A node already
+  analysed, already running an analysis, or without a score (abandoned, failed) is skipped, and nothing starts in the
+  last few minutes of the run.
+- `auto_plan_register`: a `write_file` to `reports/drafts/plan-*.md` records that skeleton with `tree_plan` once per
+  file, so the coordinator goes straight to the decision. A revision after the review is still recorded by the
+  coordinator with `tree_plan(path=...)`, which updates the same plan (plans keep their source path).
 """
 
 from __future__ import annotations
@@ -120,6 +124,7 @@ class BackgroundTaskMiddleware(AgentMiddleware):
 
     def __init__(self, root: str | Path, *, now: Callable[[], float] = time.time, hub=None,
                  auto_analysis: bool = False, auto_node_agent: bool = False,
+                 auto_plan_register: bool = False,
                  analysis_min_remaining: float = AUTO_ANALYSIS_MIN_REMAINING) -> None:
         super().__init__()
         self.root = Path(root)
@@ -134,6 +139,9 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         self.analysis_min_remaining = analysis_min_remaining
         self._state_mtime: tuple[float, int] | None = None
         self._state_cache: dict[str, Any] | None = None
+        self._tree_tools: dict[str, Any] = {}
+        self.auto_plan_register = auto_plan_register and hub is not None
+        self._auto_plans: dict[str, str] = self._load_auto_plans()
         self.jobs: dict[str, dict[str, Any]] = {}
         self._handles: dict[str, Any] = {}  # job id -> asyncio.Task or Thread (kept so a task is not collected)
         self._task_tool: Any = None
@@ -221,14 +229,32 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                 self.hub.job_ended(rec["node"], rec["id"])
             if rec["subagent"] == ANALYST and (nid := node_of(rec.get("description") or "")):
                 reply = " ".join((text or "").split())[:240]
-                self.hub._emit(MAIN, f"Analysis of {nid} {status} ({rec['id']}). {reply} "
-                                     f"Record it with tree_analysis(node='{nid}', "
-                                     f"path='reports/drafts/analysis-{nid}.md').")
+                recorded = self._record_analysis(nid)
+                self.hub._emit(MAIN, f"Analysis of {nid} {status} ({rec['id']}). {reply} {recorded}"
+                               if recorded else
+                               f"Analysis of {nid} {status} ({rec['id']}). {reply} Record it with "
+                               f"tree_analysis(node='{nid}', path='reports/drafts/analysis-{nid}.md').")
             else:
+                summary = " ".join((text or "").split())[:300]
                 self.hub._emit(MAIN, f"Background job {rec['id']} ({rec['subagent']}"
                                + (f", {rec['node']}" if rec.get("node") else "")
-                               + f") {status}. Read its reply with {COLLECT}.")
+                               + f") {status}. {summary}"
+                               + (f" (full reply: {COLLECT})" if len(text or "") > 300 else ""))
         self._announce(rec, writer)
+
+    def _record_analysis(self, nid: str) -> str:
+        """Record the analysis file the analyst wrote; returns the note fragment, or "" to leave it to the coordinator."""
+        if not self.auto_analysis:
+            return ""
+        rel = f"reports/drafts/analysis-{nid}.md"
+        tool = self._tree_tools.get("tree_analysis")
+        if tool is None or not (self.root / rel).is_file():
+            return ""
+        try:
+            out = tool.func(node=nid, path=rel)
+        except Exception:  # recording is a convenience; the coordinator can still do it
+            return ""
+        return (out.strip() if out.startswith("Analysis of") else f"Recording it failed: {out.strip()}")
 
     @staticmethod
     def _announce(rec: dict[str, Any], writer) -> None:
@@ -436,27 +462,88 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                     self.hub._emit(MAIN, f"node-agent started on {nid} on its own ({text.split('(')[0].strip()}).")
         return started
 
+    # ------------------------------------------------------------------ automatic plan registration
+
+    def _auto_plans_path(self) -> Path:
+        return self.dir / "auto_plans.json"
+
+    def _load_auto_plans(self) -> dict[str, str]:
+        try:
+            loaded = json.loads(self._auto_plans_path().read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {str(k): str(v) for k, v in loaded.items()} if isinstance(loaded, dict) else {}
+
+    def _save_auto_plans(self) -> None:
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            tmp = self._auto_plans_path().with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self._auto_plans, indent=1))
+            tmp.replace(self._auto_plans_path())
+        except OSError:
+            pass
+
+    @staticmethod
+    def _plan_draft(path: str) -> str:
+        """The workspace-relative draft path if this write is a skeleton draft, else ""."""
+        rel = str(path or "").replace("\\", "/").lstrip("/")
+        name = rel.rsplit("/", 1)[-1]
+        if not rel.startswith("reports/drafts/"):
+            return ""
+        return rel if name.startswith("plan-") and name.endswith(".md") else ""
+
+    def _register_plan(self, rel: str) -> str:
+        """Record a skeleton the coordinator just wrote, once per file; returns the note to the coordinator."""
+        if not self.auto_plan_register or rel in self._auto_plans:
+            return ""
+        tool = self._tree_tools.get("tree_plan")
+        if tool is None:
+            return ""
+        try:
+            text = tool.func(path=rel)
+        except Exception:  # a registration that fails must not fail the write that produced the skeleton
+            return ""
+        pid = text.split(" ", 1)[0] if text.startswith("P") else ""
+        if not (pid and pid[1:].isdigit()):
+            return ""   # no survey yet, an unaccepted parent, or an error: the coordinator records it itself
+        self._auto_plans[rel] = pid
+        self._save_auto_plans()
+        if self.hub is not None:
+            self.hub._emit(MAIN, f"{rel} recorded as {pid} on its own (a draft). Review it, then decide with "
+                                 f"tree_plan(plan_id='{pid}', decision=...).")
+        return pid
+
     def _closes_a_node(self, call: dict[str, Any]) -> bool:
         return (call.get("name") == "tree_finish"
                 and not (call.get("args") or {}).get("abandon_reason"))
 
     def wrap_tool_call(self, request, handler):
         result = handler(request)
-        runtime = getattr(request, "runtime", None)
+        runtime = request.runtime
         if self._closes_a_node(request.tool_call):
             self._start_due_analyses(runtime)
         if self._opens_a_node(request.tool_call):
             self._start_due_node_agents(runtime)
+        self._maybe_register_plan(request.tool_call)
         return result
 
     async def awrap_tool_call(self, request, handler):
         result = await handler(request)
-        runtime = getattr(request, "runtime", None)
+        runtime = request.runtime
         if self._closes_a_node(request.tool_call):
             await self._start_due_analyses_async(runtime)
         if self._opens_a_node(request.tool_call):
             await self._start_due_node_agents_async(runtime)
+        self._maybe_register_plan(request.tool_call)
         return result
+
+    def _maybe_register_plan(self, call: dict[str, Any]) -> None:
+        if call.get("name") != "write_file" or not self.auto_plan_register:
+            return
+        args = call.get("args") or {}
+        rel = self._plan_draft(str(args.get("file_path") or args.get("path") or ""))
+        if rel:
+            self._register_plan(rel)
 
     @staticmethod
     def _opens_a_node(call: dict[str, Any]) -> bool:
@@ -557,8 +644,11 @@ class BackgroundTaskMiddleware(AgentMiddleware):
 
     def _prepare(self, request):
         for t in request.tools or []:
-            if getattr(t, "name", None) == "task":
+            name = getattr(t, "name", None)
+            if name == "task":
                 self._task_tool = t
+            elif name in ("tree_analysis", "tree_plan"):
+                self._tree_tools[name] = t
         done, running = self._unreported(), self._running()
         if not done or self.hub is not None:  # with a hub, what finished arrives as a note (coord_notes)
             return request

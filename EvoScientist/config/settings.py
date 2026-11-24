@@ -479,6 +479,9 @@ class EvoScientistConfig:
     # Start node-agent on a node the coordinator opens: the brief is already written by tree_new, and a node with no
     # agent runs nothing. Needs background tasks and a skeleton run.
     research_tree_auto_node_agent: bool = True
+    # Record a skeleton draft when the coordinator writes it under reports/drafts/plan-*.md (once per file), so the
+    # coordinator only decides on it. A revision after the review is still recorded with tree_plan(path=...).
+    research_tree_auto_plan: bool = True
 
     # Research tree. Registers the `tree_*` tools and appends the research-tree
     # section to the system prompt: the agent runs an end-to-end research task as
@@ -1447,6 +1450,7 @@ _ENV_MAPPINGS = {
     "memory_plan_review_enabled": "EVOSCIENTIST_MEMORY_PLAN_REVIEW_ENABLED",
     "research_tree_auto_analysis": "EVOSCIENTIST_RESEARCH_TREE_AUTO_ANALYSIS",
     "research_tree_auto_node_agent": "EVOSCIENTIST_RESEARCH_TREE_AUTO_NODE_AGENT",
+    "research_tree_auto_plan": "EVOSCIENTIST_RESEARCH_TREE_AUTO_PLAN",
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
 

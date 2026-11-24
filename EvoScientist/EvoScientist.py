@@ -1312,6 +1312,7 @@ def _get_default_middleware(
                 hub=hub,
                 auto_analysis=getattr(cfg, "research_tree_auto_analysis", True) is True,
                 auto_node_agent=getattr(cfg, "research_tree_auto_node_agent", True) is True,
+                auto_plan_register=getattr(cfg, "research_tree_auto_plan", True) is True,
             )
         )
         if hub is not None:

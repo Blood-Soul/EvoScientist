@@ -322,6 +322,7 @@ def create_research_tree_tools(
             text = read_draft(tree.root, path)
             a["text"] = text
             a["title"] = a.get("title") or plan_title(text)
+            a["source_path"] = path
         return tree.plan(**a)
 
     extra: list[BaseTool] = []

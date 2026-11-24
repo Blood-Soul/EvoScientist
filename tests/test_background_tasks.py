@@ -279,3 +279,86 @@ def test_a_node_that_already_has_an_agent_is_not_started_again(tmp_path):
     mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_node_agent=True)
     mw._task_tool = _Task()
     assert mw._nodes_without_agent() == []
+
+
+
+class _TreeTool:
+    """A captured tree tool: records the calls and answers as the real one does."""
+
+    def __init__(self, name: str, reply: str) -> None:
+        self.name = name
+        self.reply = reply
+        self.calls: list[dict] = []
+
+    def func(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.reply
+
+
+def test_writing_a_skeleton_records_it_once(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    _tree(tmp_path, {"n1": {"status": "running", "score": None}})
+    hub = _Hub(open_nodes={"n1"})
+    plan = _TreeTool("tree_plan", "P3 recorded as a draft at reports/plans/P3.md. Read it in full, then call ...")
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_plan_register=True)
+    mw._tree_tools["tree_plan"] = plan
+
+    async def handler(request):
+        return "written"
+
+    call = {"name": "write_file", "args": {"file_path": "reports/drafts/plan-window.md"}, "id": "c1"}
+    asyncio.run(mw.awrap_tool_call(SimpleNamespace(tool_call=call, runtime=_runtime("c1")), handler))
+    asyncio.run(mw.awrap_tool_call(SimpleNamespace(tool_call=call, runtime=_runtime("c1")), handler))
+    assert [c["path"] for c in plan.calls] == ["reports/drafts/plan-window.md"]
+    assert any("recorded as P3" in note for note in hub.notes)
+    assert mw._load_auto_plans() == {"reports/drafts/plan-window.md": "P3"}
+
+
+def test_a_non_plan_write_or_a_failed_recording_does_nothing(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    _tree(tmp_path, {"n1": {"status": "running", "score": None}})
+    plan = _TreeTool("tree_plan", "ERROR: there is no research tree yet; call tree_init first")
+    mw = BackgroundTaskMiddleware(tmp_path, hub=_Hub(open_nodes={"n1"}), auto_plan_register=True)
+    mw._tree_tools["tree_plan"] = plan
+
+    async def handler(request):
+        return "written"
+
+    for path in ("reports/drafts/notes.md", "reports/drafts/analysis-n1.md", "src/train.py"):
+        call = {"name": "write_file", "args": {"file_path": path}, "id": "c1"}
+        asyncio.run(mw.awrap_tool_call(SimpleNamespace(tool_call=call, runtime=_runtime("c1")), handler))
+    assert plan.calls == []
+    call = {"name": "write_file", "args": {"file_path": "reports/drafts/plan-x.md"}, "id": "c2"}
+    asyncio.run(mw.awrap_tool_call(SimpleNamespace(tool_call=call, runtime=_runtime("c2")), handler))
+    assert len(plan.calls) == 1                      # it tried
+    assert mw._load_auto_plans() == {}               # an error is not remembered as registered
+
+
+def test_a_finished_analysis_is_recorded_and_noted(tmp_path):
+    _tree(tmp_path, {"n1": _scored()})
+    (tmp_path / "reports" / "drafts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports" / "drafts" / "analysis-n1.md").write_text("# Analysis: n1\n")
+    analysis = _TreeTool("tree_analysis", "Analysis of n1 recorded (reports/analysis/n1.md).")
+    hub = _Hub(open_nodes=set())
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_analysis=True)
+    mw._tree_tools["tree_analysis"] = analysis
+    rec = {"id": "bg-9", "n": 9, "subagent": "node-analyst", "description": "n1\n\nAnalyse node n1 ...",
+           "status": "running", "reported": False, "text": "", "started": 0, "tool_call_id": "c1"}
+    mw.jobs["bg-9"] = rec
+    mw._finish(rec, "reports/drafts/analysis-n1.md — the slice is wrong", "done")
+    assert analysis.calls == [{"node": "n1", "path": "reports/drafts/analysis-n1.md"}]
+    assert any("recorded (reports/analysis/n1.md)" in note for note in hub.notes)
+
+
+def test_a_node_job_note_carries_the_summary(tmp_path):
+    hub = _Hub(open_nodes=set())
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub)
+    rec = {"id": "bg-2", "n": 2, "subagent": "node-agent", "description": "n1\n\nBuild node n1 ...",
+           "status": "running", "reported": False, "text": "", "started": 0, "tool_call_id": "c1", "node": "n1"}
+    mw.jobs["bg-2"] = rec
+    mw._finish(rec, "Built n1; validation R@10 0.412; DESIGN.md records two open questions.", "done")
+    assert any("R@10 0.412" in note for note in hub.notes)
