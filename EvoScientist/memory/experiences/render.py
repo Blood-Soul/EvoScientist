@@ -362,6 +362,62 @@ def render_search(
     return "\n".join(out)
 
 
+def render_cross_domain(result: Mapping[str, Any]) -> str:
+    """A cross-field search as text: what passed the transfer check, and why the rest did not.
+
+    The header says "hypothesis" because that is what it is: a judge wrote the mapping from the record's text, and
+    nothing anywhere has applied it. Presenting it as a finding would invite the agent to adopt it unexamined, which
+    is the failure this whole path is built to avoid.
+    """
+    kept = list(result.get("kept") or [])
+    dropped = result.get("dropped") or {}
+    considered = int(result.get("considered") or 0)
+    goal = _s(result.get("goal"))
+    lines = ["Cross-field experience — a transfer hypothesis, not evidence.", ""]
+    if goal:
+        lines += [f"Need restated without the requester's vocabulary: {goal}", ""]
+    if not kept:
+        lines.append(f"No record passed the transfer check ({considered} candidate(s) considered).")
+        if dropped:
+            lines.append("Dropped: " + ", ".join(f"{reason} x{count}" for reason, count in sorted(dropped.items())) + ".")
+        return "\n".join(lines)
+    lines.append(f"{len(kept)} record(s) passed the transfer check, out of {considered} candidate(s):")
+    lines.append("")
+    for index, item in enumerate(kept, 1):
+        field = _s(item.get("discipline") or item.get("domain") or "unknown field")
+        task = _s(item.get("task"))
+        lines.append(f"{index}. {_s(item.get('id'))} — {field}" + (f" / {task}" if task else ""))
+        if item.get("summary"):
+            lines.append(f"   Problem it answers: {_s(item['summary'])}")
+        mappings = list(item.get("mappings") or [])
+        if mappings:
+            lines.append("   Object mappings (your problem -> the record):")
+            for pair in mappings:
+                source, target = _s(pair.get("source")), _s(pair.get("target"))
+                role = _s(pair.get("rationale"))
+                if source and target:
+                    lines.append(f"     - {source} -> {target}" + (f": {role}" if role else ""))
+                else:
+                    lines.append(f"     - {role}")
+        relations = list(item.get("relations") or [])
+        if relations:
+            lines.append("   Shared relation:")
+            for relation in relations:
+                name = _s(relation.get("relation"))
+                lines.append(f"     - {_s(relation.get('problem'))} <-> {_s(relation.get('solution'))}"
+                             + (f"  [{name}]" if name else ""))
+        if item.get("path"):
+            lines.append(f"   Transfer path: {_s(item['path'])}")
+        lines.append("")
+    lines += [
+        "These records come from other fields. The mapping and path were written by a judge reading the record's own "
+        "text; nobody has applied them. Check that the objects and the relation hold in your problem before adopting "
+        "anything, and treat what you adopt as a hypothesis of your own to test. Read a record in full with "
+        "read_memory(<id>).",
+    ]
+    return "\n".join(lines)
+
+
 def render_browse(result: Mapping[str, Any]) -> str:
     """The library overview from `browse_experience_facets`, as text."""
     total = result.get("total_records", 0)

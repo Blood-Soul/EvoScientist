@@ -734,6 +734,7 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     """
     from .memory.project import resolve_project_id
     from .tools import (
+        create_cross_domain_experience_tool,
         create_extract_paper_experiences_tool,
         create_list_experience_tool,
         create_read_paper_tool,
@@ -768,6 +769,12 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     if getattr(cfg, "memory_experience_search_enabled", True):
         for factory in (create_search_experience_tool, create_list_experience_tool):
             tool = factory(memory_dir=memory_dir, project_id=project_id)
+            tool_registry[tool.name] = tool
+            base_tools.append(tool)
+        # The cross-field path is a separate tool and a separate switch: it costs model calls per search, and what
+        # it returns is a hypothesis, so an arm that must not use it simply never sees the tool.
+        if getattr(cfg, "memory_cross_domain_search_enabled", False):
+            tool = create_cross_domain_experience_tool(memory_dir=memory_dir, project_id=project_id)
             tool_registry[tool.name] = tool
             base_tools.append(tool)
 

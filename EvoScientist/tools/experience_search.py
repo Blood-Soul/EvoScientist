@@ -27,14 +27,18 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field
 
+from ..memory.experiences.render import (
+    render_browse,
+    render_cross_domain,
+    render_search,
+)
 from ..memory.experiences.retrieval import (
     browse_experience_facets,
     degenerate_facets,
     search_experience_records,
 )
-from ..memory.experiences.taxonomy import DISCIPLINES
-from ..memory.experiences.render import render_browse, render_search
 from ..memory.experiences.store import list_experience_documents
+from ..memory.experiences.taxonomy import DISCIPLINES
 from ..memory.policy.trace import emit_tool_output
 from ..memory.runtime_context import runtime_project_id
 from ..memory.types import ExperienceLevel
@@ -320,7 +324,131 @@ def create_list_experience_tool(
     )
 
 
+class CrossDomainExperienceArgs(BaseModel):
+    """Model-facing arguments for the `search_experience_cross_field` tool."""
+
+    design_point: str = Field(
+        description=(
+            "What your work currently needs, in plain words: the difficulty, the constraint, or the decision to "
+            "make, and what makes it hard. Write it as a description, not as a search query, and do not name a "
+            "technique you already have in mind -- the point is to let a different field's vocabulary in."
+        ),
+    )
+    exclude_domain: str = Field(
+        default="",
+        description=(
+            "Optional: your own fine-grained domain label, exactly as `list_experience` reports it. Records with "
+            "this label are left out, so the results come from fields you would not otherwise read. Omit if you "
+            "do not know your label; records then come from everywhere."
+        ),
+    )
+    exclude_discipline: str = Field(
+        default="",
+        description=(
+            "Optional: your own coarse discipline, same vocabulary as `search_experience`'s `discipline` filter. "
+            "Left out records are excluded from the results."
+        ),
+    )
+    context: str = Field(
+        default="",
+        description=(
+            "Optional: what your work has to work with right now -- data available, compute, the metric that "
+            "matters, hard constraints. The transfer check reads it, so a practice whose prerequisites you do not "
+            "have is rejected instead of being handed to you."
+        ),
+    )
+    limit: int = Field(
+        default=4,
+        ge=1,
+        le=10,
+        description="Maximum number of records to return after the transfer check.",
+    )
+    runtime: Annotated[object | None, InjectedToolArg] = None
+
+
+def create_cross_domain_experience_tool(
+    *,
+    memory_dir: str | Path,
+    project_id: str,
+) -> BaseTool:
+    """Build the `search_experience_cross_field` tool.
+
+    It is a separate tool rather than a mode of `search_experience` because the question is a different one: that tool
+    takes subject facets and ranks by similarity, this one takes a design point and answers "is there a practice in
+    another field that would carry over". The two also differ in cost -- this one makes LLM calls -- and in the trust
+    the caller should place in the answer: one is a stored finding, the other a mapping written by a judge.
+    """
+
+    async def _search_cross_field(
+        design_point: str,
+        exclude_domain: str = "",
+        exclude_discipline: str = "",
+        context: str = "",
+        limit: int = 4,
+        runtime: Annotated[ToolRuntime | None, InjectedToolArg] = None,
+    ) -> str:
+        from ..EvoScientist import _ensure_auxiliary_chat_model
+        from ..memory.experiences.cross_domain import search_cross_domain
+        from ..middleware.utils import quiet_model
+
+        project = runtime_project_id(runtime, project_id)
+        try:
+            model = quiet_model(_ensure_auxiliary_chat_model())
+        except Exception as exc:
+            return (
+                "Cross-field search is unavailable: no auxiliary chat model is configured, and this path needs one "
+                f"to restate the need and to judge transferability ({type(exc).__name__}). Use `search_experience` "
+                "instead."
+            )
+        try:
+            result = await search_cross_domain(
+                memory_dir=memory_dir,
+                project_id=project,
+                design_point=design_point,
+                model=model,
+                exclude_domain=exclude_domain,
+                exclude_discipline=exclude_discipline,
+                context=context,
+                limit=limit,
+            )
+        except Exception as exc:
+            return f"Cross-field search failed: {type(exc).__name__}: {exc}"
+        text = render_cross_domain(result)
+        emit_tool_output(
+            memory_dir,
+            "search_experience_cross_field",
+            {"design_point": design_point, "exclude_domain": exclude_domain,
+             "exclude_discipline": exclude_discipline, "context": context, "limit": limit},
+            text,
+        )
+        return text
+
+    return StructuredTool.from_function(
+        coroutine=_search_cross_field,
+        name="search_experience_cross_field",
+        description=(
+            "Look for a practice in ANOTHER field that could be carried over to a design point of your own: a "
+            "difficulty, a constraint, or a decision your work has to make.\n\n"
+            "Use this when similarity search has stopped helping -- when the records about your own subject have "
+            "been read, and what you need is a way of thinking from somewhere else. Describe the design point in "
+            "your own words, plainly, including what is constrained; do not phrase it as a query, and do not name "
+            "the kind of solution you hope to find.\n\n"
+            "Pass `exclude_domain` (or `exclude_discipline`) with your own field's label -- take it from "
+            "`list_experience` -- so records from fields you already read are left out. Pass `context` with what "
+            "your work has to work with (data, compute, metric, constraints); the check uses it.\n\n"
+            "What comes back is a hypothesis: one or more records from other fields, each with the object mappings, "
+            "the shared relation and the transfer path that were written and checked before it was shown to you. "
+            "Nobody has applied it. Check that the objects and the relation actually hold in your problem before "
+            "adopting anything, and if you adopt it, treat it as your own hypothesis to test. This makes model "
+            "calls, so it is slower than `search_experience`; use it deliberately rather than on every question."
+        ),
+        args_schema=CrossDomainExperienceArgs,
+        infer_schema=False,
+    )
+
+
 __all__ = [
+    "create_cross_domain_experience_tool",
     "create_list_experience_tool",
     "create_search_experience_tool",
 ]

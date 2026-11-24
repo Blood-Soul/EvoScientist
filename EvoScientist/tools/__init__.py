@@ -5,6 +5,7 @@ to work unchanged thanks to these re-exports.
 """
 
 from .experience_search import (
+    create_cross_domain_experience_tool,
     create_list_experience_tool,
     create_search_experience_tool,
 )
@@ -17,6 +18,7 @@ from .think import think_tool
 
 __all__ = [
     "create_extract_paper_experiences_tool",
+    "create_cross_domain_experience_tool",
     "create_list_experience_tool",
     "create_read_paper_tool",
     "create_review_plan_tool",

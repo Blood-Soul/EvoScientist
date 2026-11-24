@@ -466,6 +466,10 @@ class EvoScientistConfig:
     # record, on the auxiliary model.
     memory_experience_gate: str = "off"
     memory_experience_search_enabled: bool = True
+    # Register `search_experience_cross_field`: look for a practice in another field that could be carried over to a
+    # design point. Off by default: each call makes LLM calls (one to restate the need, one per batch of candidates to
+    # judge transferability), and what it returns is a hypothesis with a written mapping, not a stored finding.
+    memory_cross_domain_search_enabled: bool = False
     # Register `review_plan` for the sub-agents whose YAML lists it: a finished plan is read against the experience
     # library and comes back with suggestions that cite their records.
     memory_plan_review_enabled: bool = True
@@ -1426,6 +1430,9 @@ _ENV_MAPPINGS = {
     "memory_paper_chunk_max_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_MAX_CHARS",
     "memory_experience_search_enabled": (
         "EVOSCIENTIST_MEMORY_EXPERIENCE_SEARCH_ENABLED"
+    ),
+    "memory_cross_domain_search_enabled": (
+        "EVOSCIENTIST_MEMORY_CROSS_DOMAIN_SEARCH_ENABLED"
     ),
     "research_tree_enabled": "EVOSCIENTIST_RESEARCH_TREE_ENABLED",
     "research_tree_require_plans": "EVOSCIENTIST_RESEARCH_TREE_REQUIRE_PLANS",
