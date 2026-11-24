@@ -1311,6 +1311,7 @@ def _get_default_middleware(
                 workspace.root,
                 hub=hub,
                 auto_analysis=getattr(cfg, "research_tree_auto_analysis", True) is True,
+                auto_node_agent=getattr(cfg, "research_tree_auto_node_agent", True) is True,
             )
         )
         if hub is not None:

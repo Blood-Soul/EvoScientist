@@ -119,7 +119,8 @@ class BackgroundTaskMiddleware(AgentMiddleware):
     name = "background_tasks"
 
     def __init__(self, root: str | Path, *, now: Callable[[], float] = time.time, hub=None,
-                 auto_analysis: bool = False, analysis_min_remaining: float = AUTO_ANALYSIS_MIN_REMAINING) -> None:
+                 auto_analysis: bool = False, auto_node_agent: bool = False,
+                 analysis_min_remaining: float = AUTO_ANALYSIS_MIN_REMAINING) -> None:
         super().__init__()
         self.root = Path(root)
         self.dir = self.root / ".research" / "background"
@@ -127,6 +128,9 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         self.hub = hub
         # Start node-analyst on every scored node that has no analysis yet (see the module docstring).
         self.auto_analysis = auto_analysis and hub is not None
+        # Start node-agent on a node the coordinator opens: the brief is written by tree_new, and a node without
+        # an agent runs nothing.
+        self.auto_node_agent = auto_node_agent and hub is not None
         self.analysis_min_remaining = analysis_min_remaining
         self._state_mtime: tuple[float, int] | None = None
         self._state_cache: dict[str, Any] | None = None
@@ -359,7 +363,7 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         for nid in self._analysis_due():
             try:
                 text = self._start_sync(ANALYST, self._analysis_description(nid), runtime)
-            except Exception:  # noqa: BLE001 - an analysis that cannot start must not fail the tool call that closed a node
+            except Exception:  # an analysis that cannot start must not fail the tool call that closed a node
                 continue
             if text.startswith("Started "):
                 started.append(nid)
@@ -376,7 +380,7 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         for nid in self._analysis_due():
             try:
                 text = await self._start_async(ANALYST, self._analysis_description(nid), runtime)
-            except Exception:  # noqa: BLE001
+            except Exception:  # a failed start is retried on the next tree_new; the node keeps its note
                 continue
             if text.startswith("Started "):
                 started.append(nid)
@@ -386,21 +390,77 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                                          f"tree_analysis when the note says it is ready.")
         return started
 
+    def _nodes_without_agent(self) -> list[str]:
+        """Open nodes with no agent job attached (tree_new leaves the node open; the agent is what runs it)."""
+        state = self._tree_state()
+        if not isinstance(state, dict) or self.hub is None:
+            return []
+        return sorted(
+            nid for nid, node in (state.get("nodes") or {}).items()
+            if node.get("status") == "running" and self.hub.is_open(nid) and not self.hub.job_of(nid)
+        )
+
+    @staticmethod
+    def _node_agent_description(nid: str) -> str:
+        return (f"{nid}\n\nBuild node {nid}. Its BRIEF.md is at nodes/{nid}/BRIEF.md; read it in full first, then "
+                "work inside that directory. Ask for the GPU with request_gpu when you need it.")
+
+    def _start_due_node_agents(self, runtime: Any) -> list[str]:
+        """Start node-agent for every open node without one; returns the node ids started. Never raises."""
+        if not self.auto_node_agent or self._task_tool is None or runtime is None:
+            return []
+        started: list[str] = []
+        for nid in self._nodes_without_agent():
+            try:
+                text = self._start_sync(NODE_AGENT, self._node_agent_description(nid), runtime)
+            except Exception:  # failing to start must not fail the tool call that opened the node
+                continue
+            if text.startswith("Started "):
+                started.append(nid)
+                if self.hub is not None:
+                    self.hub._emit(MAIN, f"node-agent started on {nid} on its own ({text.split('(')[0].strip()}).")
+        return started
+
+    async def _start_due_node_agents_async(self, runtime: Any) -> list[str]:
+        if not self.auto_node_agent or self._task_tool is None or runtime is None:
+            return []
+        started: list[str] = []
+        for nid in self._nodes_without_agent():
+            try:
+                text = await self._start_async(NODE_AGENT, self._node_agent_description(nid), runtime)
+            except Exception:  # a failed start is retried on the next tree_new; the node keeps its note
+                continue
+            if text.startswith("Started "):
+                started.append(nid)
+                if self.hub is not None:
+                    self.hub._emit(MAIN, f"node-agent started on {nid} on its own ({text.split('(')[0].strip()}).")
+        return started
+
     def _closes_a_node(self, call: dict[str, Any]) -> bool:
         return (call.get("name") == "tree_finish"
                 and not (call.get("args") or {}).get("abandon_reason"))
 
     def wrap_tool_call(self, request, handler):
         result = handler(request)
+        runtime = getattr(request, "runtime", None)
         if self._closes_a_node(request.tool_call):
-            self._start_due_analyses(getattr(request, "runtime", None))
+            self._start_due_analyses(runtime)
+        if self._opens_a_node(request.tool_call):
+            self._start_due_node_agents(runtime)
         return result
 
     async def awrap_tool_call(self, request, handler):
         result = await handler(request)
+        runtime = getattr(request, "runtime", None)
         if self._closes_a_node(request.tool_call):
-            await self._start_due_analyses_async(getattr(request, "runtime", None))
+            await self._start_due_analyses_async(runtime)
+        if self._opens_a_node(request.tool_call):
+            await self._start_due_node_agents_async(runtime)
         return result
+
+    @staticmethod
+    def _opens_a_node(call: dict[str, Any]) -> bool:
+        return call.get("name") == "tree_new"
 
     def _started_text(self, rec: dict[str, Any]) -> str:
         return (f"Started {rec['id']} ({rec['subagent']}). It runs in the background; {len(self._running())} job(s) "

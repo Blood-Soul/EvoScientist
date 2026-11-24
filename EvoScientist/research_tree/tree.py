@@ -267,7 +267,9 @@ class ResearchTree:
         if drafts:
             parts.append(f"review and decide on the skeleton(s) {', '.join(drafts)}")
         if ready:
-            parts.append(f"open a node on {', '.join(ready)} with tree_new(plan_id=...) and start node-agent on it")
+            parts.append(
+                f"open a node on {', '.join(ready)} with tree_new(plan_id=...); its agent starts on its own"
+            )
         if not drafts and not ready:
             parts.append(
                 "write the next skeleton (a new direction, or a step on an analysed node) so that a node is being "
@@ -360,9 +362,9 @@ class ResearchTree:
                 "2. Write a skeleton for a direction yourself (reports/drafts/plan-<direction>.md), review it once "
                 "with review_plan, take or refuse each suggestion, then record it with tree_plan(path=...) and "
                 "accept it.\n"
-                "3. tree_new(plan_id=...) opens a node and writes its brief; start node-agent on it with task_start. "
-                "It works out the details, writes the code and runs it inside nodes/<id>/, asking you for the GPU "
-                "when it needs it. Write the next skeleton meanwhile.\n"
+                "3. tree_new(plan_id=...) opens a node, writes its brief and starts node-agent on it; you do not "
+                "start it yourself. It works out the details, writes the code and runs it inside nodes/<id>/, "
+                "asking you for the GPU when it needs it. Write the next skeleton meanwhile.\n"
                 "4. tree_finish scores the node; its analysis starts on its own. Read the note, then record the "
                 "file with tree_analysis."
                 if self.require_plans and self.skeleton

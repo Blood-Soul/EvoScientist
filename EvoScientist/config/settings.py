@@ -476,6 +476,9 @@ class EvoScientistConfig:
     # Start node-analyst on a scored node without the coordinator asking: the analysis is CPU work, and the
     # coordinator's only remaining part is recording the file with tree_analysis. Needs background tasks.
     research_tree_auto_analysis: bool = True
+    # Start node-agent on a node the coordinator opens: the brief is already written by tree_new, and a node with no
+    # agent runs nothing. Needs background tasks and a skeleton run.
+    research_tree_auto_node_agent: bool = True
 
     # Research tree. Registers the `tree_*` tools and appends the research-tree
     # section to the system prompt: the agent runs an end-to-end research task as
@@ -1443,6 +1446,7 @@ _ENV_MAPPINGS = {
     "research_tree_skeleton": "EVOSCIENTIST_RESEARCH_TREE_SKELETON",
     "memory_plan_review_enabled": "EVOSCIENTIST_MEMORY_PLAN_REVIEW_ENABLED",
     "research_tree_auto_analysis": "EVOSCIENTIST_RESEARCH_TREE_AUTO_ANALYSIS",
+    "research_tree_auto_node_agent": "EVOSCIENTIST_RESEARCH_TREE_AUTO_NODE_AGENT",
     "memory_paper_chunk_overlap_chars": "EVOSCIENTIST_MEMORY_PAPER_CHUNK_OVERLAP_CHARS",
 }
 

@@ -157,10 +157,12 @@ def test_the_run_cannot_end_while_a_job_is_open(tmp_path):
 
 
 class _Hub:
-    """Just the hub surface the auto-analysis path touches: notes out, and the node bookkeeping it may call."""
+    """Just the hub surface the auto-start paths touch: notes out, open nodes and their jobs."""
 
-    def __init__(self) -> None:
+    def __init__(self, open_nodes=()) -> None:
         self.notes: list[str] = []
+        self.open = set(open_nodes)
+        self.jobs: dict[str, str] = {}
 
     def _emit(self, channel, text):
         self.notes.append(text)
@@ -169,7 +171,13 @@ class _Hub:
         pass
 
     def job_of(self, node):
-        return None
+        return self.jobs.get(node)
+
+    def is_open(self, node):
+        return node in self.open
+
+    def attach_job(self, node, job):
+        self.jobs[node] = job
 
 
 def _tree(tmp_path, nodes: dict, analyses: dict | None = None, seconds_left: float = 3600) -> None:
@@ -240,3 +248,34 @@ def test_an_abandoned_node_starts_no_analysis_and_a_done_job_is_not_restarted(tm
     mw.jobs[next(iter(mw.jobs))]["status"] = "done"   # the job finished; the file is not recorded yet
     asyncio.run(mw.awrap_tool_call(first, handler))
     assert [c[0] for c in task.calls] == ["node-analyst"]
+
+
+def test_opening_a_node_starts_its_agent(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+
+    _tree(tmp_path, {"n1": {"status": "running", "score": None}})
+    (tmp_path / ".research" / "briefs").mkdir(parents=True, exist_ok=True)
+    hub, task = _Hub(open_nodes={"n1"}), _Task()
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_node_agent=True)
+    mw._task_tool = task
+
+    async def handler(request):
+        return "n1 opened"
+
+    request = SimpleNamespace(tool_call={"name": "tree_new", "args": {"plan_id": "P1"}, "id": "c9"},
+                              runtime=_runtime("c9"))
+    asyncio.run(mw.awrap_tool_call(request, handler))
+    assert [c[0] for c in task.calls] == ["node-agent"]
+    assert task.calls[0][1].startswith("n1")
+    assert "nodes/n1/BRIEF.md" in task.calls[0][1]
+    assert any("node-agent started on n1" in note for note in hub.notes)
+
+
+def test_a_node_that_already_has_an_agent_is_not_started_again(tmp_path):
+    _tree(tmp_path, {"n1": {"status": "running", "score": None}})
+    hub = _Hub(open_nodes={"n1"})
+    hub.jobs["n1"] = "bg-1"
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_node_agent=True)
+    mw._task_tool = _Task()
+    assert mw._nodes_without_agent() == []
