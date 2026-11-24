@@ -1208,3 +1208,22 @@ class TestKeepingTheGpuBusy:
         assert "a loss weight or another training setting" in review
         assert "phrased as a correction of the plan's reasoning" in review
         assert "a setting it changes is still a design change" in review
+
+
+@pytest.mark.asyncio
+async def test_skeleton_guard_refusal_names_the_node_agent_and_the_skeleton() -> None:
+    """A skeleton run has no plan-writer: the refusal must not send the coordinator to a sub-agent that is not there."""
+    from types import SimpleNamespace
+
+    from EvoScientist.middleware.coordinator_guard import CoordinatorGuardMiddleware
+
+    guard = CoordinatorGuardMiddleware(skeleton=True)
+    blocked = SimpleNamespace(tool_call={"id": "c1", "name": "write_file", "args": {"file_path": "a.py"}})
+
+    async def handler(req):
+        raise AssertionError("a refused call must not reach the handler")
+
+    out = await guard.awrap_tool_call(blocked, handler)
+    assert out.status == "error"
+    assert "node-agent" in out.content and "Write the skeleton yourself" in out.content
+    assert "plan-writer" not in out.content

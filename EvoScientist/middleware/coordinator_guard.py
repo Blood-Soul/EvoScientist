@@ -51,6 +51,15 @@ REFUSAL = (
     "only need a placeholder deliverable, create it with a single `execute` command."
 )
 
+# The same refusal in a skeleton run, where no plan-writer exists: the coordinator writes the skeleton itself.
+REFUSAL_SKELETON = (
+    "Refused: in this run you coordinate and do not write code files. Code is written inside a node "
+    "directory (nodes/<id>/) by node-agent. Write the skeleton yourself (reports/drafts/plan-<direction>.md), "
+    "review it with review_plan, record it with tree_plan(path), open a node with tree_new(plan_id=...), and "
+    "start node-agent with the brief. If you only need a placeholder deliverable, create it with a single "
+    "`execute` command."
+)
+
 
 def refuses(tool_call: dict[str, Any]) -> bool:
     """True for a write or edit of a code file."""
@@ -61,10 +70,10 @@ def refuses(tool_call: dict[str, Any]) -> bool:
     return PurePosixPath(path).suffix.lower() in CODE_SUFFIXES
 
 
-def _refusal(request: ToolCallRequest) -> ToolMessage:
+def _refusal(request: ToolCallRequest, text: str = REFUSAL) -> ToolMessage:
     call = request.tool_call
     return ToolMessage(
-        content=REFUSAL,
+        content=text,
         tool_call_id=call["id"],
         name=call.get("name", "write_file"),
         status="error",
@@ -77,10 +86,12 @@ class CoordinatorGuardMiddleware(AgentMiddleware):
     name = "coordinator_guard"
 
     def __init__(self, workspace_root: str | Path | None = None,
-                 start_after_calls: int = START_AFTER_CALLS) -> None:
+                 start_after_calls: int = START_AFTER_CALLS, skeleton: bool = False) -> None:
         # A missing root only disables the start note (tests build the guard bare).
         self._root = Path(workspace_root) if workspace_root is not None else None
         self._start_after = start_after_calls
+        # A skeleton run has no plan-writer: the coordinator writes the skeleton itself (see REFUSAL_SKELETON).
+        self._refusal_text = REFUSAL_SKELETON if skeleton else REFUSAL
 
     def _tree_started(self) -> bool:
         # tree_init writes .research/state.json (research_tree/tree.py); reading
@@ -118,7 +129,7 @@ class CoordinatorGuardMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
         if refuses(request.tool_call):
-            return _refusal(request)
+            return _refusal(request, self._refusal_text)
         return handler(request)
 
     async def awrap_tool_call(
@@ -127,5 +138,5 @@ class CoordinatorGuardMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         if refuses(request.tool_call):
-            return _refusal(request)
+            return _refusal(request, self._refusal_text)
         return await handler(request)

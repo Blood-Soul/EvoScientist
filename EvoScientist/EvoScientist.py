@@ -1295,7 +1295,11 @@ def _get_default_middleware(
     if getattr(cfg, "research_tree_require_plans", False) is True and not for_async_subagent:
         from .middleware.coordinator_guard import CoordinatorGuardMiddleware
 
-        mw.append(CoordinatorGuardMiddleware(workspace.root))
+        mw.append(
+            CoordinatorGuardMiddleware(
+                workspace.root, skeleton=_skeleton_hub(cfg, workspace) is not None
+            )
+        )
 
     # The coordinator may hand a sub-agent work and carry on (task_start / task_collect).
     if getattr(cfg, "research_tree_background_tasks", False) is True and not for_async_subagent:

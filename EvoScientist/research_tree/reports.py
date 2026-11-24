@@ -1,7 +1,7 @@
 """Plans: the document before a node.
 
-A *plan* is written by a sub-agent (the plan-writer, or the node-analyst for a
-step that builds on a node it has read) for one direction and reviewed by the
+A *plan* is written for one direction -- by the plan-writer sub-agent, or, in a
+skeleton run, by the main agent as a one-page skeleton -- and reviewed by the
 main agent before a node is opened on it. The main agent records it with
 `tree_plan`, so the document it reviewed is the document that is kept.
 

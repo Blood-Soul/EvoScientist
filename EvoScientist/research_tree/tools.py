@@ -194,9 +194,10 @@ class InsightArgs(BaseModel):
 class PlanArgs(BaseModel):
     path: str = Field(
         default="",
-        description="Workspace-relative path of the plan file the plan-writer wrote (it reports the path in "
-        "its reply). Give it to record a new plan, or with plan_id to rewrite one. Leave empty when you are "
-        "deciding. The tool reads the file; do not paste the plan.",
+        description="Workspace-relative path of the plan file to record: in a plan-writer run the file it "
+        "wrote (it reports the path in its reply), in a skeleton run the skeleton you wrote. Give it to record "
+        "a new plan, or with plan_id to rewrite one. Leave empty when you are deciding. The tool reads the "
+        "file; do not paste the plan.",
     )
     cluster: str = Field(
         default="", description="The surveyed mechanism family the plan belongs to."
@@ -215,7 +216,8 @@ class PlanArgs(BaseModel):
     decision: str = Field(
         default="",
         description="accepted, rejected or revise. Your judgement of the plan; revise sends it back (at most "
-        "2 rewrites per plan) and needs a reason that you pass to the plan-writer.",
+        "2 rewrites per plan) and needs a reason: a plan-writer rewrites to it, and in a skeleton run you "
+        "rewrite your own skeleton by it.",
     )
     reason: str = Field(
         default="", description="Why, required for rejected and revise."
