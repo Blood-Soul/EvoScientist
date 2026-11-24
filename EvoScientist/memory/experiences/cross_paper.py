@@ -587,6 +587,13 @@ def _replace_findings(state: dict[str, Any], project_id: str, cid: str, records:
     return {"made": len(records), "carried": len(taken), "retired": retired}
 
 
+def _score_utility(memory_dir: str | Path, project_id: str) -> dict[str, Any]:
+    """Score the records (L1 and the L2 just written) that have no utility score yet; a no-op without embeddings."""
+    from .utility import update_scores
+
+    return update_scores(memory_dir, project_id)
+
+
 def _hand_over(state: dict[str, Any], old_clusters: Mapping[str, Mapping[str, Any]]) -> None:
     """After re-clustering, give each finding to the new cluster that holds most of its support, as a split does.
 
@@ -643,6 +650,8 @@ async def run_cross_paper_induction(
         new_ids = [r["id"] for r in records if r["id"] not in seen]
         pending = [cid for cid in state.get("pending") or [] if cid in state["clusters"]]
         if not force and len(new_ids) < every() and not pending:
+            # New records are scored even when no induction is due: a score needs no other record (utility.py).
+            await asyncio.to_thread(_score_utility, memory_dir, project_id)
             return {"status": "waiting", "new": len(new_ids), "every": every()}
         vec_list, backend = await asyncio.to_thread(vectors, records, memory_dir)
         vecs = dict(zip([r["id"] for r in records], vec_list, strict=True))
@@ -693,6 +702,7 @@ async def run_cross_paper_induction(
         }
         state["history"].append({"ts": time.time(), "trigger": state["triggers"], **summary})
         await asyncio.to_thread(save, memory_dir, project_id, state)
+        summary["utility"] = (await asyncio.to_thread(_score_utility, memory_dir, project_id)).get("scored", 0)
         summary.update(status="ok", findings=len(state["findings"]), seconds=round(time.monotonic() - started, 1))
     except Exception as exc:  # an aid; never take extraction or the agent down
         logger.warning("L2 induction failed", exc_info=True)

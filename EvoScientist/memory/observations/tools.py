@@ -310,6 +310,13 @@ def create_read_memory_tool(
             from ..policy.trace import emit_tool_output
 
             text = render_record(result["text"])
+            from ..experiences.utility import score_of
+
+            score = score_of(memory_dir, _runtime_project_id(runtime, project_id), requested_id)
+            if score:
+                # a measurement against a fixed set of reference tasks, not a verdict on the record (utility.py)
+                text += (f"\nUtility (reference tasks): specificity {score['S']:.2f}, abstractness {score['A']:.2f}, "
+                         f"utility {score['U']:.2f}; nearest reference task {score['nearest']}")
             emit_tool_output(memory_dir, "read_memory", {"id": requested_id}, text)
             return text
         text = render_observation(result)
