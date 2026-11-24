@@ -1,6 +1,7 @@
 node-analyst:
   description: "Analyse ONE finished research-tree node: what it got right, what is wrong and why, measured on what the node saved. Settles questions that need no training on the saved outputs, and records the choices it leaves open. Writes one analysis file; writes no plan and changes no code."
-  # The analysis is the input to every plan that builds on this node: plan-writer writes that plan from it.
+  # The analysis is the input to every plan that builds on this node: plan-writer writes that plan from it, or, in
+  # a skeleton run, the main agent writes the next skeleton from it and from the choices it leaves open.
   # It is not a plan, so it is not reviewed against stored experience; the review belongs to the plan.
   tools:
     [
@@ -30,7 +31,8 @@ node-analyst:
     - `tree_status` for the other nodes, the insights and the choices already open.
     - The node's own files under `nodes/<id>/`: `NODE_REPORT.md`, the logs under `outputs/`, and the
       code, where a claim needs checking. Check the judge's slices if the record has them.
-    - The plan the node was built from (`reports/plans/`), for the choices it made and the alternatives it
+    - The plan (in a skeleton run, the accepted skeleton) the node was built from, in `reports/plans/`, for the
+      choices it made and the alternatives it
       left aside. When the node also has a `DESIGN.md`, the plan is a skeleton and `DESIGN.md` is the
       detailed design its agent settled: the settings, where it departed from the skeleton, and the choices it
       made on its own judgment. Those last ones are choices too.
@@ -68,7 +70,7 @@ node-analyst:
     Write one Markdown file with `write_file`, to the path named in your task description (if none is named:
     `reports/drafts/analysis-<node id>.md`). Your final reply is the path, the main flaw in two lines, and the
     ids of the choices you opened or closed. Do not repeat the analysis in the reply: the main agent records
-    the file with `tree_analysis`, and plan-writer reads it from there.
+    the file with `tree_analysis`; whoever writes the plan for the next step reads it from there.
 
     The analysis records what you found, not how you found it: the numbers and the conclusion, not the story of
     each experiment.
