@@ -34,12 +34,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .gitlog import NODES_DIR, STATE_DIR
-from .monitor import kill_processes_under
+from .monitor import gpu_in_use, kill_processes_under
 
 AUTO_GRANT_MINUTES = 10.0
-ANSWER_MINUTES = 10.0
+ANSWER_MINUTES = 20.0
 WAIT_MINUTES = 30.0  # one request_gpu call waits at most this long; the request stays queued after it
 POLL_SECONDS = 0.5
+# A holder with no GPU process in its node directory is probably doing CPU work. Warn once, then
+# release the card (without killing its CPU processes) so the queue can move.
+GPU_IDLE_WARN_MINUTES = 5.0
+GPU_IDLE_RELEASE_MINUTES = 10.0
+GPU_CHECK_SECONDS = 60.0
 
 MAIN = "main"
 NODES = "nodes"  # every open node
@@ -47,11 +52,42 @@ NODES = "nodes"  # every open node
 CURRENT_NODE: contextvars.ContextVar[str] = contextvars.ContextVar("evosci_tree_node", default="")
 
 # Setting the variable, not reading it: `CUDA_VISIBLE_DEVICES=0 cmd`, `export CUDA_VISIBLE_DEVICES`, `env -u ...`,
-# or `os.environ["CUDA_VISIBLE_DEVICES"] = ...` in a one-liner.
+# or `os.environ["CUDA_VISIBLE_DEVICES"] = ...` in a one-liner. A plain assignment is only refused in
+# command position (start of a command segment): a heredoc or an echo that merely *writes* the line into a
+# script is not setting anything, and the agents write scripts on the CPU before they hold the GPU.
+_CUDA_SEGMENT = r"(?:^|[;&|(\n])\s*"
 _CUDA_VAR = re.compile(
-    r"\bCUDA_VISIBLE_DEVICES\s*=|\b(?:export|unset|env\s+-u)\s+(?:\S+\s+)*CUDA_VISIBLE_DEVICES\b"
-    r"|CUDA_VISIBLE_DEVICES['\"]\s*\]\s*=|(?:pop|del)\W+(?:\w+\W+)*CUDA_VISIBLE_DEVICES"
+    _CUDA_SEGMENT + r"CUDA_VISIBLE_DEVICES\s*="
+    r"|" + _CUDA_SEGMENT + r"(?:export|unset)\s+(?:\S+\s+)*CUDA_VISIBLE_DEVICES\b"
+    r"|" + _CUDA_SEGMENT + r"env\s+(?:-\S+\s+)*(?:\S+\s+)*CUDA_VISIBLE_DEVICES\b"
+    r"|CUDA_VISIBLE_DEVICES['\"]\s*\]\s*="
+    r"|(?:pop|del)\W+(?:\w+\W+)*CUDA_VISIBLE_DEVICES",
+    re.MULTILINE,
 )
+_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _without_heredoc_bodies(command: str) -> str:
+    """The command with heredoc bodies blanked: writing a line is not running it."""
+    lines = command.splitlines(keepends=True)
+    if not any(_HEREDOC.search(line) for line in lines):
+        return command
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        opener = _HEREDOC.search(line)
+        if opener is not None:
+            tag = opener.group(2)
+            i += 1
+            while i < len(lines) and lines[i].strip() != tag:
+                out.append("\n" if lines[i].endswith("\n") else "")
+                i += 1
+            if i < len(lines):
+                out.append(lines[i])  # the terminator line
+        i += 1
+    return "".join(out)
 
 
 def _clock(t: float) -> str:
@@ -66,6 +102,14 @@ class Hub:
     answer_seconds: float = ANSWER_MINUTES * 60
     wait_seconds: float = WAIT_MINUTES * 60
     kill: Callable[[Path], list[int]] = kill_processes_under
+    # Production sets this from the supervisor (`gpu_in_use`); tests leave it None so a fake clock
+    # never launches nvidia-smi. None means "cannot tell", never "idle".
+    gpu_check: Callable[[Path], bool | None] | None = None
+    gpu_idle_warn_seconds: float = GPU_IDLE_WARN_MINUTES * 60
+    gpu_idle_release_seconds: float = GPU_IDLE_RELEASE_MINUTES * 60
+    last_gpu_active: float = 0.0
+    gpu_idle_warned: bool = False
+    _last_gpu_check: float = 0.0
     nodes: dict[str, dict] = field(default_factory=dict)  # open node -> {"job": id or "", "cursor": seq}
     holder: str = ""
     held_since: float = 0.0
@@ -85,15 +129,16 @@ class Hub:
     # ------------------------------------------------------------------ events
 
     def _emit(self, to: str, text: str) -> None:
-        ev = {"seq": len(self.events) + 1, "t": self.now(), "to": to, "text": text}
-        self.events.append(ev)
-        try:
-            path = self.root / STATE_DIR / "coord.jsonl"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a") as f:
-                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
-        except OSError:
-            pass  # the in-memory event is what the agents read; the file is for audit
+        with self._lock:  # take_notes moves a cursor to len(events); an unlocked append could fall past it
+            ev = {"seq": len(self.events) + 1, "t": self.now(), "to": to, "text": text}
+            self.events.append(ev)
+            try:
+                path = self.root / STATE_DIR / "coord.jsonl"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a") as f:
+                    f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+            except OSError:
+                pass  # the in-memory event is what the agents read; the file is for audit
 
     def _broadcast_gpu(self, skip: str = "") -> None:
         """Tell every open node where the GPU is now: the short notice that lets them plan their CPU work."""
@@ -184,12 +229,16 @@ class Hub:
 
     def _give(self, nid: str, reason: str) -> None:
         self.holder, self.held_since, self.hold_reason = nid, self.now(), reason
+        self.last_gpu_active = self.now()
+        self.gpu_idle_warned = False
+        self._last_gpu_check = 0.0
         self.queue = [q for q in self.queue if q["node"] != nid]
 
-    def _free(self, why: str) -> list[int]:
+    def _free(self, why: str, *, kill: bool = True) -> list[int]:
         nid = self.holder
-        killed = self.kill(self._node_dir(nid)) if self._node_dir(nid).is_dir() else []
+        killed = self.kill(self._node_dir(nid)) if kill and self._node_dir(nid).is_dir() else []
         self.holder, self.hold_reason, self.free_since = "", "", self.now()
+        self.last_gpu_active, self.gpu_idle_warned, self._last_gpu_check = 0.0, False, 0.0
         held = (self.now() - self.held_since) / 60
         waiting = "; ".join(f"{q['node']} ({q['reason']}, waiting {(self.now() - q['t']) / 60:.0f} min)"
                             for q in self.queue)
@@ -240,7 +289,12 @@ class Hub:
             asked = next((q for q in self.queue if q["node"] == nid), None)
             reason = asked["reason"] if asked else "given by the main agent"
             self._give(nid, reason)
-            if not asked:
+            # A node whose request waited (and may have timed out of its own wait) must hear that
+            # the GPU is now its own; skipping the holder in _broadcast_gpu is not enough.
+            if asked:
+                self._emit(nid, f"The GPU is yours ({reason}). Start GPU work now (a process started before "
+                                "cannot see it); call release_gpu when it is done.")
+            else:
                 self._emit(nid, "The main agent gave you the GPU. Start GPU work now (a process started before "
                                 "cannot see it); call release_gpu when it is done.")
             self._broadcast_gpu(skip=nid)
@@ -261,9 +315,48 @@ class Hub:
                             "were stopped. Call request_gpu(reason) again when you need it.")
             return self._free(f"taken back from {nid} ({reason})")
 
+    def _check_holder_idle(self) -> None:
+        """Warn once, then free a lease that has no GPU process, without killing the holder's CPU work."""
+        if not self.holder or self.gpu_check is None:
+            return
+        now = self.now()
+        if now - self._last_gpu_check < GPU_CHECK_SECONDS:
+            return
+        self._last_gpu_check = now
+        try:
+            active = self.gpu_check(self._node_dir(self.holder))
+        except Exception:
+            return
+        if active is None:
+            return  # nvidia-smi could not answer; unknown is not idle
+        if active:
+            self.last_gpu_active = now
+            self.gpu_idle_warned = False
+            return
+        idle = now - self.last_gpu_active
+        if idle < self.gpu_idle_warn_seconds:
+            return
+        if not self.gpu_idle_warned:
+            self.gpu_idle_warned = True
+            self._emit(MAIN, f"{self.holder} has held the GPU for {(now - self.held_since) / 60:.0f} min "
+                             f"with no GPU process for {idle / 60:.0f} min. If it is doing CPU work, take the GPU "
+                             f"back with gpu_revoke({self.holder}, reason); otherwise it is released automatically "
+                             f"in {(self.gpu_idle_release_seconds - idle) / 60:.0f} min.")
+        if idle < self.gpu_idle_release_seconds:
+            return
+        node = self.holder
+        self._free(f"{node} held the GPU without a GPU process", kill=False)
+        if self.queue:
+            first = self.queue[0]
+            self._give(first["node"], first["reason"])
+            self._emit(first["node"], f"The GPU is yours ({first['reason']}, released by an idle lease). Start GPU "
+                                      "work now; call release_gpu when it is done.")
+            self._broadcast_gpu(skip=first["node"])
+
     def tick(self) -> None:
         """Give a GPU that stayed free with requests waiting to the earliest request."""
         with self._lock:
+            self._check_holder_idle()
             if self.holder or not self.queue:
                 return
             first = self.queue[0]
@@ -272,6 +365,9 @@ class Hub:
             self._give(first["node"], first["reason"])
             self._emit(MAIN, f"No decision on the GPU within {self.auto_grant_seconds / 60:.0f} min: it went to "
                              f"the earliest request, {first['node']} ({first['reason']}).")
+            # The holder is skipped by _broadcast_gpu, so tell it directly (its wait may have timed out).
+            self._emit(first["node"], f"The GPU is yours ({first['reason']}, granted automatically). Start GPU "
+                                      "work now; call release_gpu when it is done.")
             self._broadcast_gpu(skip=first["node"])
 
     # ------------------------------------------------------------------ questions
@@ -319,10 +415,15 @@ class Hub:
         with self._lock:
             self.tick()
             now = self.now()
-            lines = [
+            holder_line = (
                 f"GPU: held by {self.holder} for {(now - self.held_since) / 60:.0f} min ({self.hold_reason})"
                 if self.holder else f"GPU: free for {(now - self.free_since) / 60:.0f} min"
-            ]
+            )
+            if self.holder and self.gpu_check is not None and self.last_gpu_active:
+                idle = (now - self.last_gpu_active) / 60
+                if idle >= 1:
+                    holder_line += f"; no GPU process for {idle:.0f} min"
+            lines = [holder_line]
             lines += [f"  waiting: {q['node']} for {(now - q['t']) / 60:.0f} min ({q['reason']})" for q in self.queue]
             lines += [f"  question {q['id']} from {q['node']}, open {(now - q['t']) / 60:.0f} min: {q['text']}"
                       for q in self.questions.values() if q["status"] == "open"]
@@ -386,7 +487,9 @@ def shell_env(env: dict[str, str] | None) -> dict[str, str] | None:
 
 def refuse_command(command: str) -> str | None:
     """An error for a command that would set `CUDA_VISIBLE_DEVICES` without holding the GPU, else None."""
-    if _active is None or _holds_gpu() or not _CUDA_VAR.search(command or ""):
+    if _active is None or _holds_gpu():
+        return None
+    if not _CUDA_VAR.search(_without_heredoc_bodies(command or "")):
         return None
     return ("Refused: this command sets CUDA_VISIBLE_DEVICES. The GPU is leased: call request_gpu(reason), and run "
             "GPU work once it is granted.")

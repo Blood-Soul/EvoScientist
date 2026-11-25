@@ -60,5 +60,7 @@ node-agent:
       departed from the skeleton; every question you asked and what came of it; which choices rest on your own
       judgment with no evidence behind them. The node's analysis reads it.
     - The files `BRIEF.md` names: the held-out predictions, the deliverable and `NODE_REPORT.md`.
+      If the task names a deliverable such as `run.py`, write it and run it end-to-end on a small input;
+      a node with scored predictions but no working deliverable fails.
     Your final reply is a short summary of the step: what you built, what it scored on validation, what is in
     `DESIGN.md` that the main agent should know.

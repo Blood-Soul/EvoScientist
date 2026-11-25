@@ -66,6 +66,19 @@ class TestPlanLifecycle:
         tree.plan(plan_id="P1", decision="accepted")
         assert "P1 accepted" in tree.status()
 
+    def test_metadata_can_be_added_to_an_auto_registered_draft_without_a_rewrite(self, strict) -> None:
+        import json
+
+        tree, root, _ = strict
+        tree.survey([{"name": "A", "mechanism": "m"}])
+        out = tree.plan(text=PLAN, source_path="reports/drafts/plan-a.md")
+        pid = out.split()[0]
+        out = tree.plan(text=PLAN, source_path="/workspace/reports/drafts/plan-a.md", cluster="A")
+        assert f"{pid} updated in place" in out
+        state = json.loads((root / ".research" / "state.json").read_text())
+        assert state["plans"][pid]["cluster"] == "A"
+        assert state["plans"][pid]["rounds"] == 0
+
     def test_text_xor_decision(self, strict) -> None:
         tree, *_ = strict
         with pytest.raises(TreeError, match="either a plan file"):

@@ -412,8 +412,9 @@ def render_cross_domain(result: Mapping[str, Any]) -> str:
     lines += [
         "These records come from other fields. The mapping and path were written by a judge reading the record's own "
         "text; nobody has applied them. Check that the objects and the relation hold in your problem before adopting "
-        "anything, and treat what you adopt as a hypothesis of your own to test. Read a record in full with "
-        "read_memory(<id>).",
+        "anything, and compare the proposed practice with what the plan already does (a control or ablation on the "
+        "metric that matters): a practice that is merely different is not an improvement. Treat what you adopt as a "
+        "hypothesis of your own to test. Read a record in full with read_memory(<id>).",
     ]
     return "\n".join(lines)
 

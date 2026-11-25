@@ -354,6 +354,62 @@ def test_a_finished_analysis_is_recorded_and_noted(tmp_path):
     assert any("recorded (reports/analysis/n1.md)" in note for note in hub.notes)
 
 
+def test_a_failed_analysis_is_not_recorded_but_says_the_node_still_has_none(tmp_path):
+    _tree(tmp_path, {"n1": _scored()})
+    (tmp_path / "reports" / "drafts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports" / "drafts" / "analysis-n1.md").write_text("# partial analysis\n")
+    analysis = _TreeTool("tree_analysis", "Analysis of n1 recorded (reports/analysis/n1.md).")
+    hub = _Hub(open_nodes=set())
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_analysis=True)
+    mw._tree_tools["tree_analysis"] = analysis
+    rec = {"id": "bg-10", "n": 10, "subagent": "node-analyst", "description": "n1\n\nAnalyse node n1 ...",
+           "status": "running", "reported": False, "text": "", "started": 0, "tool_call_id": "c2"}
+    mw.jobs["bg-10"] = rec
+    mw._finish(rec, "the analyst crashed halfway", "failed")
+    assert analysis.calls == []                        # a partial file is not an analysis
+    assert any("failed" in note and "no analysis" in note for note in hub.notes)
+
+
+def test_a_node_whose_agent_ended_is_not_restarted_automatically(tmp_path):
+    _tree(tmp_path, {"n1": {"status": "running", "score": None}})
+    hub = _Hub(open_nodes={"n1"})
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_node_agent=True)
+    mw._task_tool = _Task()
+    mw.jobs["bg-1"] = {"id": "bg-1", "subagent": "node-agent", "description": "n1\n\nBuild node n1 ...",
+                       "status": "done"}
+    assert mw._nodes_without_agent() == []             # the coordinator decides: restart or close it
+
+
+def test_plan_draft_paths_accept_absolute_and_dot_prefixes():
+    assert BackgroundTaskMiddleware._plan_draft("reports/drafts/plan-x.md") == "reports/drafts/plan-x.md"
+    assert BackgroundTaskMiddleware._plan_draft("./reports/drafts/plan-x.md") == "reports/drafts/plan-x.md"
+    assert BackgroundTaskMiddleware._plan_draft("/workspace/reports/drafts/plan-x.md") == \
+        "reports/drafts/plan-x.md"
+    assert BackgroundTaskMiddleware._plan_draft("/workspace/reports/drafts/notes.md") == ""
+
+
+def test_a_plain_task_call_for_node_agent_is_refused(tmp_path):
+    from types import SimpleNamespace
+
+    from langchain_core.messages import ToolMessage
+
+    hub = _Hub(open_nodes={"n1"})
+    task = _Task()
+    mw = BackgroundTaskMiddleware(tmp_path, hub=hub, auto_node_agent=True)
+    mw._task_tool = task
+    request = SimpleNamespace(
+        tool_call={"name": "task", "args": {"subagent_type": "node-agent", "description": "n1\nbuild"},
+                   "id": "c1"},
+        runtime=_runtime("c1"))
+
+    async def handler(request):
+        raise AssertionError("a plain node-agent task must not run")
+
+    out = asyncio.run(mw.awrap_tool_call(request, handler))
+    assert isinstance(out, ToolMessage) and out.status == "error" and "task_start" in out.content
+    assert task.calls == []
+
+
 def test_a_node_job_note_carries_the_summary(tmp_path):
     hub = _Hub(open_nodes=set())
     mw = BackgroundTaskMiddleware(tmp_path, hub=hub)

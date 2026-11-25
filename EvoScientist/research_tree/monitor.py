@@ -44,6 +44,40 @@ def processes_under(path: Path) -> list[int]:
     return found
 
 
+def gpu_in_use(path: Path) -> bool | None:
+    """True when a process working under `path` holds a CUDA context on this GPU.
+
+    Used by the GPU lease to tell a holder that is training from one that is only doing CPU work.
+    Returns None when nvidia-smi cannot answer (no driver, no permission, query failed): the callers
+    must not treat unknown as idle.
+    """
+    exe = shutil.which("nvidia-smi")
+    if exe is None:
+        return None
+    try:
+        out = subprocess.run(
+            [exe, "--query-compute-apps=pid", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    root = str(Path(path).resolve())
+    for line in out.stdout.splitlines():
+        try:
+            pid = int(line.strip())
+        except ValueError:
+            continue
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            continue  # another namespace/pid, or gone; unknown for this pid
+        if cwd == root or cwd.startswith(root + os.sep):
+            return True
+    return False
+
+
 def kill_processes_under(path: Path, grace: float = 10.0) -> list[int]:
     """Stop every process working inside `path`: SIGTERM, then SIGKILL after `grace` seconds.
 

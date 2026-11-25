@@ -38,6 +38,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from ...utils import format_message_content
 from .extraction import _prompt_dir_candidates
 from .store import list_experience_documents
 
@@ -141,7 +142,9 @@ async def _ask(model: Any, system: str, human: str, semaphore: asyncio.Semaphore
             )
         except Exception:
             return None
-    return _json_object(str(getattr(reply, "content", "") or ""))
+    # Providers that return Anthropic-style content blocks (thinking + text) put the
+    # JSON in a text block, not in str(content): use the same reader cross_paper uses.
+    return _json_object(format_message_content(reply))
 
 
 def _candidate_line(index: int, document: Any) -> str:

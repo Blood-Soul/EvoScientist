@@ -63,7 +63,7 @@ from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, hook_config
 from langchain.tools import ToolRuntime
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from pydantic import BaseModel, Field
@@ -229,11 +229,18 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                 self.hub.job_ended(rec["node"], rec["id"])
             if rec["subagent"] == ANALYST and (nid := node_of(rec.get("description") or "")):
                 reply = " ".join((text or "").split())[:240]
-                recorded = self._record_analysis(nid)
-                self.hub._emit(MAIN, f"Analysis of {nid} {status} ({rec['id']}). {reply} {recorded}"
-                               if recorded else
-                               f"Analysis of {nid} {status} ({rec['id']}). {reply} Record it with "
-                               f"tree_analysis(node='{nid}', path='reports/drafts/analysis-{nid}.md').")
+                if status == "done":
+                    recorded = self._record_analysis(nid)
+                    self.hub._emit(MAIN, f"Analysis of {nid} {status} ({rec['id']}). {reply} {recorded}"
+                                   if recorded else
+                                   f"Analysis of {nid} {status} ({rec['id']}). {reply} Record it with "
+                                   f"tree_analysis(node='{nid}', path='reports/drafts/analysis-{nid}.md').")
+                else:
+                    # A failed analyst may have left a partial file; recording it would make the node look
+                    # analysed and hide the failure. Leave the node without an analysis (it can be retried).
+                    self.hub._emit(MAIN, f"Analysis of {nid} failed ({rec['id']}). {reply} "
+                                   f"The node still has no analysis; start node-analyst on it again with "
+                                   f"task_start if it is still worth one.")
             else:
                 summary = " ".join((text or "").split())[:300]
                 self.hub._emit(MAIN, f"Background job {rec['id']} ({rec['subagent']}"
@@ -355,11 +362,12 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         analysed = state.get("analyses") or {}
         # A finished analysis that the coordinator has not recorded yet is not started again: the note told it
         # where the file is. A failed or lost one may be retried.
-        attempted = {
-            node_of(job.get("description") or "")
-            for job in self.jobs.values()
-            if job.get("subagent") == ANALYST and job.get("status") in ("running", "done")
-        }
+        with self._lock:
+            attempted = {
+                node_of(job.get("description") or "")
+                for job in self.jobs.values()
+                if job.get("subagent") == ANALYST and job.get("status") in ("running", "done")
+            }
         return sorted(
             nid for nid, node in (state.get("nodes") or {}).items()
             if node.get("score") is not None
@@ -369,8 +377,9 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         )
 
     def _analysis_job_running(self, nid: str) -> bool:
-        return any(job.get("status") == "running" and job.get("subagent") == ANALYST
-                   and node_of(job.get("description") or "") == nid for job in self.jobs.values())
+        with self._lock:
+            return any(job.get("status") == "running" and job.get("subagent") == ANALYST
+                       and node_of(job.get("description") or "") == nid for job in self.jobs.values())
 
     @staticmethod
     def _analysis_description(nid: str) -> str:
@@ -395,8 +404,10 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                 started.append(nid)
                 if self.hub is not None:
                     self.hub._emit(MAIN, f"Analysis of {nid} started on its own ({text.split('(')[0].strip()}). "
-                                         f"Its file will be reports/drafts/analysis-{nid}.md; record it with "
-                                         f"tree_analysis when the note says it is ready.")
+                                         f"Its file will be reports/drafts/analysis-{nid}.md and is recorded "
+                                         "automatically when it finishes.")
+            elif self.hub is not None:
+                self.hub._emit(MAIN, f"Could not start node-analyst on {nid}: {text.strip()[:180]}")
         return started
 
     async def _start_due_analyses_async(self, runtime: Any) -> list[str]:
@@ -412,18 +423,28 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                 started.append(nid)
                 if self.hub is not None:
                     self.hub._emit(MAIN, f"Analysis of {nid} started on its own ({text.split('(')[0].strip()}). "
-                                         f"Its file will be reports/drafts/analysis-{nid}.md; record it with "
-                                         f"tree_analysis when the note says it is ready.")
+                                         f"Its file will be reports/drafts/analysis-{nid}.md and is recorded "
+                                         "automatically when it finishes.")
+            elif self.hub is not None:
+                self.hub._emit(MAIN, f"Could not start node-analyst on {nid}: {text.strip()[:180]}")
         return started
 
     def _nodes_without_agent(self) -> list[str]:
-        """Open nodes with no agent job attached (tree_new leaves the node open; the agent is what runs it)."""
+        """Open nodes that have never had a node-agent job: a node whose agent ended is the coordinator's to
+        restart or close, not something to start again behind its back (it may have finished its work)."""
         state = self._tree_state()
         if not isinstance(state, dict) or self.hub is None:
             return []
+        with self._lock:
+            seen = {
+                node_of(job.get("description") or "")
+                for job in self.jobs.values()
+                if job.get("subagent") == NODE_AGENT
+            }
         return sorted(
             nid for nid, node in (state.get("nodes") or {}).items()
             if node.get("status") == "running" and self.hub.is_open(nid) and not self.hub.job_of(nid)
+            and nid not in seen
         )
 
     @staticmethod
@@ -445,6 +466,9 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                 started.append(nid)
                 if self.hub is not None:
                     self.hub._emit(MAIN, f"node-agent started on {nid} on its own ({text.split('(')[0].strip()}).")
+            elif self.hub is not None:
+                self.hub._emit(MAIN, f"Could not start node-agent on {nid}: {text.strip()[:180]}. "
+                                     "Start it with task_start, or close the node with tree_finish.")
         return started
 
     async def _start_due_node_agents_async(self, runtime: Any) -> list[str]:
@@ -460,6 +484,9 @@ class BackgroundTaskMiddleware(AgentMiddleware):
                 started.append(nid)
                 if self.hub is not None:
                     self.hub._emit(MAIN, f"node-agent started on {nid} on its own ({text.split('(')[0].strip()}).")
+            elif self.hub is not None:
+                self.hub._emit(MAIN, f"Could not start node-agent on {nid}: {text.strip()[:180]}. "
+                                     "Start it with task_start, or close the node with tree_finish.")
         return started
 
     # ------------------------------------------------------------------ automatic plan registration
@@ -485,11 +512,19 @@ class BackgroundTaskMiddleware(AgentMiddleware):
 
     @staticmethod
     def _plan_draft(path: str) -> str:
-        """The workspace-relative draft path if this write is a skeleton draft, else ""."""
-        rel = str(path or "").replace("\\", "/").lstrip("/")
-        name = rel.rsplit("/", 1)[-1]
-        if not rel.startswith("reports/drafts/"):
+        """The workspace-relative draft path if this write is a skeleton draft, else "".
+
+        Absolute paths are accepted when they contain `reports/drafts/` (dangerous mode writes
+        `/workspace/reports/drafts/plan-x.md`, and a model may use `./reports/...`); the part from
+        `reports/drafts/` on is the workspace-relative path tree_plan needs.
+        """
+        rel = str(path or "").replace("\\", "/")
+        marker = "reports/drafts/"
+        cut = rel.find(marker)
+        if cut < 0:
             return ""
+        rel = rel[cut:]
+        name = rel.rsplit("/", 1)[-1]
         return rel if name.startswith("plan-") and name.endswith(".md") else ""
 
     def _register_plan(self, rel: str) -> str:
@@ -502,10 +537,15 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         try:
             text = tool.func(path=rel)
         except Exception:  # a registration that fails must not fail the write that produced the skeleton
-            return ""
+            text = "ERROR: tree_plan raised"
         pid = text.split(" ", 1)[0] if text.startswith("P") else ""
         if not (pid and pid[1:].isdigit()):
-            return ""   # no survey yet, an unaccepted parent, or an error: the coordinator records it itself
+            # The prompt says a written skeleton is recorded on its own; when that did not happen
+            # (no survey yet, an unaccepted parent, an error) say so instead of leaving the agent to guess.
+            if self.hub is not None:
+                self.hub._emit(MAIN, f"{rel} was not recorded automatically ({text.strip()[:180]}). "
+                                     f"Record it with tree_plan(path='{rel}') when the tree is ready.")
+            return ""
         self._auto_plans[rel] = pid
         self._save_auto_plans()
         if self.hub is not None:
@@ -517,8 +557,37 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         return (call.get("name") == "tree_finish"
                 and not (call.get("args") or {}).get("abandon_reason"))
 
+    @staticmethod
+    def _tool_failed(result: Any) -> bool:
+        """True when a tool call came back as an error (auto steps must not run on a failed action)."""
+        if isinstance(result, ToolMessage):
+            return getattr(result, "status", "") == "error"
+        content = getattr(result, "content", result)
+        if isinstance(content, str):
+            return content.lstrip().startswith(("Error", "ERROR", "Refused"))
+        return False
+
+    def _refuse_plain_node_task(self, call: dict[str, Any]) -> ToolMessage | None:
+        """A sync `task` call for node-agent would run without its node: its GPU lease and questions do not
+        exist there. Refuse it with the route that works instead of letting a node burn its whole run."""
+        if self.hub is None or call.get("name") != "task":
+            return None
+        args = call.get("args") or {}
+        if str(args.get("subagent_type") or "") != NODE_AGENT:
+            return None
+        return ToolMessage(
+            content=("Refused: node-agent must run in the background so its GPU lease, questions and notes "
+                     "belong to its node. tree_new starts it automatically; if it is not running, use "
+                     "task_start(subagent_type='node-agent', description='n1\\n...')."),
+            tool_call_id=str(call.get("id") or ""), name=str(call.get("name") or "task"), status="error")
+
     def wrap_tool_call(self, request, handler):
+        refused = self._refuse_plain_node_task(request.tool_call)
+        if refused is not None:
+            return refused
         result = handler(request)
+        if self._tool_failed(result):
+            return result
         runtime = request.runtime
         if self._closes_a_node(request.tool_call):
             self._start_due_analyses(runtime)
@@ -528,7 +597,12 @@ class BackgroundTaskMiddleware(AgentMiddleware):
         return result
 
     async def awrap_tool_call(self, request, handler):
+        refused = self._refuse_plain_node_task(request.tool_call)
+        if refused is not None:
+            return refused
         result = await handler(request)
+        if self._tool_failed(result):
+            return result
         runtime = request.runtime
         if self._closes_a_node(request.tool_call):
             await self._start_due_analyses_async(runtime)

@@ -55,9 +55,9 @@ REFUSAL = (
 REFUSAL_SKELETON = (
     "Refused: in this run you coordinate and do not write code files. Code is written inside a node "
     "directory (nodes/<id>/) by node-agent. Write the skeleton yourself (reports/drafts/plan-<direction>.md), "
-    "review it with review_plan, record it with tree_plan(path), open a node with tree_new(plan_id=...), and "
-    "start node-agent with the brief. If you only need a placeholder deliverable, create it with a single "
-    "`execute` command."
+    "review it with review_plan, record it with tree_plan(path), open a node with tree_new(plan_id=...); its "
+    "node-agent starts on its own (start it with task_start if it is not running). If you only need a "
+    "placeholder deliverable, create it with a single `execute` command."
 )
 
 

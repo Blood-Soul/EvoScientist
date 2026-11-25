@@ -155,6 +155,24 @@ async def test_a_transferable_verdict_without_a_mapping_is_not_shown(tmp_path):
     assert result["dropped"].get("no_mapping") == 1
 
 
+class BlockModel(ScriptedModel):
+    """The same scripted answers, wrapped the way Anthropic-style providers return them (thinking + text blocks)."""
+
+    async def ainvoke(self, messages):
+        reply = await super().ainvoke(messages)
+        return AIMessage(content=[{"type": "thinking", "thinking": "judge the candidates"},
+                                  {"type": "text", "text": reply.content}])
+
+
+@pytest.mark.asyncio
+async def test_a_gate_reply_in_content_blocks_is_parsed(tmp_path):
+    store(tmp_path, {"p2": ("ecology", "biology", l1(task="surveying sparse habitats"))})
+    result = await search_cross_domain(memory_dir=tmp_path, project_id=PROJECT, design_point="most windows are empty",
+                                       model=BlockModel(), exclude_domain="optimisation")
+    assert result["gate_failed"] == 0
+    assert [item["domain"] for item in result["kept"]] == ["ecology"]
+
+
 @pytest.mark.asyncio
 async def test_the_current_situation_reaches_the_gate(tmp_path):
     store(tmp_path, {"p2": ("ecology", "biology", l1(task="surveying sparse habitats"))})

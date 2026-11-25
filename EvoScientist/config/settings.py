@@ -466,9 +466,10 @@ class EvoScientistConfig:
     # record, on the auxiliary model.
     memory_experience_gate: str = "off"
     memory_experience_search_enabled: bool = True
-    # Register `search_experience_cross_field`: look for a practice in another field that could be carried over to a
-    # design point. Off by default: each call makes LLM calls (one to restate the need, one per batch of candidates to
-    # judge transferability), and what it returns is a hypothesis with a written mapping, not a stored finding.
+    # Add a cross-field leg to `review_plan`: the same review returns, after its same-field suggestions, a few
+    # other-field practices that passed a transfer check, each with its object mappings and transfer path. Off by
+    # default: it costs auxiliary-model calls per review (one to restate the need, one per batch of candidates to
+    # judge transferability), and what it returns is a hypothesis, not a stored finding.
     memory_cross_domain_search_enabled: bool = False
     # Register `review_plan` for the sub-agents whose YAML lists it: a finished plan is read against the experience
     # library and comes back with suggestions that cite their records.

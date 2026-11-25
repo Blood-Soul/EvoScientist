@@ -33,7 +33,8 @@ class ReviewPlanArgs(BaseModel):
 
 
 def create_review_plan_tool(
-    *, memory_dir: str | Path, project_id: str, workspace_root: str | Path, max_suggestions: int = DEFAULT_MAX_SUGGESTIONS
+    *, memory_dir: str | Path, project_id: str, workspace_root: str | Path, max_suggestions: int = DEFAULT_MAX_SUGGESTIONS,
+    cross_domain: bool = False,
 ) -> BaseTool:
     root = Path(workspace_root)
 
@@ -54,6 +55,7 @@ def create_review_plan_tool(
                 plan=target.read_text(encoding="utf-8", errors="replace"),
                 model=quiet_model(_ensure_auxiliary_chat_model()),
                 max_suggestions=max_suggestions,
+                cross_domain=cross_domain,
             )
         except Exception as error:  # a review is an aid; its failure must not block the plan
             return json.dumps({"status": "error", "error": str(error),
@@ -67,10 +69,13 @@ def create_review_plan_tool(
         coroutine=_review_plan,
         name="review_plan",
         description=(
-            "Read the plan you just wrote against this project's stored paper experience and get suggestions, each tied to "
-            "the records it rests on, with why it would apply here. Call it once, after the "
-            "plan file is written and before you report. The suggestions are advice: you decide. Take one and revise the "
-            "plan file, or refuse it and say why in your reply. `read_memory` on an `E-*` id shows the record behind a suggestion."
+            "Read the plan you just wrote against this project's stored paper experience and get one review with two "
+            "sections: (1) suggestions from records in or near your own field, each tied to the records it rests on, "
+            "with why it would apply here; (2) cross-field transfer hypotheses — practices from other fields that "
+            "passed a transfer check, with their object mappings and a transfer path. The cross-field items are "
+            "hypotheses, not evidence: test one in a node or list it under Open choices; do not fold it into the design "
+            "as if it were a stored finding. Call it once, after the plan file is written and before you report. "
+            "`read_memory` on an `E-*` id shows the record behind an item. The suggestions are advice: you decide."
         ),
         args_schema=ReviewPlanArgs,
         infer_schema=False,

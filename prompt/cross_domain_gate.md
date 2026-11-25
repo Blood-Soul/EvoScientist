@@ -15,6 +15,9 @@ A candidate passes only when all three of these can be written from the supplied
 3. **A transfer path.** Name the candidate's contribution (method, formulation, measurement or finding), how the
    mappings carry it into the design point, what concretely would change in the requester's work, and that the
    current situation can support it. "Could be useful" or "both involve X" is not a path.
+   The path must also name the comparison that would test the transfer against the requester's **current choice**
+   (a control or ablation and the metric). Do not claim the candidate is better: merely being different, newer or
+   from another field is not an improvement.
 
 Also reject when the problem is the same: a practice that solves the same task in another dataset, population,
 language or setting is the same problem, not a transfer.

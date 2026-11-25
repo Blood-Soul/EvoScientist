@@ -123,6 +123,123 @@ def test_the_review_prompt_formats() -> None:
     assert "T" in text and "at most 6" in text
 
 
+def test_plan_design_point_reads_the_plans_own_sections() -> None:
+    from EvoScientist.memory.policy.review import plan_design_point
+
+    point = plan_design_point(PLAN, "predict a property")
+    assert "sliding-window span reader" in point and "hard negatives" in point
+    assert "predict a property" in point
+
+
+class _RetryModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def ainvoke(self, _messages: Any) -> Any:
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(content="I could not decide.")
+        return AIMessage(content=json.dumps({"suggestions": [{
+            "about": "the null margin rule", "suggestion": "check the threshold grid",
+            "because": "in the source the threshold was measured", "why_applicable": "the same validation split exists",
+            "sources": ["E-aaaaaaaa"], "kind": "check"}]}))
+
+
+@pytest.mark.asyncio
+async def test_an_unparsable_review_is_retried_once(tmp_path: Path, monkeypatch) -> None:
+    import EvoScientist.memory.policy.review as review_mod
+
+    candidate = {"id": "E-aaaaaaaa", "record": {"experience": {"domain": "x", "task": "t", "problem": "p"},
+                                                "paper": {}}}
+    monkeypatch.setattr(review_mod, "gather_candidates", lambda **_kw: [candidate])
+    monkeypatch.setattr(review_mod, "fetch_candidates", lambda **_kw: [])
+    model = _RetryModel()
+    out = await review_mod.review_plan(memory_dir=tmp_path, project_id="P-x", task="t", plan=PLAN, model=model)
+    assert out["status"] == "ok" and len(out["suggestions"]) == 1 and model.calls == 2
+
+
+def _store_cross_field(tmp_path: Path) -> None:
+    from EvoScientist.memory.experiences.store import store_paper_experiences
+
+    record = {
+        "domain": "ecology", "task": "surveying sparse habitats",
+        "problem": "Most survey plots are empty, so a model learns to predict empty.",
+        "method": ["stratified plot selection"], "requires": [{"text": "a plot map", "basis": "inferred"}],
+        "source_setting": {"environment": [{"property": "empty share", "value": "90%"}], "params": []},
+        "limits_stated": [], "action": "Measure the empty share, then keep a fraction of empty plots.",
+        "effect": {"compared": "20% vs 66% empty", "benefit": "F1 87.3", "cost": None},
+        "mechanism": {"text": "An empty plot teaches the model the safe answer.", "basis": "inferred"},
+        "comparison": "controlled", "locator": "Table 1",
+    }
+    store_paper_experiences(
+        memory_dir=tmp_path, project_id="P-x", paper_id="p1", url="https://example.org/p1",
+        title="Ecology paper", paper_text="text", prompts={"l1": "p"},
+        payloads={"l1": {"experiences": [record]}},
+    )
+
+
+class _CrossOnlyModel:
+    """Answers the abstract and gate prompts of the cross-field leg; it is never asked a same-field review."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def ainvoke(self, messages: Any) -> Any:
+        self.calls += 1
+        system = str(messages[0].content)
+        if "practice FROM ANOTHER FIELD" in system:
+            return AIMessage(content=json.dumps({"goal": "how to keep a model from learning the empty answer",
+                                                 "passages": ["[ecology] survey the empty patches first"]}))
+        return AIMessage(content=json.dumps({"judgements": [{
+            "i": 1, "transferable": True,
+            "object_mappings": [
+                {"source": "empty training window", "target": "empty survey plot", "rationale": "same majority class"},
+                {"source": "null downsampling", "target": "stratified plot selection", "rationale": "same sampling decision"},
+            ],
+            "shared_relations": [{"relation": "OUTNUMBER", "problem": "OUTNUMBER(empty window, filled window)",
+                                  "solution": "OUTNUMBER(empty plot, occupied plot)"}],
+            "path": "measure the empty share, then fix the sampling fraction", "drop_reason": None,
+        }]}))
+
+
+@pytest.mark.asyncio
+async def test_the_review_appends_a_cross_field_section(tmp_path: Path, monkeypatch) -> None:
+    import EvoScientist.memory.policy.review as review_mod
+
+    _store_cross_field(tmp_path)
+    # No same-field matches: the review should still return the cross-field leg.
+    monkeypatch.setattr(review_mod, "gather_candidates", lambda **_kw: [])
+    monkeypatch.setattr(review_mod, "fetch_candidates", lambda **_kw: [])
+    model = _CrossOnlyModel()
+    out = await review_mod.review_plan(
+        memory_dir=tmp_path, project_id="P-x", task="molecular property prediction",
+        plan="# Plan: x\n\n## Direction and hypothesis\nA model must decide when evidence is missing.\n",
+        model=model, cross_domain=True,
+    )
+    assert out["status"] == "no_records"
+    assert out["cross_domain"]["kept"] == 1
+    assert "Cross-field transfer hypotheses (hypotheses, not evidence)" in out["text"]
+    assert "OUTNUMBER(empty plot, occupied plot)" in out["text"]
+    assert model.calls == 2  # abstract + one gate batch
+
+
+@pytest.mark.asyncio
+async def test_no_cross_field_section_without_the_switch(tmp_path: Path, monkeypatch) -> None:
+    import EvoScientist.memory.policy.review as review_mod
+
+    _store_cross_field(tmp_path)
+    monkeypatch.setattr(review_mod, "gather_candidates", lambda **_kw: [])
+    monkeypatch.setattr(review_mod, "fetch_candidates", lambda **_kw: [])
+    model = _CrossOnlyModel()
+    out = await review_mod.review_plan(
+        memory_dir=tmp_path, project_id="P-x", task="t",
+        plan="# Plan: x\n\n## Direction and hypothesis\nA model must decide when evidence is missing.\n",
+        model=model,
+    )
+    assert out["cross_domain"] is None and "Cross-field transfer hypotheses" not in out["text"]
+    assert model.calls == 0
+
+
 def test_a_revised_plan_from_the_reviewer_is_ignored() -> None:
     # The reviewer only advises; the writer revises the file itself.
     raw = json.dumps({"suggestions": [_item()], "revised_plan": "# Plan: x\n\nbody"})

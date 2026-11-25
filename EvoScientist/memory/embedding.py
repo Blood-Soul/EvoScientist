@@ -86,26 +86,32 @@ class _Cache:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
+        # One connection is shared by every agent thread that embeds into the same memory directory.
+        # `check_same_thread=False` lifts Python's thread check but does not make concurrent use safe:
+        # two threads on one connection can make SQLite raise "bad parameter or other API misuse".
+        self._db_lock = threading.Lock()
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS vec (k TEXT PRIMARY KEY, dim INTEGER, v BLOB)")
         self.db.commit()
 
     def get(self, keys: Sequence[str]) -> dict[str, np.ndarray]:
         out: dict[str, np.ndarray] = {}
-        for i in range(0, len(keys), 500):
-            part = list(keys[i : i + 500])
-            rows = self.db.execute(
-                f"SELECT k, v FROM vec WHERE k IN ({','.join('?' * len(part))})", part
-            ).fetchall()
-            out.update((k, np.frombuffer(v, dtype=np.float32)) for k, v in rows)
+        with self._db_lock:
+            for i in range(0, len(keys), 500):
+                part = list(keys[i : i + 500])
+                rows = self.db.execute(
+                    f"SELECT k, v FROM vec WHERE k IN ({','.join('?' * len(part))})", part
+                ).fetchall()
+                out.update((k, np.frombuffer(v, dtype=np.float32)) for k, v in rows)
         return out
 
     def put(self, items: dict[str, np.ndarray]) -> None:
-        self.db.executemany(
-            "INSERT OR REPLACE INTO vec (k, dim, v) VALUES (?, ?, ?)",
-            [(k, int(v.shape[0]), v.astype(np.float32).tobytes()) for k, v in items.items()],
-        )
-        self.db.commit()
+        with self._db_lock:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO vec (k, dim, v) VALUES (?, ?, ?)",
+                [(k, int(v.shape[0]), v.astype(np.float32).tobytes()) for k, v in items.items()],
+            )
+            self.db.commit()
 
 
 _caches: dict[Path, _Cache] = {}
@@ -170,10 +176,11 @@ def embed(texts: Sequence[str], *, memory_dir: str | Path) -> np.ndarray | None:
     except Exception as exc:  # retrieval and clustering fall back to lexical; the run goes on
         _down_until = time.monotonic() + RETRY_AFTER_S
         if not _warned:
-            logger.warning("embedding service unavailable (%s); using lexical ranking", exc)
+            logger.warning("embedding service unavailable (%s: %s); using lexical ranking",
+                           type(exc).__name__, exc)
             _warned = True
         else:
-            logger.debug("embedding call failed: %s", exc)
+            logger.debug("embedding call failed: %s: %s", type(exc).__name__, exc)
         return None
 
 

@@ -271,6 +271,89 @@ class TestIsolation:
         hub.request("n1", "t")
         assert _in_node("n1", coord.refuse_command, "CUDA_VISIBLE_DEVICES=0 python t.py") is None
 
+    def test_writing_the_line_into_a_file_is_not_setting_it(self, tmp_path):
+        hub = coord.hub_for(tmp_path)
+        hub.open_node("n1")
+        heredoc = "cat > train.py <<'EOF'\nimport torch\nCUDA_VISIBLE_DEVICES=0\nEOF"
+        assert _in_node("n1", coord.refuse_command, heredoc) is None
+        assert _in_node("n1", coord.refuse_command, "echo 'export CUDA_VISIBLE_DEVICES=0' >> setup.sh") is None
+        # executed settings are still refused
+        assert _in_node("n1", coord.refuse_command, "cd nodes/n1 && CUDA_VISIBLE_DEVICES=0 python t.py") is not None
+        assert _in_node("n1", coord.refuse_command, "export CUDA_VISIBLE_DEVICES=0") is not None
+        assert _in_node("n1", coord.refuse_command, "unset CUDA_VISIBLE_DEVICES") is not None
+
+    def test_a_queued_request_is_told_when_it_receives_the_gpu(self, tmp_path):
+        hub, _, _ = _hub(tmp_path)
+        hub.request("n1", "first training")
+        assert hub.request("n2", "second training") == "queued"
+        hub.take_notes("n2")
+        hub.release("n1")
+        hub.grant("n2")
+        assert any("GPU is yours" in note and "second training" in note for note in hub.take_notes("n2"))
+
+    def test_an_idle_holder_is_warned_once_then_released_without_killing_cpu_work(self, tmp_path):
+        clock = Clock()
+        killed = []
+        hub = Hub(tmp_path, now=clock, kill=lambda p: killed.append(p) or [],
+                  gpu_check=lambda path: False)
+        hub.open_node("n1")
+        hub.open_node("n2")
+        hub.request("n1", "training")
+        hub.request("n2", "second training")
+        hub.take_notes(MAIN)
+        clock.advance(5.1)
+        hub.tick()
+        notes = hub.take_notes(MAIN)
+        assert sum("no GPU process" in n for n in notes) == 1 and "GPU is free" not in " ".join(notes)
+        clock.advance(2)
+        hub.tick()
+        assert not any("no GPU process" in n for n in hub.take_notes(MAIN))  # the warning is not repeated
+        clock.advance(3)
+        hub.tick()
+        assert hub.holder == "n2" and hub.held_since == clock.t
+        assert killed == []  # CPU work in n1's directory was not stopped by an idle release
+        assert any("released by an idle lease" in n for n in hub.take_notes("n2"))
+
+    def test_an_active_gpu_process_keeps_the_lease(self, tmp_path):
+        clock = Clock()
+        hub = Hub(tmp_path, now=clock, kill=lambda p: [], gpu_check=lambda path: True)
+        hub.open_node("n1")
+        hub.request("n1", "training")
+        hub.take_notes(MAIN)
+        clock.advance(20)
+        hub.tick()
+        assert hub.holder == "n1" and not any("no GPU process" in n for n in hub.take_notes(MAIN))
+
+    def test_a_finalized_tree_refuses_late_work(self, skel):
+        tree, hub, root, _clock = skel
+        tree.new_node(kind="explore", title="a", hypothesis="h", plan_id=_accepted(tree, root))
+        tree.finalize()
+        with pytest.raises(TreeError, match="finalized"):
+            tree.new_node(kind="explore", title="b", hypothesis="h", plan_id=_accepted(tree, root))
+        with pytest.raises(TreeError, match="finalized"):
+            tree.analysis(node="n1", text="late analysis")
+
+    def test_finishing_without_the_deliverable_is_refused(self, skel):
+        tree, hub, root, _clock = skel
+        tree.new_node(kind="explore", title="a", hypothesis="h", plan_id=_accepted(tree, root))
+        node = root / "nodes" / "n1"
+        (node / "holdout_predictions.csv").write_text("1\n" * 300)
+        with pytest.raises(TreeError, match="has no submission.csv"):
+            tree.finish("n1", change="x", observation="y")
+
+    def test_predictions_under_output_are_scored_too(self, skel):
+        tree, hub, root, clock = skel
+        tree.new_node(kind="explore", title="a", hypothesis="h", plan_id=_accepted(tree, root))
+        node = root / "nodes" / "n1"
+        (node / "output").mkdir()
+        (node / "output" / "holdout_predictions.csv").write_text("1\n" * 300)
+        (node / "submission.csv").write_text("d")
+        (node / "DESIGN.md").write_text("# Design\n")
+        clock.advance(30)
+        out = tree.finish("n1", change="c", observation="o")
+        assert "closed as done" in out and "score 1.0000" in out
+        assert (root / ".research" / "artifacts" / "n1" / "holdout_predictions.csv").is_file()
+
     def test_the_sandbox_shell_applies_it(self, tmp_path):
         from EvoScientist.backends import CustomSandboxBackend
 

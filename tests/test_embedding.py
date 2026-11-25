@@ -105,6 +105,31 @@ def test_a_failing_service_returns_none_and_is_not_asked_again_at_once(service, 
     assert len(service.calls) == 1
 
 
+def test_concurrent_calls_share_one_cache_without_sqlite_misuse(service, tmp_path):
+    """The main agent and a node agent embed into the same memory directory from different threads.
+
+    They share one SQLite connection; unsynchronised use used to raise ``ProgrammingError: bad parameter
+    or other API misuse``, which made the client fall back to lexical ranking for every thread at once.
+    """
+    threads, barrier = 24, threading.Barrier(24)
+    results: list[np.ndarray | None] = []
+    lock = threading.Lock()
+
+    def one(k: int) -> None:
+        barrier.wait()
+        v = embedding.embed_documents(
+            [f"graph descriptor {k}-{i} for molecule {i % 7}" for i in range(32)], memory_dir=tmp_path)
+        with lock:
+            results.append(v)
+
+    ts = [threading.Thread(target=one, args=(k,)) for k in range(threads)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(results) == threads and all(v is not None and v.shape == (32, DIM) for v in results)
+
+
 # ---------------------------------------------------------------------- clustering
 
 

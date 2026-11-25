@@ -324,8 +324,9 @@ def _skeleton_hub(cfg, workspace: Workspace):
     if not on:
         return None
     from .research_tree.coord import hub_for
+    from .research_tree.monitor import gpu_in_use
 
-    return hub_for(workspace.root)
+    return hub_for(workspace.root, gpu_check=gpu_in_use)
 
 
 # Sub-agents a skeleton run replaces: the main agent writes the skeleton, node-agent builds the node.
@@ -734,7 +735,6 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     """
     from .memory.project import resolve_project_id
     from .tools import (
-        create_cross_domain_experience_tool,
         create_extract_paper_experiences_tool,
         create_list_experience_tool,
         create_read_paper_tool,
@@ -771,12 +771,6 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
             tool = factory(memory_dir=memory_dir, project_id=project_id)
             tool_registry[tool.name] = tool
             base_tools.append(tool)
-        # The cross-field path is a separate tool and a separate switch: it costs model calls per search, and what
-        # it returns is a hypothesis, so an arm that must not use it simply never sees the tool.
-        if getattr(cfg, "memory_cross_domain_search_enabled", False):
-            tool = create_cross_domain_experience_tool(memory_dir=memory_dir, project_id=project_id)
-            tool_registry[tool.name] = tool
-            base_tools.append(tool)
 
     if getattr(cfg, "memory_paper_fulltext_enabled", True):
         for factory in (create_search_paper_text_tool, create_read_paper_tool):
@@ -789,7 +783,8 @@ def _build_paper_tools(*, cfg, workspace: Workspace, work_dir: str | Path):
     # writes the skeleton and reviews it itself, so it gets the tool too.
     if getattr(cfg, "memory_plan_review_enabled", False):
         review_tool = create_review_plan_tool(
-            memory_dir=memory_dir, project_id=project_id, workspace_root=workspace.root
+            memory_dir=memory_dir, project_id=project_id, workspace_root=workspace.root,
+            cross_domain=bool(getattr(cfg, "memory_cross_domain_search_enabled", False)),
         )
         tool_registry[review_tool.name] = review_tool
         if hub is not None:

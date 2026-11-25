@@ -83,6 +83,18 @@ def _minutes(seconds: float) -> float:
     return round(seconds / 60, 1)
 
 
+def _node_file(path: Path, name: str) -> Path | None:
+    """A required node file at the node root, or in `output/`.
+
+    node-agents naturally write predictions and manifests under `output/`; the judge maps the
+    manifest back to the node directory, so accepting that layout does not change what is scored.
+    """
+    for candidate in (path / name, path / "output" / name):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 class ResearchTree:
     def __init__(
         self,
@@ -115,6 +127,15 @@ class ResearchTree:
         return self._judge if self._judge is not None else judge_from_env()
 
     # ------------------------------------------------------------- state io
+
+    @staticmethod
+    def _refuse_finalized(st: dict, action: str) -> None:
+        """A finalized tree is terminal: a late node would otherwise run after the judge has settled the run."""
+        if st.get("finalized"):
+            raise TreeError(
+                f"the research tree is finalized; {action} is refused. "
+                "Start a new run if more work is needed."
+            )
 
     @contextlib.contextmanager
     def _edit(self, *, create: bool = False) -> Iterator[dict]:
@@ -398,6 +419,7 @@ class ResearchTree:
                 "it changes, not in a hyperparameter"
             )
         with self._edit() as st:
+            self._refuse_finalized(st, "recording a survey")
             by = {c["name"]: c for c in st.get("survey", [])}
             for c in clusters:
                 name, mechanism = (
@@ -601,6 +623,7 @@ class ResearchTree:
             )
         parents = list(dict.fromkeys(parents))
         with self._edit() as st:
+            self._refuse_finalized(st, "opening a node")
             nodes = st["nodes"]
             for p in parents:
                 if (
@@ -743,10 +766,10 @@ class ResearchTree:
                 tail = ["", brief]
             if self.skeleton:
                 head = (
-                    f"Created {nid} ({kind}) at {path.relative_to(self.root)}/. Start node-agent on it now with "
-                    f"task_start(subagent_type='node-agent', description=...): name the node ({nid}) on the first "
-                    "line, then the brief's path. It asks for the GPU when it needs it; write the next skeleton "
-                    "meanwhile."
+                    f"Created {nid} ({kind}) at {path.relative_to(self.root)}/. A node-agent starts on it on "
+                    f"its own; if none is running, start it with task_start(subagent_type='node-agent', "
+                    f"description=...): name the node ({nid}) on the first line, then the brief's path. "
+                    "It asks for the GPU when it needs it; write the next skeleton meanwhile."
                 )
             else:
                 head = (
@@ -780,6 +803,7 @@ class ResearchTree:
         if self.skeleton:
             raise TreeError("in this run the GPU is leased: give it to a node with gpu_grant(node)")
         with self._edit() as st:
+            self._refuse_finalized(st, "starting a node")
             nodes = st["nodes"]
             n = nodes.get(node)
             if n is None or not self._waiting(n):
@@ -999,6 +1023,7 @@ class ResearchTree:
         abandon_reason: str = "",
     ) -> str:
         with self._edit() as st:
+            self._refuse_finalized(st, "finishing a node")
             return self._finish(
                 st,
                 node,
@@ -1072,6 +1097,11 @@ class ResearchTree:
             )
         direction = st["direction"]
         path = self.repo.node_path(nid)
+        if self.skeleton and not abandon_reason and _node_file(path, st["deliverable"]) is None:
+            raise TreeError(
+                f"{nid} has no {st['deliverable']}; write the deliverable before tree_finish (or close it with "
+                "abandon_reason). A scored prediction without the deliverable cannot be used."
+            )
         # A job the sub-agent detached would keep the GPU after the node is closed.
         killed = self.hub.close_node(nid) if self.skeleton else []
         killed += kill_processes_under(path) if path.is_dir() else []
@@ -1081,8 +1111,8 @@ class ResearchTree:
         art = self.dir / "artifacts" / nid
         art.mkdir(parents=True, exist_ok=True)
         for name in (st["prediction_file"], st["deliverable"], "NODE_REPORT.md"):
-            if (path / name).is_file():
-                shutil.copy2(path / name, art / name)
+            if (src := _node_file(path, name)) is not None:
+                shutil.copy2(src, art / name)
         if path.is_dir():
             snap = snapshot_node(path, art, skip=tuple(st["shared"]))
             self._log(st, "node-snapshot", node=nid, **snap)
@@ -1240,9 +1270,10 @@ class ResearchTree:
         if self.require_plans and scored:
             if self.skeleton:
                 out.append(
-                    f"The analysis of {nid} starts on its own in the background; when the note says it is ready, "
-                    f"record it with tree_analysis. Its choices (tree_choice) are what the skeleton that builds on "
-                    f"{nid} is written from. A new direction can be prepared meanwhile."
+                    f"The analysis of {nid} starts on its own in the background; it is recorded automatically "
+                    f"when it finishes. If the note says it was not recorded, record it with tree_analysis. "
+                    f"Its choices (tree_choice) are what the skeleton that builds on {nid} is written from. "
+                    "A new direction can be prepared meanwhile."
                 )
             else:
                 out.append(
@@ -1321,6 +1352,39 @@ class ResearchTree:
                 raise TreeError(f"parent {par} must be a finished, scored node")
         return parents
 
+    @staticmethod
+    def _normalize_source_path(path: str) -> str:
+        """The workspace-relative draft path, whatever prefix the writer used (`/workspace/`, `./`).
+
+        Auto-registered plans keep `reports/drafts/...`; a later `tree_plan(path=...)` must match that
+        same plan even when the model names the file absolutely.
+        """
+        rel = str(path or "").replace("\\", "/")
+        marker = "reports/drafts/"
+        cut = rel.find(marker)
+        return rel[cut:] if cut >= 0 else rel.lstrip("./")
+
+    def _apply_plan_metadata(self, st: dict, found: dict, cluster: str, parents: list[str] | tuple[str, ...]) -> bool:
+        """Add a surveyed family / parent nodes to an existing plan without rewriting its text."""
+        changed = False
+        if cluster:
+            families = {c["name"] for c in st.get("survey", [])}
+            if cluster not in families:
+                raise TreeError(
+                    f"cluster {cluster!r} is not a surveyed family; known: "
+                    f"{', '.join(sorted(families)) or 'none'}. A new family is added with tree_survey."
+                )
+            if found.get("cluster") != cluster:
+                found["cluster"] = cluster
+                changed = True
+        if parents:
+            resolved = self._scored_parents(st, parents)
+            self._analysed_parents(st, resolved)
+            if found.get("parents") != resolved:
+                found["parents"] = resolved
+                changed = True
+        return changed
+
     def plan(
         self,
         *,
@@ -1339,6 +1403,7 @@ class ResearchTree:
         already produced instead of adding a second one -- the coordinator revises a skeleton and records it again,
         and the review happens between those two writes.
         """
+        source_path = self._normalize_source_path(source_path) if source_path else ""
         if bool(text.strip()) == bool(decision):
             raise TreeError(
                 "give either a plan file (`path`: record or rewrite a plan) or a `decision` (accepted, "
@@ -1346,6 +1411,7 @@ class ResearchTree:
             )
         self.repo.exclude(["/reports/"])
         with self._edit() as st:
+            self._refuse_finalized(st, "recording a plan")
             plans = st.setdefault("plans", {})
             if decision:
                 return self._decide_plan(plans, plan_id, decision, reason)
@@ -1355,6 +1421,12 @@ class ResearchTree:
                     found = plans[same]
                     reusable = found["status"] == "draft" or (found["status"] == "accepted" and not found.get("node"))
                     if reusable and text.strip() == (found.get("text") or ""):
+                        if self._apply_plan_metadata(st, found, cluster, parents):
+                            self._log(st, "plan-meta", plan=same, cluster=found.get("cluster") or None,
+                                      parents=found["parents"])
+                            return (f"{same} updated in place (cluster {found.get('cluster') or 'none'}, "
+                                    f"parents {', '.join(found['parents']) or 'none'}); decide with "
+                                    f"tree_plan(plan_id='{same}', decision=...).")
                         return (f"{same} already holds this file; decide with "
                                 f"tree_plan(plan_id='{same}', decision=...).")
                     if reusable:
@@ -1374,17 +1446,7 @@ class ResearchTree:
                         f"plan {plan_id} has been rewritten {MAX_PLAN_REVISIONS} times already: accept or "
                         "reject it, and start a new plan if the direction is still worth pursuing"
                     )
-                if cluster:
-                    families = {c["name"] for c in st.get("survey", [])}
-                    if cluster not in families:
-                        raise TreeError(
-                            f"cluster {cluster!r} is not a surveyed family; known: "
-                            f"{', '.join(sorted(families)) or 'none'}. A new family is added with tree_survey."
-                        )
-                    found["cluster"] = cluster
-                if parents:
-                    found["parents"] = self._scored_parents(st, parents)
-                    self._analysed_parents(st, found["parents"])
+                self._apply_plan_metadata(st, found, cluster, parents)
                 found["rounds"] += 1
                 found["status"] = "draft"  # a rewritten plan is reviewed again
                 found["text"] = text.strip()
@@ -1463,6 +1525,7 @@ class ResearchTree:
     def analysis(self, *, node: str, text: str, path: str = "") -> str:
         """Record node-analyst's analysis of a finished node. A plan that builds on the node needs it."""
         with self._edit() as st:
+            self._refuse_finalized(st, "recording an analysis")
             n = st["nodes"].get(node)
             if n is None or n["status"] == "running":
                 raise TreeError(f"{node} is not a finished node; an analysis is of a node that has closed")
@@ -1509,6 +1572,7 @@ class ResearchTree:
     ) -> str:
         """Record a choice the run has not settled, or settle / drop one."""
         with self._edit() as st:
+            self._refuse_finalized(st, "recording a choice")
             choices = st.setdefault("choices", [])
             if choice_id:
                 found = next((c for c in choices if c["id"] == choice_id), None)
@@ -1583,6 +1647,7 @@ class ResearchTree:
         if status not in INSIGHT_STATUS:
             raise TreeError(f"status must be one of {', '.join(INSIGHT_STATUS)}")
         with self._edit() as st:
+            self._refuse_finalized(st, "recording an insight")
             finished = {k for k, n in st["nodes"].items() if n["status"] != "running"}
             bad = [e for e in evidence if e not in finished]
             if bad:
