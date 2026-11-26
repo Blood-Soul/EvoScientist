@@ -85,6 +85,13 @@ def build_async_subagent_graph(
     specs = load_subagents(
         SUBAGENTS_CONFIG,
     )
+    if not getattr(cfg, "memory_paper_navigator_enabled", True):
+        from EvoScientist.prompts import strip_paper_navigator
+
+        for item in specs:
+            prompt = item.get("system_prompt")
+            if isinstance(prompt, str):
+                item["system_prompt"] = strip_paper_navigator(prompt)
     spec = next((s for s in specs if s.get("name") == name), None)
     if spec is None:
         raise ValueError(

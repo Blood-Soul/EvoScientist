@@ -439,6 +439,10 @@ class EvoScientistConfig:
     # Disabling stops new persistence, tool registration, and prompt injection;
     # text already on disk is left alone.
     memory_paper_fulltext_enabled: bool = True
+    # Paper Navigator: the skill + search/read instructions in the system and sub-agent prompts.
+    # A fixed offline experience library makes literature search unnecessary; setting this false
+    # removes its prompts and the paper tools even if the full-text switch is left on.
+    memory_paper_navigator_enabled: bool = True
     # Target chunk size in characters. Sections shorter than this stay whole;
     # longer ones are split at paragraph boundaries with the overlap below.
     memory_paper_chunk_max_chars: int = 2000
@@ -1434,6 +1438,7 @@ _ENV_MAPPINGS = {
     "memory_skill_synthesis_time": "EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_TIME",
     "memory_observation_cache_max_files": "EVOSCIENTIST_MAX_CACHED_FILES",
     "memory_paper_fulltext_enabled": "EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED",
+    "memory_paper_navigator_enabled": "EVOSCIENTIST_MEMORY_PAPER_NAVIGATOR_ENABLED",
     "memory_paper_extraction_enabled": "EVOSCIENTIST_MEMORY_PAPER_EXTRACTION_ENABLED",
     "memory_cross_paper_enabled": "EVOSCIENTIST_MEMORY_CROSS_PAPER_ENABLED",
     "memory_experience_gate": "EVOSCIENTIST_MEMORY_EXPERIENCE_GATE",

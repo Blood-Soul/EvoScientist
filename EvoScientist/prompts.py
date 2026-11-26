@@ -702,6 +702,34 @@ def _stored_experience_bullet(*, search: bool) -> str:
     return f"- **Stored experience.** {body}\n"
 
 
+_PAPER_NAV_LINE = re.compile(r"paper-navigator", re.IGNORECASE)
+
+
+def strip_paper_navigator(text: str) -> str:
+    """Remove Paper Navigator instructions from a prompt.
+
+    Used when a sklearn/offline library is the only literature source. It removes the
+    skill-routing bullets and the paper-tool names, keeps the stored-experience bullet
+    (without `read_paper`) and keeps the tree's data-first survey wording. No prompt
+    should tell an agent to read a skill or call a tool that the run does not mount.
+    """
+    replacements = {
+        "When paper-navigator is installed, hand the literature work to `research-agent` with the `task` tool: "
+        "say what the task is and which difficulties to look into, tell it to follow `/skills/paper-navigator/SKILL.md`, "
+        "and ask for notes on what the closest papers offer. Without paper-navigator, survey from the data and what you know.":
+            "Survey from the data and the staged experience records; paper search is disabled in this run.",
+        '- "Find related methods/baselines/datasets" → `paper-navigator` skill for\n'
+        '  academic papers; `research-agent` only for broader non-paper web research.':
+            '- "Find related methods/baselines/datasets" → the staged experience library '
+            "(paper search is disabled in this run).",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    text = re.sub(r"## Academic paper routing \(mandatory\).*?(?=\n## |\Z)", "", text, flags=re.S)
+    lines = [line for line in text.splitlines() if not _PAPER_NAV_LINE.search(line)]
+    return "\n".join(lines)
+
+
 def _for_capabilities(
     text: str,
     *,
@@ -760,6 +788,7 @@ def get_system_prompt(
     research_tree_background: bool = False,
     research_tree_skeleton: bool = False,
     available_tools: Iterable[str] = (),
+    paper_navigator: bool = True,
 ) -> str:
     """Generate the complete static system prompt.
 
@@ -846,4 +875,10 @@ def get_system_prompt(
             )
             for section in sections
         ]
-    return "\n".join(sections)
+    text = "\n".join(sections)
+    if not paper_navigator:
+        text = strip_paper_navigator(text)
+        text = ("# Literature search is fixed in this run\n\n"
+                "External paper search (Paper Navigator) is disabled; use the staged experience records, "
+                "the task data and the stored paper full texts available through search_paper_text/read_paper.\n\n" + text)
+    return text

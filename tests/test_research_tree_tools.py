@@ -273,3 +273,14 @@ def test_every_tool_call_is_journaled_including_refusals(tools):
     assert calls[2]["result"].startswith("ERROR: kind must be one of")
     assert calls[3]["args"]["clusters"][0]["name"] == "abstain"
     assert all(isinstance(c["ts"], float) and c["seconds"] >= 0 for c in calls)
+
+
+def test_without_paper_navigator_the_prompt_names_no_paper_skill_or_tools() -> None:
+    text = get_system_prompt(
+        research_tree=True,
+        available_tools=["search_experience", "list_experience", "tree_init"],
+        paper_navigator=False,
+    )
+    assert "paper-navigator" not in text.lower()
+    assert "read_paper" in text
+    assert "Stored experience." in text

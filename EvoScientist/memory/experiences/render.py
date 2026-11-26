@@ -14,6 +14,7 @@ are rendered with the fields they have, so nothing stored becomes unreadable.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -60,6 +61,12 @@ def is_l2_current(item: Mapping[str, Any]) -> bool:
     return "compared_options" in item and "source_setting" not in item
 
 
+def _paper_tools_enabled() -> bool:
+    """Whether the run mounted the stored-full-text tools; only those make the hint truthful."""
+    raw = os.environ.get("EVOSCIENTIST_MEMORY_PAPER_FULLTEXT_ENABLED", "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _paper_line(paper: Mapping[str, Any] | None) -> str:
     if not isinstance(paper, Mapping):
         return ""
@@ -68,7 +75,8 @@ def _paper_line(paper: Mapping[str, Any] | None) -> str:
     label = f"{title} ({pid})" if title and pid else title or pid
     if not label:
         return ""
-    tail = " · full text stored: use search_paper_text" if paper.get("full_text_available") else ""
+    tail = (" · full text stored: use search_paper_text"
+            if paper.get("full_text_available") and _paper_tools_enabled() else "")
     return f"{label}{tail}"
 
 

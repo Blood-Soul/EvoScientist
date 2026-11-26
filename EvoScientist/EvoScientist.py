@@ -336,8 +336,17 @@ _SKELETON_REPLACES = frozenset({"plan-writer", "code-agent"})
 def _select_subagents(subs: list[dict], cfg, workspace: Workspace) -> list[dict]:
     """The sub-agents of this run: node-agent only in a skeleton run, which drops plan-writer and code-agent."""
     if _skeleton_hub(cfg, workspace) is not None:
-        return [s for s in subs if s.get("name") not in _SKELETON_REPLACES]
-    return [s for s in subs if s.get("name") != "node-agent"]
+        selected = [s for s in subs if s.get("name") not in _SKELETON_REPLACES]
+    else:
+        selected = [s for s in subs if s.get("name") != "node-agent"]
+    if not getattr(cfg, "memory_paper_navigator_enabled", True):
+        from .prompts import strip_paper_navigator
+
+        for sub in selected:
+            prompt = sub.get("system_prompt")
+            if isinstance(prompt, str):
+                sub["system_prompt"] = strip_paper_navigator(prompt)
+    return selected
 
 
 def _configured_system_prompt(cfg, work_dir: str | Path, tools=()) -> str:
@@ -355,6 +364,7 @@ def _configured_system_prompt(cfg, work_dir: str | Path, tools=()) -> str:
         and getattr(cfg, "research_tree_require_plans", False) is True
         and getattr(cfg, "research_tree_background_tasks", False) is True,
         available_tools=tools,
+        paper_navigator=getattr(cfg, "memory_paper_navigator_enabled", True),
     )
 
 
